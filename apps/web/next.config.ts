@@ -58,6 +58,25 @@ const nextConfig: NextConfig = {
   },
 
   typedRoutes: true,
+
+  /**
+   * Server Actions are only accepted from these origins.
+   *
+   * Next compares Origin against Host by default, which already stops the
+   * classic cross-site post. Naming the origins explicitly is the
+   * higher-leverage control: it survives a reverse proxy that rewrites Host,
+   * and it means widening the set for a preview deployment is a visible diff
+   * rather than an accident.
+   *
+   * Host and port only — the field takes no scheme.
+   */
+  experimental: {
+    serverActions: {
+      allowedOrigins: [
+        new URL(process.env["APP_URL"] ?? "http://localhost:3000").host,
+      ],
+    },
+  },
 };
 
 export default nextConfig;

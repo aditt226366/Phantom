@@ -21,68 +21,84 @@ import {
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-async function ensureDatabase() {
-  const client = new pg.Client({ connectionString: maintenanceDatabaseUrl() });
-  await client.connect();
-
-  try {
-    const { rowCount } = await client.query(
-      "SELECT 1 FROM pg_database WHERE datname = $1",
-      [TEST_DATABASE_NAME],
-    );
-
-    if (rowCount === 0) {
-      // CREATE DATABASE takes no bind parameters. The name is a module
-      // constant, never user input.
-      await client.query(`CREATE DATABASE "${TEST_DATABASE_NAME}"`);
-      console.log(`Created database ${TEST_DATABASE_NAME}.`);
-    }
-  } finally {
-    await client.end();
-  }
-}
-
-await ensureDatabase();
-
-/*
- * Provision roles and per-database grants before migrating.
+/**
+ * Arbitrary constant identifying this operation cluster-wide.
  *
- * Role identity is cluster-wide, but schema privileges are not: a database
- * created a moment ago has none of them, and the authentication migration
- * needs app_resolver to hold CREATE on schema public before it can transfer
- * ownership of the SECURITY DEFINER functions. Running db-roles here is what
- * makes `npm test` work against a database that did not exist when the command
- * started.
+ * Vitest runs a globalSetup per project, and more than one project needs the
+ * test database. Two concurrent invocations would issue overlapping ALTER ROLE
+ * and ALTER DEFAULT PRIVILEGES statements, which take conflicting locks and can
+ * deadlock — an intermittent "could not prepare the test database" that
+ * reproduces roughly never and wastes an afternoon when it does. The lock makes
+ * the second caller wait for the first and then find nothing left to do.
  */
-const roles = spawnSync(
-  process.execPath,
-  [path.join(packageRoot, "scripts", "db-roles.mjs")],
-  { stdio: "inherit" },
-);
+const SETUP_LOCK_ID = 725_140_921;
 
-if (roles.status !== 0) {
-  process.exit(roles.status ?? 1);
+const lockHolder = new pg.Client({
+  connectionString: maintenanceDatabaseUrl(),
+});
+await lockHolder.connect();
+
+/* Session-scoped: held until this connection closes, including on a crash. */
+await lockHolder.query("SELECT pg_advisory_lock($1)", [SETUP_LOCK_ID]);
+
+try {
+  const { rowCount } = await lockHolder.query(
+    "SELECT 1 FROM pg_database WHERE datname = $1",
+    [TEST_DATABASE_NAME],
+  );
+
+  if (rowCount === 0) {
+    /*
+     * CREATE DATABASE takes no bind parameters. The name is a module constant,
+     * never user input.
+     */
+    await lockHolder.query(`CREATE DATABASE "${TEST_DATABASE_NAME}"`);
+    console.log(`Created database ${TEST_DATABASE_NAME}.`);
+  }
+
+  /*
+   * Provision roles and per-database grants before migrating.
+   *
+   * Role identity is cluster-wide, but schema privileges are not: a database
+   * created a moment ago has none of them, and the authentication migration
+   * needs app_resolver to hold CREATE on schema public before it can transfer
+   * ownership of the SECURITY DEFINER functions. Running db-roles here is what
+   * makes `npm test` work against a database that did not exist when the
+   * command started.
+   */
+  const roles = spawnSync(
+    process.execPath,
+    [path.join(packageRoot, "scripts", "db-roles.mjs")],
+    { stdio: "inherit" },
+  );
+
+  if (roles.status !== 0) {
+    process.exit(roles.status ?? 1);
+  }
+
+  runMigrations();
+} finally {
+  await lockHolder.end();
 }
 
-/*
- * Resolve the Prisma CLI entry point and run it on the current Node binary,
- * rather than spawning `npx` through a shell. `shell: true` concatenates
- * arguments without escaping them (Node DEP0190) and drags in a shell
- * difference between platforms for no benefit.
- */
-const require = createRequire(import.meta.url);
-const prismaCli = require.resolve("prisma/build/index.js");
+function runMigrations() {
 
-const result = spawnSync(
-  process.execPath,
-  [prismaCli, "migrate", "deploy"],
-  {
+  /*
+   * Resolve the Prisma CLI entry point and run it on the current Node binary,
+   * rather than spawning `npx` through a shell. `shell: true` concatenates
+   * arguments without escaping them (Node DEP0190) and drags in a shell
+   * difference between platforms for no benefit.
+   */
+  const require = createRequire(import.meta.url);
+  const prismaCli = require.resolve("prisma/build/index.js");
+
+  const result = spawnSync(process.execPath, [prismaCli, "migrate", "deploy"], {
     cwd: packageRoot,
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: testDatabaseUrl() },
-  },
-);
+  });
 
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }

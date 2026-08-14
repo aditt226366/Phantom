@@ -56,6 +56,43 @@ export default defineConfig({
       },
       {
         /*
+         * Server-side web code: sessions, CSRF, actions. Node environment and
+         * a real database, so it shares the db project's global setup rather
+         * than duplicating migration logic. Same single-worker rule — these
+         * files truncate shared tables.
+         */
+        resolve: {
+          alias: {
+            "@": path.resolve(here, "apps/web"),
+            /*
+             * `server-only` is a build-time guard whose main entry throws on
+             * import outside the react-server condition. Vitest is not a
+             * client bundle, so it has nothing to protect and everything to
+             * break.
+             */
+            "server-only": path.resolve(
+              here,
+              "apps/web/tests/server/server-only-stub.ts",
+            ),
+          },
+        },
+        test: {
+          name: "web-server",
+          root: "./apps/web",
+          environment: "node",
+          include: ["tests/server/**/*.test.ts"],
+          exclude: ["tests/server/setup.ts", "tests/server/server-only-stub.ts"],
+          globalSetup: ["../../packages/db/tests/global-setup.ts"],
+          setupFiles: ["./tests/server/setup.ts"],
+          server: { deps: { inline: [/@whatsapp-os\//] } },
+          pool: "forks",
+          fileParallelism: false,
+          hookTimeout: 120_000,
+          testTimeout: 30_000,
+        },
+      },
+      {
+        /*
          * Component tests. jsdom rather than node, and the React plugin for
          * the JSX transform — Vitest's default esbuild pass does not apply the
          * automatic runtime that React 19 components are written against.
@@ -68,7 +105,7 @@ export default defineConfig({
           name: "web",
           root: "./apps/web",
           environment: "jsdom",
-          include: ["tests/**/*.test.tsx", "tests/**/*.test.ts"],
+          include: ["tests/*.test.tsx"],
           setupFiles: ["./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },

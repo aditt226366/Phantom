@@ -73,6 +73,20 @@ export function superuserDatabaseUrl() {
   return withDatabase(required("POSTGRES_SUPERUSER_URL"), "postgres");
 }
 
+/**
+ * Superuser against the test database.
+ *
+ * For test scaffolding only — inspecting and mutating rows around an
+ * assertion. It exists because the owner cannot do it: FORCE ROW LEVEL
+ * SECURITY subjects whatsapp_owner to policies scoped TO app_runtime, so a
+ * plain `SELECT * FROM sessions` as the owner returns nothing at all. A
+ * superuser bypasses RLS unconditionally, which is exactly what a test harness
+ * wants and exactly what application code must never have.
+ */
+export function testSuperuserDatabaseUrl() {
+  return withDatabase(required("POSTGRES_SUPERUSER_URL"), TEST_DATABASE_NAME);
+}
+
 /** Databases db-roles.mjs should fix up ownership in, when they exist. */
 export function managedDatabaseNames() {
   const devDatabase = new URL(required("DATABASE_URL")).pathname.replace(

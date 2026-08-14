@@ -12,5 +12,8 @@ export declare function maintenanceDatabaseUrl(): string;
 /** The cluster superuser. Used by db-roles.mjs and nothing else. */
 export declare function superuserDatabaseUrl(): string;
 
+/** Superuser against the test database. Test scaffolding only. */
+export declare function testSuperuserDatabaseUrl(): string;
+
 /** Databases db-roles.mjs should fix up ownership in, when they exist. */
 export declare function managedDatabaseNames(): string[];

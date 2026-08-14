@@ -1,4 +1,9 @@
-import { testAppDatabaseUrl, testDatabaseUrl } from "../scripts/db-urls.mjs";
+import {
+  assertTestDatabaseOnly,
+  testAdminDatabaseUrl,
+  testAppDatabaseUrl,
+  testDatabaseUrl,
+} from "../scripts/db-urls.mjs";
 
 /**
  * Per-worker setup.
@@ -16,3 +21,13 @@ import { testAppDatabaseUrl, testDatabaseUrl } from "../scripts/db-urls.mjs";
 process.env["NODE_ENV"] = "test";
 process.env["DATABASE_URL"] = testDatabaseUrl();
 process.env["DATABASE_URL_APP"] = testAppDatabaseUrl();
+
+/*
+ * Redirected even though no test in this package uses the admin client: .env
+ * points it at the development database, and assertTestDatabaseOnly refuses to
+ * let any connection string the app reads escape the test database.
+ */
+process.env["DATABASE_URL_ADMIN"] = testAdminDatabaseUrl();
+
+/* Fails loudly rather than quietly reading a different database. */
+assertTestDatabaseOnly();

@@ -1,4 +1,5 @@
 import {
+  assertTestDatabaseOnly,
   testAdminDatabaseUrl,
   testAppDatabaseUrl,
   testDatabaseUrl,
@@ -34,3 +35,10 @@ process.env["DATABASE_URL_ADMIN"] = testAdminDatabaseUrl();
 
 /* session-store HMACs stored IPs with this. Any 32-byte value works here. */
 process.env["ENCRYPTION_KEY"] ??= Buffer.alloc(32).toString("base64");
+
+/*
+ * Belt and braces: every connection string the app reads must now resolve to
+ * the test database. Three variables have each caused a silent
+ * wrong-database run once.
+ */
+assertTestDatabaseOnly();

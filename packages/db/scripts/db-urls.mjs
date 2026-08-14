@@ -102,6 +102,42 @@ export function testSuperuserDatabaseUrl() {
   return withDatabase(required("POSTGRES_SUPERUSER_URL"), TEST_DATABASE_NAME);
 }
 
+/**
+ * Fail loudly if any connection string still points at a real database.
+ *
+ * Called from every test setup file. Three separate variables have now caused
+ * this exact failure once each — DATABASE_URL, then DATABASE_URL_APP, then
+ * DATABASE_URL_ADMIN — and the failure mode is the worst kind: nothing errors,
+ * the code under test reads and writes a different database than the
+ * assertions inspect, and the tests fail as though the feature were broken.
+ *
+ * Asserting it costs one function call and removes the whole class.
+ */
+export function assertTestDatabaseOnly() {
+  const offenders = [];
+
+  for (const [name, value] of Object.entries(process.env)) {
+    /* Only connection strings the application itself reads. */
+    if (!name.startsWith("DATABASE_URL")) continue;
+    if (name.endsWith("_TEST")) continue;
+    if (!value) continue;
+
+    const database = new URL(value).pathname.replace(/^\//, "");
+    if (database !== TEST_DATABASE_NAME) {
+      offenders.push(`${name} -> ${database}`);
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      `Test setup is pointed at a non-test database:\n  ${offenders.join("\n  ")}\n\n` +
+        `Every DATABASE_URL* the app reads must resolve to ${TEST_DATABASE_NAME}. ` +
+        "Redirect it in the setup file, or the code under test will quietly " +
+        "operate on a different database than the assertions.",
+    );
+  }
+}
+
 /** Databases db-roles.mjs should fix up ownership in, when they exist. */
 export function managedDatabaseNames() {
   const devDatabase = new URL(required("DATABASE_URL")).pathname.replace(

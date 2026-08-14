@@ -18,5 +18,8 @@ export declare function testAdminDatabaseUrl(): string;
 /** Superuser against the test database. Test scaffolding only. */
 export declare function testSuperuserDatabaseUrl(): string;
 
+/** Throw if any DATABASE_URL* the app reads points outside the test database. */
+export declare function assertTestDatabaseOnly(): void;
+
 /** Databases db-roles.mjs should fix up ownership in, when they exist. */
 export declare function managedDatabaseNames(): string[];

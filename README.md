@@ -1,11 +1,12 @@
 # whatsapp-os
 
-Foundation scaffold: a Next.js 16 App Router monorepo with a background worker,
-a multi-tenant Prisma layer, and a design-token system translated from
-`DESIGN-elevenlabs.md`.
+A Next.js 16 App Router monorepo with a background worker, a multi-tenant
+Postgres layer enforced by row-level security, authentication, and a design
+system translated from `DESIGN-elevenlabs.md`.
 
-**No product features yet.** Everything here is plumbing, tokens, and the
-`/styleguide` route that documents them.
+Phase 1 covers sign-up and sign-in, sessions, the application shell and a
+platform admin. The product sections render designed empty states; the
+messaging features themselves are Phase 2.
 
 ---
 
@@ -17,14 +18,15 @@ Six commands. Requires Node ≥ 20.9 and Docker.
 cp .env.example .env         # 1. then set ENCRYPTION_KEY (see below)
 npm install                  # 2. installs every workspace
 docker compose up -d         # 3. Postgres + Redis
-npm run db:setup             # 4. migrations, database roles, Prisma client
+npm run db:setup             # 4. database roles, migrations, Prisma client
 npm run dev                  # 5. web on http://localhost:3000
 npm run dev:worker           # 6. worker (second terminal)
 ```
 
-`db:setup` is three steps: it applies migrations as the owner, then runs
-`npm run db:roles` to give `app_runtime` and `app_admin` a login, then
-generates the client. `db:roles` is idempotent — re-run it any time the roles
+`db:setup` is three steps, in this order: `db:roles` provisions the roles and
+transfers table ownership, then migrations run as the owner, then the client is
+generated. Roles come first because the authentication migration needs
+`app_resolver` to already hold CREATE on schema public. `db:roles` is idempotent — re-run it any time the roles
 go missing, including against a database that already has data.
 
 Generate a real encryption key for step 1:
@@ -59,6 +61,9 @@ curl http://localhost:3000/api/health
 | Route | What it is |
 | --- | --- |
 | `/` | Placeholder landing page |
+| `/sign-up`, `/sign-in` | Authentication |
+| `/dashboard` and six more | The application shell |
+| `/admin` | Platform admin, a separate account space |
 | `/styleguide` | Every design token and component variant |
 | `/api/health` | `{ ok, db, redis }` — 200 when healthy, 503 when not |
 
@@ -95,6 +100,27 @@ Run from the repo root:
 | `npm run db:migrate` | `prisma migrate dev` |
 | `npm run db:studio` | Prisma Studio |
 | `npm run services:up` / `:down` | Postgres + Redis |
+
+---
+
+## Platform admin
+
+`/admin` is a separate account space, not a role: its own table, its own session
+table, its own cookie, and no flag on the tenant session that could escalate.
+
+```bash
+npm run admin:hash     # prompts, prints an Argon2id hash
+# put it in .env as ADMIN_PASSWORD_HASH, SINGLE-QUOTED
+npm run admin:seed
+```
+
+The single quotes matter. An Argon2 hash is full of `$`, and Docker Compose
+reads the root `.env` to substitute into `docker-compose.yml`.
+
+`apps/web/lib/admin-db.ts` is the only module permitted to import the
+cross-company client, enforced by a lint rule and by
+`apps/web/tests/server/no-raw-prisma.test.ts`. Both, because they fail
+differently.
 
 ---
 

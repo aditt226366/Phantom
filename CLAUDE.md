@@ -55,11 +55,25 @@ raw-SQL sites in the codebase.
 Keep HTTP calls and password hashing *outside* the callback — it holds a pooled
 connection and times out after 5s.
 
-### 3. Cross-tenant access returns 404, never 403
+### 3. The platform admin is a separate account space, not a permission
+
+`/admin` has its own table (`admin_users`), its own session table, and its own
+cookie. There is no role flag on a tenant session and there must never be one:
+escalation would then be a matter of setting a boolean, rather than forging a
+token in a table `app_runtime` holds no grants on at all.
+
+`app_resolve_company` cannot reach admin sessions — it only knows about rows
+that carry a `company_id`.
+
+> **Admin TOTP is deferred to Phase 12, deliberately.** A password alone on a
+> panel that reads across every tenant is a known gap, not an oversight. It is
+> written down here so nobody has to decide whether it was forgotten.
+
+### 4. Cross-tenant access returns 404, never 403
 
 A 403 confirms the row exists. If it is not yours, it does not exist.
 
-### 4. No literal hex outside `globals.css`
+### 5. No literal hex outside `globals.css`
 
 Every colour, type, radius and spacing value comes from a `--wa-*` token.
 `apps/web/tailwind.config.ts` maps utility names onto those properties and
@@ -68,7 +82,7 @@ contains no literal values at all.
 Sole existing exception: `viewport.themeColor` in `apps/web/app/layout.tsx`,
 which is emitted as a `<meta>` tag and cannot take a CSS custom property.
 
-### 5. Display face is EB Garamond at weight 400
+### 6. Display face is EB Garamond at weight 400
 
 Google Fonts' EB Garamond `wght` axis starts at **400** — `wght@300` returns
 HTTP 400. The design doc's 300 is unavailable.
@@ -91,8 +105,11 @@ index leading with it, RLS enabled *and* forced, policies for both roles, and
 CRUD-but-not-TRUNCATE grants will fail the suite. Opting a table out means
 naming it in a constant in that file.
 
-Rule 3 has nothing to apply to yet — the only route handler is `/api/health`,
-which touches no tenant data. It becomes live with the first tenant route.
+Rule 4 is enforced by the verify-email path: a token belonging to another
+company resolves to nothing and returns 404, with a test.
+
+`apps/web/lib/admin-db.ts` is the only module permitted to import
+`@whatsapp-os/db/admin`. It exposes named queries and never the client itself.
 
 ---
 

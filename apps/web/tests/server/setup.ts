@@ -1,4 +1,5 @@
 import {
+  testAdminDatabaseUrl,
   testAppDatabaseUrl,
   testDatabaseUrl,
 } from "../../../../packages/db/scripts/db-urls.mjs";
@@ -23,6 +24,13 @@ if (process.env["NODE_ENV"] === "production") {
 
 process.env["DATABASE_URL"] = testDatabaseUrl();
 process.env["DATABASE_URL_APP"] = testAppDatabaseUrl();
+
+/*
+ * Also redirected. .env points DATABASE_URL_ADMIN at the development database,
+ * so leaving it alone means admin code under test reads a different database
+ * than the assertions inspect — which returns nothing rather than erroring.
+ */
+process.env["DATABASE_URL_ADMIN"] = testAdminDatabaseUrl();
 
 /* session-store HMACs stored IPs with this. Any 32-byte value works here. */
 process.env["ENCRYPTION_KEY"] ??= Buffer.alloc(32).toString("base64");

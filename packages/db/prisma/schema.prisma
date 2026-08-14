@@ -200,6 +200,13 @@ model AuditLog {
 model LoginAttempt {
   id String @id @default(cuid())
 
+  /// Which account space this counter belongs to.
+  ///
+  /// Part of the unique key, so a platform admin and a tenant user sharing a
+  /// username do not share a lockout — otherwise attacking one locks out the
+  /// other, in both directions.
+  scope LoginScope @default(TENANT)
+
   username String
   /// A literal IP, or '*' for the per-username aggregate row.
   ip       String
@@ -211,9 +218,16 @@ model LoginAttempt {
   lockedUntil   DateTime? @map("locked_until")
   lastFailureAt DateTime  @default(now()) @map("last_failure_at")
 
-  @@unique([username, ip])
+  @@unique([scope, username, ip])
   @@index([lockedUntil])
   @@map("login_attempts")
+}
+
+enum LoginScope {
+  TENANT
+  ADMIN
+
+  @@map("login_scope")
 }
 
 /// Platform operator. GLOBAL by design: belongs to no company.

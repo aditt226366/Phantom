@@ -74,6 +74,21 @@ export function superuserDatabaseUrl() {
 }
 
 /**
+ * Platform-admin role against the test database.
+ *
+ * Needed because DATABASE_URL_ADMIN in .env points at the development
+ * database. Without redirecting it, admin code under test writes to and reads
+ * from a completely different database than the one the assertions inspect —
+ * which does not error, it just silently returns nothing.
+ */
+export function testAdminDatabaseUrl() {
+  return (
+    process.env["DATABASE_URL_ADMIN_TEST"] ??
+    withDatabase(required("DATABASE_URL_ADMIN"), TEST_DATABASE_NAME)
+  );
+}
+
+/**
  * Superuser against the test database.
  *
  * For test scaffolding only — inspecting and mutating rows around an

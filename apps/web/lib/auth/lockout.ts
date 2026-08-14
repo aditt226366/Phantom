@@ -1,5 +1,7 @@
 import "server-only";
-import { prisma } from "@whatsapp-os/db";
+import { LoginScope, prisma } from "@whatsapp-os/db";
+
+export { LoginScope };
 
 /**
  * Failed-attempt counters and lockout.
@@ -74,9 +76,9 @@ export interface LockState {
   until?: Date | undefined;
 }
 
-async function readAttempt(username: string, ip: string) {
+async function readAttempt(scope: LoginScope, username: string, ip: string) {
   return prisma.loginAttempt.findUnique({
-    where: { username_ip: { username, ip } },
+    where: { scope_username_ip: { scope, username, ip } },
   });
 }
 
@@ -90,12 +92,13 @@ async function readAttempt(username: string, ip: string) {
 export async function checkLocked(
   username: string,
   ip: string,
+  scope: LoginScope = LoginScope.TENANT,
 ): Promise<LockState> {
   const now = new Date();
 
   const [perIp, perUsername] = await Promise.all([
-    readAttempt(username, ip),
-    readAttempt(username, ALL_ADDRESSES),
+    readAttempt(scope, username, ip),
+    readAttempt(scope, username, ALL_ADDRESSES),
   ]);
 
   for (const row of [perIp, perUsername]) {
@@ -108,13 +111,14 @@ export async function checkLocked(
 }
 
 async function bump(
+  scope: LoginScope,
   username: string,
   ip: string,
   threshold: number,
   windowMs?: number,
 ): Promise<void> {
   const now = new Date();
-  const existing = await readAttempt(username, ip);
+  const existing = await readAttempt(scope, username, ip);
 
   /*
    * The aggregate row counts within a rolling window; without that, twenty-four
@@ -137,8 +141,9 @@ async function bump(
     : (existing?.lockedUntil ?? null);
 
   await prisma.loginAttempt.upsert({
-    where: { username_ip: { username, ip } },
+    where: { scope_username_ip: { scope, username, ip } },
     create: {
+      scope,
       username,
       ip,
       failureCount,
@@ -160,9 +165,16 @@ async function bump(
 export async function recordFailure(
   username: string,
   ip: string,
+  scope: LoginScope = LoginScope.TENANT,
 ): Promise<void> {
-  await bump(username, ip, MAX_FAILURES_PER_IP);
-  await bump(username, ALL_ADDRESSES, MAX_FAILURES_PER_USERNAME, USERNAME_WINDOW_MS);
+  await bump(scope, username, ip, MAX_FAILURES_PER_IP);
+  await bump(
+    scope,
+    username,
+    ALL_ADDRESSES,
+    MAX_FAILURES_PER_USERNAME,
+    USERNAME_WINDOW_MS,
+  );
 }
 
 /**
@@ -174,9 +186,10 @@ export async function recordFailure(
 export async function clearFailures(
   username: string,
   ip: string,
+  scope: LoginScope = LoginScope.TENANT,
 ): Promise<void> {
   await prisma.loginAttempt.updateMany({
-    where: { username, ip: { in: [ip, ALL_ADDRESSES] } },
+    where: { scope, username, ip: { in: [ip, ALL_ADDRESSES] } },
     data: { failureCount: 0, lockedUntil: null },
   });
 }
@@ -187,5 +200,11 @@ export async function checkSignupAllowed(ip: string): Promise<LockState> {
 }
 
 export async function recordSignupAttempt(ip: string): Promise<void> {
-  await bump(SIGNUP_SENTINEL, ip, MAX_SIGNUPS_PER_IP, USERNAME_WINDOW_MS);
+  await bump(
+    LoginScope.TENANT,
+    SIGNUP_SENTINEL,
+    ip,
+    MAX_SIGNUPS_PER_IP,
+    USERNAME_WINDOW_MS,
+  );
 }

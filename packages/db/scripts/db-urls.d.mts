@@ -12,6 +12,9 @@ export declare function maintenanceDatabaseUrl(): string;
 /** The cluster superuser. Used by db-roles.mjs and nothing else. */
 export declare function superuserDatabaseUrl(): string;
 
+/** Platform-admin role against the test database. */
+export declare function testAdminDatabaseUrl(): string;
+
 /** Superuser against the test database. Test scaffolding only. */
 export declare function testSuperuserDatabaseUrl(): string;
 

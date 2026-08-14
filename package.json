@@ -2,7 +2,7 @@
   "name": "whatsapp-os",
   "version": "0.1.0",
   "private": true,
-  "description": "whatsapp-os — Next.js 16 App Router monorepo (web + worker + db + core)",
+  "description": "whatsapp-os \u2014 Next.js 16 App Router monorepo (web + worker + db + core)",
   "engines": {
     "node": ">=20.9.0"
   },
@@ -25,6 +25,8 @@
     "db:migrate": "npm run migrate --workspace=@whatsapp-os/db",
     "db:migrate:deploy": "npm run migrate:deploy --workspace=@whatsapp-os/db",
     "db:roles": "npm run roles --workspace=@whatsapp-os/db",
+    "admin:hash": "npm run admin:hash --workspace=web",
+    "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",
     "services:up": "docker compose up -d",
     "services:down": "docker compose down",

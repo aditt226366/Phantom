@@ -24,6 +24,19 @@ const prefixed = (name: string): string =>
 export const SESSION_COOKIE_NAME = prefixed("wa_session");
 export const CSRF_COOKIE_NAME = prefixed("wa_csrf");
 
+/**
+ * Platform admin, on its own cookie names.
+ *
+ * A distinct name rather than a claim inside the tenant cookie, and that is the
+ * whole design: there is no value a tenant session can carry that turns it into
+ * an admin one, and no code path that reads one and gets the other. The two
+ * sessions live in different tables with different lookups, so presenting an
+ * admin token in the tenant cookie resolves to nothing rather than to something
+ * interesting.
+ */
+export const ADMIN_SESSION_COOKIE_NAME = prefixed("wa_admin");
+export const ADMIN_CSRF_COOKIE_NAME = prefixed("wa_admin_csrf");
+
 /** The hidden form field CsrfField renders and assertCsrf reads. */
 export const CSRF_FIELD_NAME = "csrfToken";
 

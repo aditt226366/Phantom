@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
+  ADMIN_CSRF_COOKIE_NAME,
+  ADMIN_SESSION_COOKIE_NAME,
   CSRF_COOKIE_NAME,
   CSRF_COOKIE_OPTIONS,
   SESSION_COOKIE_NAME,
@@ -65,16 +67,55 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
+/** The admin panel, which is a separate account space, not a permission. */
+const ADMIN_PREFIX = "/admin";
+const ADMIN_SIGN_IN = "/admin/sign-in";
+
+function isAdminPath(pathname: string): boolean {
+  return pathname === ADMIN_PREFIX || pathname.startsWith(`${ADMIN_PREFIX}/`);
+}
+
+function mintToken(): string {
+  /*
+   * Web Crypto rather than node:crypto — available in every runtime proxy can
+   * be bundled for.
+   */
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
+    "base64url",
+  );
+}
+
 export function proxy(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
+
+  /*
+   * Admin first, and with its own cookie and its own destination. An admin who
+   * has not signed in must never be sent to the tenant sign-in page: it is a
+   * different account space, and landing there implies a tenant account would
+   * grant admin access.
+   *
+   * /admin/sign-in itself is excluded, or it would redirect to itself forever.
+   */
+  if (isAdminPath(pathname) && pathname !== ADMIN_SIGN_IN) {
+    const hasAdmin = Boolean(
+      request.cookies.get(ADMIN_SESSION_COOKIE_NAME)?.value,
+    );
+
+    if (!hasAdmin) {
+      const target = new URL(ADMIN_SIGN_IN, request.url);
+      target.searchParams.set("next", pathname);
+      return applySecurityHeaders(NextResponse.redirect(target));
+    }
+  }
 
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE_NAME)?.value);
 
   if (!hasSession && isProtected(pathname)) {
     const target = new URL("/sign-in", request.url);
     /*
-     * Where they were going, so sign-in can send them back. Path only — echoing
-     * a full URL from the request would make this an open redirect.
+     * Where they were going, so sign-in can send them back. Taken from the
+     * server-parsed pathname, never from a query parameter — and validated
+     * again by safeNextPath before anything redirects to it.
      */
     target.searchParams.set("next", pathname);
     return applySecurityHeaders(NextResponse.redirect(target));
@@ -82,15 +123,15 @@ export function proxy(request: NextRequest): NextResponse {
 
   const response = NextResponse.next();
 
+  if (
+    isAdminPath(pathname) &&
+    !request.cookies.get(ADMIN_CSRF_COOKIE_NAME)?.value
+  ) {
+    response.cookies.set(ADMIN_CSRF_COOKIE_NAME, mintToken(), CSRF_COOKIE_OPTIONS);
+  }
+
   if (!request.cookies.get(CSRF_COOKIE_NAME)?.value) {
-    /*
-     * Web Crypto rather than node:crypto — proxy is bundled for an environment
-     * where the Node built-ins are not guaranteed, and getRandomValues is
-     * available in both.
-     */
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const token = Buffer.from(bytes).toString("base64url");
-    response.cookies.set(CSRF_COOKIE_NAME, token, CSRF_COOKIE_OPTIONS);
+    response.cookies.set(CSRF_COOKIE_NAME, mintToken(), CSRF_COOKIE_OPTIONS);
   }
 
   return applySecurityHeaders(response);

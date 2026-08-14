@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.npm
+
+# next.js
+.next/
+out/
+next-env.d.ts
+
+# production
+build/
+dist/
+
+# generated — the Prisma client is rebuilt by `npm run db:generate`
+packages/db/src/generated/
+
+# environment — .env.example is the committed contract, .env never is
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# typescript
+*.tsbuildinfo
+
+# editors / os
+.vscode/
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# misc
+.turbo/
+coverage/

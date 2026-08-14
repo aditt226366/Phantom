@@ -1,0 +1,286 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+/* ==========================================================================
+   whatsapp-os design tokens
+   Translated from DESIGN-elevenlabs.md (version: alpha).
+
+   This file is the SINGLE SOURCE OF TRUTH for raw values.
+   tailwind.config.ts contains no literal values - it only maps Tailwind
+   utility names onto the custom properties declared here.
+
+   Naming: --wa-<group>-<token>
+   ========================================================================== */
+
+:root {
+  /* ----------------------------------------------------------------------
+     1. COLOUR - Surface
+     ---------------------------------------------------------------------- */
+  --wa-canvas: #f5f5f5;              /* off-white page floor */
+  --wa-canvas-soft: #fafafa;         /* lighter alternating band */
+  --wa-canvas-deep: #0c0a09;         /* rare dark-mode hero */
+  --wa-surface-card: #ffffff;        /* pure white card */
+  --wa-surface-strong: #f0efed;      /* badges, voice-icon plates */
+  --wa-surface-dark: #0c0a09;        /* dark hero / CTA band */
+  --wa-surface-dark-elevated: #1c1917; /* card on dark canvas */
+
+  /* ----------------------------------------------------------------------
+     2. COLOUR - Ink & action
+     The only CTA colour in the system. No saturated brand action colour.
+     ---------------------------------------------------------------------- */
+  --wa-ink: #0c0a09;                 /* near-black ink, headings & rules */
+  --wa-primary: #292524;             /* primary CTA pill fill */
+  --wa-primary-active: #0c0a09;      /* primary CTA press state */
+
+  /* ----------------------------------------------------------------------
+     3. COLOUR - Text
+     ---------------------------------------------------------------------- */
+  --wa-body: #4e4e4e;                /* default running text */
+  --wa-body-strong: #292524;         /* emphasised body */
+  --wa-muted: #777169;               /* sub-titles */
+  --wa-muted-soft: #a8a29e;          /* disabled text */
+  --wa-on-primary: #ffffff;          /* text on the ink pill */
+  --wa-on-dark: #ffffff;             /* text on dark hero */
+  --wa-on-dark-soft: #a8a29e;        /* muted text on dark */
+
+  /* ----------------------------------------------------------------------
+     4. COLOUR - Hairlines
+     ---------------------------------------------------------------------- */
+  --wa-hairline: #e7e5e4;            /* default 1px divider */
+  --wa-hairline-soft: #f0efed;       /* lighter divider */
+  --wa-hairline-strong: #d6d3d1;     /* stronger panel outline */
+
+  /* ----------------------------------------------------------------------
+     5. COLOUR - Atmospheric gradient stops (signature)
+     DECORATION ONLY. Never a button fill, never a text colour,
+     never a component surface. See .wa-orb below.
+     ---------------------------------------------------------------------- */
+  --wa-gradient-mint: #a7e5d3;
+  --wa-gradient-peach: #f4c5a8;
+  --wa-gradient-lavender: #c8b8e0;
+  --wa-gradient-sky: #a8c8e8;
+  --wa-gradient-rose: #e8b8c4;
+
+  /* ----------------------------------------------------------------------
+     6. COLOUR - Semantic
+     Green appears here and ONLY here. It is never an action colour.
+     ---------------------------------------------------------------------- */
+  --wa-success: #16a34a;
+  --wa-error: #dc2626;
+
+  /* ----------------------------------------------------------------------
+     7. TYPOGRAPHY - Families
+     ---------------------------------------------------------------------- */
+  --wa-font-display: var(--font-eb-garamond), "EB Garamond", "Times New Roman", serif;
+  --wa-font-body: var(--font-inter), "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* Display weight. The design doc specifies Waldenburg Light at 300 and
+     documents EB Garamond as the open-source substitute. Google Fonts ships
+     EB Garamond on a 400-800 axis - there is no 300 cut, so 400 is the
+     lightest available and is used here. The "never bold" rule holds.
+     To get a true 300, swap the display face to Cormorant Garamond (which
+     does ship a 300) in app/layout.tsx and set this token to 300. */
+  --wa-display-weight: 400;
+
+  --wa-weight-regular: 400;
+  --wa-weight-medium: 500;
+  --wa-weight-semibold: 600;
+
+  /* ----------------------------------------------------------------------
+     8. TYPOGRAPHY - Steps
+     size / line-height / letter-spacing per step.
+     ---------------------------------------------------------------------- */
+  --wa-text-display-mega: 64px;
+  --wa-leading-display-mega: 1.05;
+  --wa-tracking-display-mega: -1.92px;
+
+  --wa-text-display-xl: 48px;
+  --wa-leading-display-xl: 1.08;
+  --wa-tracking-display-xl: -0.96px;
+
+  --wa-text-display-lg: 36px;
+  --wa-leading-display-lg: 1.17;
+  --wa-tracking-display-lg: -0.36px;
+
+  --wa-text-display-md: 32px;
+  --wa-leading-display-md: 1.13;
+  --wa-tracking-display-md: -0.32px;
+
+  --wa-text-display-sm: 24px;
+  --wa-leading-display-sm: 1.2;
+  --wa-tracking-display-sm: 0px;
+
+  --wa-text-title-md: 20px;
+  --wa-leading-title-md: 1.35;
+  --wa-tracking-title-md: 0px;
+
+  --wa-text-title-sm: 18px;
+  --wa-leading-title-sm: 1.44;
+  --wa-tracking-title-sm: 0.18px;
+
+  --wa-text-body-md: 16px;
+  --wa-leading-body-md: 1.5;
+  --wa-tracking-body-md: 0.16px;
+
+  --wa-text-body-strong: 16px;
+  --wa-leading-body-strong: 1.5;
+  --wa-tracking-body-strong: 0.16px;
+
+  --wa-text-body-sm: 15px;
+  --wa-leading-body-sm: 1.47;
+  --wa-tracking-body-sm: 0.15px;
+
+  --wa-text-caption: 14px;
+  --wa-leading-caption: 1.5;
+  --wa-tracking-caption: 0px;
+
+  --wa-text-caption-uppercase: 12px;
+  --wa-leading-caption-uppercase: 1.4;
+  --wa-tracking-caption-uppercase: 0.96px;
+
+  --wa-text-button: 15px;
+  --wa-leading-button: 1;
+  --wa-tracking-button: 0px;
+
+  --wa-text-nav-link: 15px;
+  --wa-leading-nav-link: 1.4;
+  --wa-tracking-nav-link: 0px;
+
+  /* Base tracking applied to <body>. Inter runs slightly looser than
+     default for the editorial dialect. */
+  --wa-tracking-base: 0.15px;
+
+  /* ----------------------------------------------------------------------
+     9. RADIUS
+     ---------------------------------------------------------------------- */
+  --wa-radius-none: 0px;
+  --wa-radius-xs: 4px;
+  --wa-radius-sm: 6px;
+  --wa-radius-md: 8px;
+  --wa-radius-lg: 12px;
+  --wa-radius-xl: 16px;
+  --wa-radius-xxl: 24px;
+  --wa-radius-pill: 9999px;
+  --wa-radius-full: 9999px;
+
+  /* ----------------------------------------------------------------------
+     10. SPACING - 4px base unit
+     ---------------------------------------------------------------------- */
+  --wa-space-xxs: 4px;
+  --wa-space-xs: 8px;
+  --wa-space-sm: 12px;
+  --wa-space-base: 16px;
+  --wa-space-md: 20px;
+  --wa-space-lg: 24px;
+  --wa-space-xl: 32px;
+  --wa-space-xxl: 48px;
+  --wa-space-section: 96px;
+
+  /* ----------------------------------------------------------------------
+     11. ELEVATION - hairline + a single soft drop tier
+     ---------------------------------------------------------------------- */
+  --wa-shadow-soft-drop: 0 4px 16px rgba(0, 0, 0, 0.04);
+
+  /* ----------------------------------------------------------------------
+     12. COMPONENT METRICS
+     ---------------------------------------------------------------------- */
+  --wa-container-max: 1200px;
+  --wa-nav-height: 64px;
+  --wa-button-height: 40px;
+  --wa-input-height: 44px;
+  --wa-voice-icon-size: 32px;
+  --wa-footer-padding-y: 64px;
+  --wa-footer-padding-x: 48px;
+}
+
+/* ==========================================================================
+   Base layer
+   ========================================================================== */
+
+@layer base {
+  * {
+    border-color: var(--wa-hairline);
+  }
+
+  html {
+    background-color: var(--wa-canvas);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--wa-canvas);
+    color: var(--wa-body);
+    font-family: var(--wa-font-body);
+    font-size: var(--wa-text-body-md);
+    font-weight: var(--wa-weight-regular);
+    line-height: var(--wa-leading-body-md);
+    letter-spacing: var(--wa-tracking-base);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Display copy never bolds. Weight is locked to the display token. */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--wa-font-display);
+    font-weight: var(--wa-display-weight);
+    color: var(--wa-ink);
+  }
+
+  ::selection {
+    background-color: var(--wa-ink);
+    color: var(--wa-on-primary);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--wa-ink);
+    outline-offset: 2px;
+  }
+}
+
+/* ==========================================================================
+   Atmospheric gradient orbs
+
+   Pure decoration. An orb never contains content, never fills a button and
+   never acts as a component surface. It is absolutely positioned, blurred,
+   and pointer-events: none so it can never intercept interaction.
+   ========================================================================== */
+
+@layer components {
+  .wa-orb {
+    position: absolute;
+    z-index: 0;
+    border-radius: var(--wa-radius-full);
+    pointer-events: none;
+    filter: blur(56px);
+    opacity: 0.55;
+    background-image: radial-gradient(
+      circle at 50% 50%,
+      var(--wa-orb-tone) 0%,
+      color-mix(in srgb, var(--wa-orb-tone) 45%, transparent) 45%,
+      transparent 72%
+    );
+  }
+
+  .wa-orb-mint     { --wa-orb-tone: var(--wa-gradient-mint); }
+  .wa-orb-peach    { --wa-orb-tone: var(--wa-gradient-peach); }
+  .wa-orb-lavender { --wa-orb-tone: var(--wa-gradient-lavender); }
+  .wa-orb-sky      { --wa-orb-tone: var(--wa-gradient-sky); }
+  .wa-orb-rose     { --wa-orb-tone: var(--wa-gradient-rose); }
+
+  /* Content sitting above orbs. */
+  .wa-above-orbs {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

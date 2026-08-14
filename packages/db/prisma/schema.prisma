@@ -1,0 +1,50 @@
+// whatsapp-os database schema.
+//
+// Scope note: this is foundation only - a tenant, and users belonging to a
+// tenant. No product models yet. What matters here is the multi-tenant shape:
+// every tenant-scoped table carries a `tenantId` column, an index on it, and
+// a compound unique that includes it. The withTenant client extension in
+// src/with-tenant.ts relies on that convention.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A customer workspace. The root of every tenant-scoped query.
+/// Not itself tenant-scoped - see TENANT_SCOPED_MODELS in with-tenant.ts.
+model Tenant {
+  id        String   @id @default(cuid())
+  /// URL-safe handle, unique across the installation.
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+
+  @@map("tenants")
+}
+
+/// A person inside a tenant.
+///
+/// Email is unique *per tenant*, not globally: the same human may belong to
+/// two workspaces. That is why the unique constraint is compound.
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String
+  email     String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}

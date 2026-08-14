@@ -1,0 +1,68 @@
+# Local Postgres and Redis.
+#
+#   docker compose up -d
+#
+# The worker is deliberately NOT run here by default - during development you
+# want it in a terminal with `npm run dev:worker` so you can read its logs and
+# restart it. Bring it up in a container with:
+#
+#   docker compose --profile worker up -d --build
+
+name: whatsapp-os
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: whatsapp
+      POSTGRES_PASSWORD: whatsapp
+      POSTGRES_DB: whatsapp_os
+    # Host port is configurable: 5432 is very often already taken by another
+    # project or a local Postgres install. Set POSTGRES_PORT in .env to move it
+    # (and update DATABASE_URL to match).
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whatsapp -d whatsapp_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    # Same story as Postgres — set REDIS_PORT in .env to move it.
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the host-facing URLs from .env with in-network ones.
+      DATABASE_URL: postgresql://whatsapp:whatsapp@postgres:5432/whatsapp_os?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:

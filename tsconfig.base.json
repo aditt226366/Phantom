@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "whatsapp-os base",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+
+    /* packages/* are consumed as TypeScript source (no build step). The
+       Prisma 7 generator emits .ts files that import each other with explicit
+       .ts extensions, so this must stay on. It requires noEmit, which is what
+       we want anyway - Next bundles the web app and tsx runs the worker. */
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

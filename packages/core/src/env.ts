@@ -16,18 +16,35 @@ const nodeEnv = z
   .enum(["development", "test", "production"])
   .default("development");
 
+const postgresUrl = (name: string) =>
+  z
+    .string()
+    .min(1, `${name} is required`)
+    .refine(
+      (value) =>
+        value.startsWith("postgres://") || value.startsWith("postgresql://"),
+      `${name} must be a postgres:// or postgresql:// connection string`,
+    );
+
 /** Variables both the web app and the worker need. */
 export const sharedEnvSchema = z.object({
   NODE_ENV: nodeEnv,
 
-  DATABASE_URL: z
-    .string()
-    .min(1, "DATABASE_URL is required")
-    .refine(
-      (value) =>
-        value.startsWith("postgres://") || value.startsWith("postgresql://"),
-      "DATABASE_URL must be a postgres:// or postgresql:// connection string",
-    ),
+  /**
+   * The owner role. Migrations and the Prisma CLI only.
+   *
+   * Application code must never connect with this: the owner is exempt from
+   * its own tables' row-level security policies.
+   */
+  DATABASE_URL: postgresUrl("DATABASE_URL"),
+
+  /**
+   * The runtime role (app_runtime). Every application query goes through this.
+   *
+   * It owns nothing, so RLS policies actually apply to it. There is
+   * deliberately no fallback to DATABASE_URL — see packages/db/src/client.ts.
+   */
+  DATABASE_URL_APP: postgresUrl("DATABASE_URL_APP"),
 
   REDIS_URL: z
     .string()
@@ -51,6 +68,14 @@ export const sharedEnvSchema = z.object({
 /** Web-only additions. */
 export const webEnvSchema = sharedEnvSchema.extend({
   APP_URL: z.url().default("http://localhost:3000"),
+
+  /**
+   * The platform-admin role (app_admin), which can read across companies.
+   *
+   * Optional: only the admin route group needs it, and the app boots without
+   * an admin panel. Used by exactly one module, packages/db/src/admin-client.ts.
+   */
+  DATABASE_URL_ADMIN: postgresUrl("DATABASE_URL_ADMIN").optional(),
 });
 
 /** Worker-only additions. */

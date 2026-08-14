@@ -10,7 +10,7 @@ import { PrismaClient } from "./generated/prisma/client.ts";
  * ---------------------------------------------------------------------------
  * Why this is lazy
  * ---------------------------------------------------------------------------
- * Reading DATABASE_URL at module scope looks fine and is a trap. ES module
+ * Reading DATABASE_URL_APP at module scope looks fine and is a trap. ES module
  * imports are evaluated in import order, before any statement in the importing
  * module runs - so in the worker:
  *
@@ -31,19 +31,57 @@ import { PrismaClient } from "./generated/prisma/client.ts";
  */
 
 function createPrismaClient() {
-  const connectionString = process.env["DATABASE_URL"];
+  const connectionString = process.env["DATABASE_URL_APP"];
 
   if (!connectionString) {
     throw new Error(
-      "DATABASE_URL is not set. Copy .env.example to .env and fill it in.",
+      "DATABASE_URL_APP is not set. Copy .env.example to .env and fill it in, " +
+        "then run `npm run db:roles`.\n\n" +
+        "This is deliberately NOT falling back to DATABASE_URL. That variable " +
+        "holds the table owner, and Postgres exempts a table's owner from its " +
+        "own row-level security policies — connecting with it at runtime would " +
+        "disable tenant isolation everywhere, silently.",
     );
   }
 
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg({
+      connectionString,
+      max: Number(process.env["DATABASE_POOL_MAX"] ?? 10),
+    }),
     log:
       process.env["NODE_ENV"] === "development" ? ["warn", "error"] : ["error"],
   });
+}
+
+/**
+ * Fail loudly if the runtime connection has RLS-exempt privileges.
+ *
+ * The worst possible misconfiguration in this system is pointing
+ * DATABASE_URL_APP at a superuser or the table owner: everything keeps working,
+ * every test still passes, and tenant isolation is silently gone. One query at
+ * startup is a cheap price for making that impossible to ship.
+ */
+export async function assertRuntimeRoleIsUnprivileged(): Promise<void> {
+  const [role] = await getPrismaClient().$queryRaw<
+    Array<{ current_user: string; rolsuper: boolean; rolbypassrls: boolean }>
+  >`
+    SELECT current_user, rolsuper, rolbypassrls
+    FROM pg_roles WHERE rolname = current_user
+  `;
+
+  if (!role) {
+    throw new Error("Could not determine the current database role.");
+  }
+
+  if (role.rolsuper || role.rolbypassrls) {
+    throw new Error(
+      `DATABASE_URL_APP connects as "${role.current_user}", which is ` +
+        `${role.rolsuper ? "a superuser" : "BYPASSRLS"}. Row-level security ` +
+        "does not apply to it, so tenant isolation is not enforced. Point " +
+        "DATABASE_URL_APP at app_runtime (`npm run db:roles`).",
+    );
+  }
 }
 
 type PrismaClientSingleton = ReturnType<typeof createPrismaClient>;

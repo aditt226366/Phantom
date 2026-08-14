@@ -8,7 +8,8 @@ import { safeParseEnv, sharedEnvSchema, workerEnvSchema } from "../src/env.ts";
 
 const valid = {
   NODE_ENV: "test",
-  DATABASE_URL: "postgresql://user:pw@localhost:5432/db",
+  DATABASE_URL: "postgresql://owner:pw@localhost:5432/db",
+  DATABASE_URL_APP: "postgresql://app_runtime:pw@localhost:5432/db",
   REDIS_URL: "redis://localhost:6379",
   ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
 };
@@ -44,6 +45,22 @@ describe("safeParseEnv", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("32 bytes");
+    }
+  });
+
+  it("requires the runtime connection string separately", () => {
+    const { DATABASE_URL_APP: _omitted, ...withoutApp } = valid;
+
+    const result = safeParseEnv(sharedEnvSchema, withoutApp);
+
+    /*
+     * DATABASE_URL_APP is not optional and does not fall back to DATABASE_URL.
+     * The owner role is exempt from its own tables' RLS policies, so falling
+     * back would silently disable tenant isolation.
+     */
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("DATABASE_URL_APP");
     }
   });
 

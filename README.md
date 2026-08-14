@@ -17,10 +17,15 @@ Six commands. Requires Node ≥ 20.9 and Docker.
 cp .env.example .env         # 1. then set ENCRYPTION_KEY (see below)
 npm install                  # 2. installs every workspace
 docker compose up -d         # 3. Postgres + Redis
-npm run db:setup             # 4. applies migrations, generates the client
+npm run db:setup             # 4. migrations, database roles, Prisma client
 npm run dev                  # 5. web on http://localhost:3000
 npm run dev:worker           # 6. worker (second terminal)
 ```
+
+`db:setup` is three steps: it applies migrations as the owner, then runs
+`npm run db:roles` to give `app_runtime` and `app_admin` a login, then
+generates the client. `db:roles` is idempotent — re-run it any time the roles
+go missing, including against a database that already has data.
 
 Generate a real encryption key for step 1:
 
@@ -136,6 +141,44 @@ swap the display face to **Cormorant Garamond**, which does ship one:
 ```
 
 …then set `--wa-display-weight: 300` in `globals.css`. Nothing else changes.
+
+---
+
+## Database roles
+
+There are three connection strings, and which role each uses is load-bearing:
+
+| Variable | Role | Used by |
+| --- | --- | --- |
+| `DATABASE_URL` | owner | migrations and the Prisma CLI, nothing else |
+| `DATABASE_URL_APP` | `app_runtime` | every application query |
+| `DATABASE_URL_ADMIN` | `app_admin` | the `/admin` route group only |
+
+**Postgres exempts a table's owner from that table's row-level security
+policies.** An application connected as the owner would pass straight through
+every policy, and the isolation tests would go green while enforcing nothing.
+So the app has its own non-owner role, and `packages/db/src/client.ts`
+deliberately does *not* fall back to `DATABASE_URL` when `DATABASE_URL_APP` is
+missing — it throws, and explains why.
+
+`assertRuntimeRoleIsUnprivileged()` is one query that refuses to proceed if the
+runtime connection turns out to be a superuser or `BYPASSRLS`. It costs
+nothing and it makes the single worst misconfiguration in this system
+impossible to ship quietly.
+
+Role *identity* is created by a migration, with no password, so it is committed
+and works in production. The *credential* comes from `npm run db:roles`, which
+refuses to run with `NODE_ENV=production` — set those passwords from your
+secrets manager instead:
+
+```sql
+ALTER ROLE app_runtime LOGIN PASSWORD '...';
+ALTER ROLE app_admin   LOGIN PASSWORD '...';
+```
+
+> **`prisma db push` is gone on purpose.** It writes the schema directly and
+> skips migration SQL, which is where the roles, grants and RLS policies live.
+> It would produce a database that looks correct and enforces nothing.
 
 ---
 

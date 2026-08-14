@@ -1,4 +1,8 @@
-export { prisma, checkDatabase } from "./client.ts";
+export {
+  prisma,
+  checkDatabase,
+  assertRuntimeRoleIsUnprivileged,
+} from "./client.ts";
 export { withCompany, COMPANY_SCOPED_MODELS } from "./with-company.ts";
 export type { CompanyClient } from "./with-company.ts";
 

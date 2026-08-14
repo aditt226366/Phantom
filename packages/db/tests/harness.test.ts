@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkDatabase, prisma } from "../src/index.ts";
-import { TEST_DATABASE_NAME } from "../scripts/test-db-url.mjs";
+import { TEST_DATABASE_NAME } from "../scripts/db-urls.mjs";
 
 /**
  * Proves the harness itself works: the test database exists, migrations were

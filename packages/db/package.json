@@ -9,13 +9,15 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./with-company": "./src/with-company.ts"
+    "./with-company": "./src/with-company.ts",
+    "./admin": "./src/admin-client.ts"
   },
   "scripts": {
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "push": "prisma db push",
+    "roles": "node scripts/db-roles.mjs",
+    "test:setup": "node scripts/migrate-test.mjs",
     "studio": "prisma studio",
     "typecheck": "tsc --noEmit"
   },

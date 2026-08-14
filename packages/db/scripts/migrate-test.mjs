@@ -7,7 +7,7 @@ import {
   TEST_DATABASE_NAME,
   maintenanceDatabaseUrl,
   testDatabaseUrl,
-} from "./test-db-url.mjs";
+} from "./db-urls.mjs";
 
 /**
  * Create the test database if it is missing, then bring it up to date.

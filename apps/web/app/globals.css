@@ -186,6 +186,8 @@
      ---------------------------------------------------------------------- */
   --wa-container-max: 1200px;
   --wa-nav-height: 64px;
+  /* Application shell sidebar. Persistent at desktop, an overlay below it. */
+  --wa-sidebar-width: 264px;
   --wa-button-height: 40px;
   --wa-input-height: 44px;
   --wa-voice-icon-size: 32px;

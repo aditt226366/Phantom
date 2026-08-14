@@ -251,6 +251,11 @@ const config: Config = {
 
       width: {
         "voice-icon": "var(--wa-voice-icon-size)",
+        sidebar: "var(--wa-sidebar-width)",
+      },
+
+      minWidth: {
+        sidebar: "var(--wa-sidebar-width)",
       },
 
       maxWidth: {

@@ -31,7 +31,10 @@
     "services:logs": "docker compose logs -f"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/pg": "^8.21.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
     "pg": "^8.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

@@ -1,4 +1,9 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Test projects.
@@ -47,6 +52,25 @@ export default defineConfig({
           /* Migrations run inside globalSetup on a cold database. */
           hookTimeout: 120_000,
           testTimeout: 30_000,
+        },
+      },
+      {
+        /*
+         * Component tests. jsdom rather than node, and the React plugin for
+         * the JSX transform — Vitest's default esbuild pass does not apply the
+         * automatic runtime that React 19 components are written against.
+         */
+        plugins: [react()],
+        resolve: {
+          alias: { "@": path.resolve(here, "apps/web") },
+        },
+        test: {
+          name: "web",
+          root: "./apps/web",
+          environment: "jsdom",
+          include: ["tests/**/*.test.tsx", "tests/**/*.test.ts"],
+          setupFiles: ["./tests/setup.ts"],
+          server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },
     ],

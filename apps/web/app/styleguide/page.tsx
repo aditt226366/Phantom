@@ -4,6 +4,7 @@ import { TopNav } from "@/components/brand/top-nav";
 import { SiteFooter } from "@/components/brand/bands";
 import { GradientOrb } from "@/components/brand/gradient-orb";
 import { Section, TokenName } from "./_components/primitives";
+import { FieldGallery, ShellGallery } from "./_components/app-gallery";
 import {
   ColourGallery,
   ElevationGallery,
@@ -114,6 +115,8 @@ export default async function StyleguidePage() {
         <ButtonGallery />
         <BadgeGallery />
         <FormGallery />
+        <FieldGallery />
+        <ShellGallery />
         <CardGallery />
         <VoiceGallery />
         <PricingGallery />

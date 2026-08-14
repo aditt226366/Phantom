@@ -216,5 +216,21 @@ Three rules that make it work, each with a test:
 - once it succeeds it never runs again, so the cost is one sign-in per affected
   user.
 
-**Still missing: a password-change flow.** The banner tells a user their password
-is breached and there is nowhere to change it. That is the next thing to build.
+**Setting a password goes through one function.** `lib/auth/set-password.ts` is
+the only place a password hash is written, and all three entry points — an
+authenticated change, a self-service reset, an admin-issued reset — go through
+it. It runs the denylist and breach checks, writes the hash, stamps
+`passwordChangedAt` and `hibpCheckedAt`, revokes every session for the user,
+spends outstanding reset links, and audits. Duplicating that across three call
+sites is how a reset path ends up not revoking sessions.
+
+A breached password is **refused** there and only **advisory** at sign-in. Same
+check, opposite answer: at sign-in the user already has the password and locking
+them out helps nobody; when choosing a new one, refusing costs a second attempt.
+
+**The admin never sees a reset token.** `issueAdminPasswordReset` returns it to
+the action, which mails it; the panel is told only that a link was sent, and
+there is no path for an admin to set a password. Either would let an operator
+take an account with nothing in the user's inbox to notice. Sessions are revoked
+at issue time, not at token use, because the reason to press that button is a
+suspected compromise.

@@ -1,0 +1,48 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { FormStatus } from "@/components/ui/form-status";
+import { adminResetPasswordAction, type AdminFormState } from "../actions";
+
+/**
+ * The Phase 2 button, in primitive form.
+ *
+ * Renders the outcome and nothing else — no token, no link, no confirmation of
+ * whether the account exists.
+ */
+export function AdminResetForm({ csrf }: { csrf: ReactNode }) {
+  const [state, formAction] = useActionState<AdminFormState, FormData>(
+    adminResetPasswordAction,
+    {},
+  );
+
+  return (
+    <form action={formAction} className="flex flex-col gap-base">
+      {csrf}
+      <FormStatus message={state.message} tone="success" />
+      <div className="flex flex-col gap-base tablet:flex-row tablet:items-end">
+        <Field
+          label="Username"
+          name="username"
+          autoComplete="off"
+          containerClassName="tablet:max-w-xs tablet:flex-1"
+          required
+        />
+        <Submit />
+      </div>
+    </form>
+  );
+}
+
+function Submit() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant="outline" disabled={pending}>
+      {pending ? "Sending…" : "Send reset link"}
+    </Button>
+  );
+}

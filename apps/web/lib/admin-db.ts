@@ -153,6 +153,23 @@ export async function recordAdminLogin(id: string): Promise<void> {
 /* Cross-tenant reads                                                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Look up a user for an admin-issued reset.
+ *
+ * Returns the identifiers needed to issue a link and mail it, and nothing that
+ * would let the panel act as the user. No password hash, no session data.
+ */
+export async function findUserForReset(username: string): Promise<{
+  id: string;
+  companyId: string;
+  email: string;
+} | null> {
+  return adminPrisma.user.findUnique({
+    where: { username: username.trim().toLowerCase() },
+    select: { id: true, companyId: true, email: true },
+  });
+}
+
 export interface CompanySummary {
   id: string;
   name: string;

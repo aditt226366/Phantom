@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { CsrfField } from "@/components/ui/csrf-field";
 import { requireSession } from "@/lib/auth/session";
+import { ChangePasswordForm } from "../_components/change-password-form";
 import { SectionHeader, SectionShell } from "../../_components/section";
 
 export const metadata: Metadata = { title: "Personal details" };
@@ -34,6 +36,19 @@ export default async function PersonalDetailsPage() {
           </div>
         ))}
       </dl>
+
+      <section
+        id="password"
+        className="mt-xxl scroll-mt-xxl rounded-xl border border-hairline bg-surface-card p-lg"
+      >
+        <h2 className="text-title-md text-ink">Change password</h2>
+        <p className="mb-lg mt-xxs max-w-2xl text-body-sm text-muted">
+          Changing it signs out every other device. You will stay signed in
+          here.
+        </p>
+
+        <ChangePasswordForm csrf={<CsrfField />} />
+      </section>
     </SectionShell>
   );
 }

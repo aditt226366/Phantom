@@ -37,7 +37,8 @@ export type ResolveKind =
   | "username"
   | "email"
   | "session"
-  | "verification";
+  | "verification"
+  | "password_reset";
 
 export async function resolveCompany(
   kind: ResolveKind,

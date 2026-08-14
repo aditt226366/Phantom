@@ -49,10 +49,10 @@ export function PasswordBreachBanner({ className }: { className?: string }) {
         </span>{" "}
         It still works, but it is known to attackers and should be replaced.{" "}
         <Link
-          href="/profile/personal-details"
+          href="/profile/personal-details#password"
           className="text-ink underline underline-offset-4"
         >
-          Your account details
+          Change it now
         </Link>
         .
       </p>

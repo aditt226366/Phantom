@@ -91,3 +91,47 @@ export const signInSchema = z.object({
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;
+
+/**
+ * Changing a password while signed in.
+ *
+ * The current password is required even though a session already exists. A
+ * session is not proof of knowing the credential — it is proof of having a
+ * cookie — and this is precisely the flow someone with a stolen cookie would
+ * use to take the account permanently. Asking costs the real owner one field.
+ */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Enter your current password"),
+    newPassword: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  })
+  .refine((data) => data.newPassword !== data.currentPassword, {
+    message: "Choose a password you have not used here before",
+    path: ["newPassword"],
+  });
+
+/** Requesting a reset link. */
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+});
+
+/** Setting a new password from a reset link. */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().min(1),
+    newPassword: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

@@ -19,6 +19,15 @@ export default function SignInPage() {
       </p>
 
       <SignInForm csrf={<CsrfField />} />
+
+      <p className="mt-lg text-body-sm text-muted">
+        <Link
+          href="/forgot-password"
+          className="text-ink underline underline-offset-4"
+        >
+          Forgot your password?
+        </Link>
+      </p>
     </div>
   );
 }

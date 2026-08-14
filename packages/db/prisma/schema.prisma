@@ -42,6 +42,10 @@ enum AuditAction {
   HIBP_CHECKED
   /// A deferred breach check completed and found the password in a breach.
   PASSWORD_BREACHED
+  /// A reset link was requested. Written whether or not the address exists is
+  /// impossible — there is no company to attach it to when it does not — so
+  /// this only ever appears for a real account.
+  PASSWORD_RESET_REQUESTED
 
   @@map("audit_action")
 }
@@ -67,6 +71,7 @@ model Company {
   users                  User[]
   sessions               Session[]
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens    PasswordResetToken[]
   auditLogs              AuditLog[]
 
   @@map("companies")
@@ -122,6 +127,7 @@ model User {
   company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sessions                Session[]
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
   auditLogs               AuditLog[]
 
   @@index([companyId, createdAt])
@@ -177,6 +183,29 @@ model EmailVerificationToken {
 
   @@index([companyId, userId])
   @@map("email_verification_tokens")
+}
+
+/// A single-use password reset link.
+///
+/// One hour, not the verification token's twenty-four: this one is a full
+/// account takeover if it leaks, and it is requested by someone who is at their
+/// keyboard right now.
+model PasswordResetToken {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  userId    String @map("user_id")
+
+  tokenHash String @unique @map("token_hash")
+
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId])
+  @@map("password_reset_tokens")
 }
 
 /// Security-relevant events, per company.
@@ -245,6 +274,8 @@ model LoginAttempt {
 enum LoginScope {
   TENANT
   ADMIN
+  /// Reset-link requests, throttled per email and per address.
+  PASSWORD_RESET
 
   @@map("login_scope")
 }

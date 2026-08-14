@@ -3,6 +3,7 @@ import { listCompanies, writeAdminAudit } from "@/lib/admin-db";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import { requestContext } from "@/lib/auth/request";
 import { AdminCsrfField } from "./_components/admin-csrf-field";
+import { AdminResetForm } from "./_components/admin-reset-form";
 import { adminSignOutAction } from "./actions";
 
 export const metadata: Metadata = { title: "Platform admin" };
@@ -49,6 +50,17 @@ export default async function AdminHomePage() {
           </button>
         </form>
       </header>
+
+      <section className="mb-lg rounded-xl border border-hairline bg-surface-card p-lg">
+        <h2 className="text-title-md text-ink">Send a password reset</h2>
+        <p className="mb-base mt-xxs max-w-2xl text-body-sm text-muted">
+          The link goes to the address on file. It is never shown here, and this
+          panel cannot set a password — an operator who could do either could
+          take an account without the owner noticing. Sessions are revoked
+          straight away.
+        </p>
+        <AdminResetForm csrf={<AdminCsrfField />} />
+      </section>
 
       <div className="overflow-hidden rounded-xl border border-hairline bg-surface-card">
         <table className="w-full text-left">

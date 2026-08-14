@@ -30,6 +30,7 @@ export default async function AppLayout({
       fullName={session.user.fullName}
       email={session.user.email}
       emailVerified={session.user.emailVerifiedAt !== null}
+      passwordBreached={session.user.passwordBreachedAt !== null}
       signOutAction={signOutAction}
       resendAction={resendVerificationAction}
       /* Two instances: a form may only carry one field of a given name. */

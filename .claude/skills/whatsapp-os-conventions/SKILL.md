@@ -46,6 +46,23 @@ a matching index rename shows up as permanent drift.
 The migration fails loudly on a non-empty table, which beats inventing a
 placeholder `password_hash` for a real account.
 
+**Backfilling a tenant table needs the FORCE dance.** `FORCE ROW LEVEL SECURITY`
+subjects the owner to policies scoped `TO app_runtime`, so a bare `UPDATE` in a
+migration matches no policy and silently touches zero rows — it succeeds,
+reports 0, and the migration carries on:
+
+```sql
+ALTER TABLE "users" NO FORCE ROW LEVEL SECURITY;
+UPDATE "users" SET ...;
+ALTER TABLE "users" FORCE ROW LEVEL SECURITY;
+```
+
+Drop FORCE, never the policy: everyone else stays constrained throughout the
+window. **`packages/db/tests/force-rls-backfill.test.ts` is the canonical
+worked example** — it runs the whole sequence on a throwaway table and asserts
+what is true at each step, including that the table ends in the state it
+started in. Read it rather than reconstructing this from the snippet.
+
 **Touching a `SECURITY DEFINER` function needs a role switch.**
 `app_resolve_company` and `app_available_slug` are owned by `app_resolver`, and
 `CREATE OR REPLACE` requires actually being the owner. `whatsapp_owner` is a
@@ -183,8 +200,21 @@ the accepted tradeoff, not an oversight.
 **Admin TOTP is deferred to Phase 12.** A password alone on a panel that reads
 across every tenant is a known gap.
 
-**Follow-up, not yet built: `hibpCheckedAt`.** When the breach check fails open,
-nothing re-checks that password later — the `HIBP_UNAVAILABLE` audit row records
-the gap but nothing closes it. A `hibpCheckedAt` column on `users`, plus a
-re-check at next sign-in when it is null, would. Worth doing before real
-customer data.
+**The deferred breach check is advisory, by design.** When signup fails open,
+`hibpCheckedAt` stays null and the next *successful* sign-in retries the check —
+the only later moment the plaintext exists, since the stored value is an Argon2id
+hash and HIBP is indexed by SHA-1 of the password. A hit sets
+`passwordBreachedAt` and shows a banner; it does not block the session. Refusing
+a user who has just proved they know the password locks them out of their own
+account and leaves them no route to fix it, which is worse than the risk.
+
+Three rules that make it work, each with a test:
+- the check runs only *after* the password verifies, so failed guesses are never
+  shipped to a third party;
+- a failed lookup leaves `hibpCheckedAt` null, so the retry fires again — marking
+  it checked would recreate the original gap one step later and permanently;
+- once it succeeds it never runs again, so the cost is one sign-in per affected
+  user.
+
+**Still missing: a password-change flow.** The banner tells a user their password
+is breached and there is nowhere to change it. That is the next thing to build.

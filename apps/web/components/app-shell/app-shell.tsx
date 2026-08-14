@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { Inbox, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PasswordBreachBanner } from "@/components/brand/password-breach-banner";
 import { VerifyBanner } from "@/components/brand/verify-banner";
 import { INBOX_HREF } from "@/lib/nav";
 import { ProfileMenu } from "./profile-menu";
@@ -23,6 +24,8 @@ export interface AppShellProps {
   email: string;
   /** Non-null once the address is confirmed; drives the banner. */
   emailVerified: boolean;
+  /** True when a deferred breach check found this password. */
+  passwordBreached: boolean;
   signOutAction: (formData: FormData) => void | Promise<void>;
   resendAction: (formData: FormData) => void | Promise<void>;
   csrf: React.ReactNode;
@@ -36,6 +39,7 @@ export function AppShell({
   fullName,
   email,
   emailVerified,
+  passwordBreached,
   signOutAction,
   resendAction,
   csrf,
@@ -99,6 +103,8 @@ export function AppShell({
         </header>
 
         <main id="main" className="min-w-0 flex-1 px-base py-lg desktop:px-lg">
+          {passwordBreached ? <PasswordBreachBanner className="mb-lg" /> : null}
+
           {!emailVerified ? (
             <VerifyBanner
               email={email}

@@ -1,5 +1,10 @@
 import "server-only";
-import { verifyDummy, verifyPassword, type SignInInput } from "@whatsapp-os/core";
+import {
+  checkPasswordBreached,
+  verifyDummy,
+  verifyPassword,
+  type SignInInput,
+} from "@whatsapp-os/core";
 import { AuditAction, resolveCompany, withCompany } from "@whatsapp-os/db";
 import { auditWithin } from "./audit.ts";
 import { checkLocked, clearFailures, recordFailure } from "./lockout.ts";
@@ -48,6 +53,65 @@ export interface SignInContext {
   userAgent?: string | undefined;
 }
 
+interface DeferredBreachCheck {
+  /** Merged into the user update inside the session transaction. */
+  userUpdate: {
+    hibpCheckedAt?: Date;
+    passwordBreachedAt?: Date;
+  };
+  audit?: {
+    action: AuditAction;
+    metadata?: Record<string, string>;
+  };
+}
+
+/**
+ * Retry the breach check that signup could not complete.
+ *
+ * Three outcomes, and the third is the one that matters:
+ *
+ *   checked, clean    stamp hibpCheckedAt — done, never runs again
+ *   checked, breached stamp both; the password is flagged for rotation
+ *   not checked       change nothing at all
+ *
+ * The last one is deliberate. Stamping hibpCheckedAt after a failed lookup
+ * would record that the control had run when it had not, and the password
+ * would never be checked again — the same silent gap this feature exists to
+ * close, moved one step later and made permanent.
+ */
+async function runDeferredBreachCheck(
+  user: { hibpCheckedAt: Date | null },
+  password: string,
+): Promise<DeferredBreachCheck> {
+  if (user.hibpCheckedAt !== null) return { userUpdate: {} };
+
+  const breach = await checkPasswordBreached(password);
+
+  if (!breach.checked) {
+    return {
+      userUpdate: {},
+      audit: {
+        action: AuditAction.HIBP_UNAVAILABLE,
+        metadata: { reason: breach.reason, at: "signin" },
+      },
+    };
+  }
+
+  const now = new Date();
+
+  if (breach.breached) {
+    return {
+      userUpdate: { hibpCheckedAt: now, passwordBreachedAt: now },
+      audit: { action: AuditAction.PASSWORD_BREACHED },
+    };
+  }
+
+  return {
+    userUpdate: { hibpCheckedAt: now },
+    audit: { action: AuditAction.HIBP_CHECKED },
+  };
+}
+
 export async function signIn(
   input: SignInInput,
   context: SignInContext = {},
@@ -78,7 +142,7 @@ export async function signIn(
   const user = await withCompany(companyId, (db) =>
     db.user.findUnique({
       where: { username: input.username },
-      select: { id: true, passwordHash: true },
+      select: { id: true, passwordHash: true, hibpCheckedAt: true },
     }),
   );
 
@@ -111,12 +175,29 @@ export async function signIn(
   /* failureCount only. lockoutCount persists so the backoff keeps escalating. */
   await clearFailures(input.username, ip);
 
+  /*
+   * The deferred breach check.
+   *
+   * Runs only when signup failed open, and only after the password has been
+   * verified — checking an unverified guess would send attacker-supplied
+   * hashes to HaveIBeenPwned and burn the shared quota. This is also the only
+   * moment the plaintext exists again: the stored value is an Argon2id hash,
+   * and HIBP is indexed by SHA-1 of the password itself.
+   *
+   * Deliberately before the transaction opens, like every other network call:
+   * an interactive transaction holds a pooled connection and times out after
+   * five seconds, and this can take three.
+   *
+   * The cost lands on one sign-in per affected user, and only after an outage.
+   */
+  const deferred = await runDeferredBreachCheck(user, input.password);
+
   const session = await withCompany(companyId, async (db, scoped) => {
     const created = await createSessionRow(db, scoped, user.id, context);
 
     await db.user.update({
       where: { id: user.id },
-      data: { lastLoginAt: new Date() },
+      data: { lastLoginAt: new Date(), ...deferred.userUpdate },
     });
 
     await auditWithin(db, scoped, {
@@ -124,6 +205,17 @@ export async function signIn(
       userId: user.id,
       ...context,
     });
+
+    if (deferred.audit) {
+      await auditWithin(db, scoped, {
+        action: deferred.audit.action,
+        userId: user.id,
+        ...context,
+        ...(deferred.audit.metadata
+          ? { metadata: deferred.audit.metadata }
+          : {}),
+      });
+    }
 
     return created;
   });

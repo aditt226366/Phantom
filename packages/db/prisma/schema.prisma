@@ -38,6 +38,10 @@ enum AuditAction {
   /// The breach check could not be reached and the password was accepted
   /// without it. Recorded so the gap is visible rather than silent.
   HIBP_UNAVAILABLE
+  /// A deferred breach check completed at sign-in and found nothing.
+  HIBP_CHECKED
+  /// A deferred breach check completed and found the password in a breach.
+  PASSWORD_BREACHED
 
   @@map("audit_action")
 }
@@ -96,6 +100,21 @@ model User {
   role              UserRole @default(MEMBER)
   passwordChangedAt DateTime @default(now()) @map("password_changed_at")
   lastLoginAt       DateTime? @map("last_login_at")
+
+  /// When the breach check last actually ran for this password.
+  ///
+  /// Null means it has never completed — either signup failed open because
+  /// HaveIBeenPwned was unreachable, or the password has been changed since.
+  /// The next successful sign-in retries it, which is the only moment the
+  /// plaintext exists again.
+  hibpCheckedAt DateTime? @map("hibp_checked_at")
+
+  /// Set when the breach check found this password in a known breach.
+  ///
+  /// Advisory, not a block: the user can still sign in. Locking someone out of
+  /// an account they can demonstrably authenticate to is worse than the risk,
+  /// and leaves them no way to fix it.
+  passwordBreachedAt DateTime? @map("password_breached_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

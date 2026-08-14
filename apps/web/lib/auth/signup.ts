@@ -160,6 +160,13 @@ export async function signUp(
             passwordHash,
             phoneE164: phone.e164,
             role: "OWNER",
+            /*
+             * Only stamped when the check actually completed. Left null on a
+             * fail-open, which is what makes the next sign-in retry it — an
+             * optimistic `now()` here would close the gap on paper and leave
+             * the password unchecked forever.
+             */
+            ...(breach.checked ? { hibpCheckedAt: new Date() } : {}),
           },
         });
 

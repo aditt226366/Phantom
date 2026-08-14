@@ -37,6 +37,8 @@ export interface SessionContext {
     username: string;
     phoneE164: string;
     emailVerifiedAt: Date | null;
+    /** Non-null means the password is known-breached and should be rotated. */
+    passwordBreachedAt: Date | null;
     role: string;
   };
   /**
@@ -155,6 +157,7 @@ export async function resolveSessionByToken(
             username: true,
             phoneE164: true,
             emailVerifiedAt: true,
+            passwordBreachedAt: true,
             role: true,
           },
         },

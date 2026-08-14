@@ -38,6 +38,7 @@ const session: SessionContext = {
     username: "ada",
     phoneE164: "+919876543210",
     emailVerifiedAt: null,
+    passwordBreachedAt: null,
     role: "OWNER",
   },
   company: { id: "c1", name: "Analytical Engines", slug: "analytical-engines" },

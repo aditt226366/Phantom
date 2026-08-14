@@ -9,3 +9,14 @@ export * from "./load-env.ts";
 export * from "./queues.ts";
 export * from "./schemas.ts";
 export * from "./types.ts";
+
+/* Authentication primitives. Server-only: these reach for node:crypto, the
+   filesystem and a native Argon2 binding, none of which belong in a bundle
+   shipped to a browser. */
+export * from "./auth-schemas.ts";
+export * from "./denylist.ts";
+export * from "./hibp.ts";
+export * from "./mail.ts";
+export * from "./password.ts";
+export * from "./phone.ts";
+export * from "./tokens.ts";

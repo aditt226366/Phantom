@@ -30,13 +30,32 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@whatsapp-os/core", "@whatsapp-os/db"],
 
   /**
-   * The Postgres driver and BullMQ are Node-native and must not be bundled -
-   * they load native/dynamic modules that a bundler cannot statically trace.
+   * The Postgres driver, BullMQ and Argon2 are Node-native and must not be
+   * bundled - they load native/dynamic modules that a bundler cannot
+   * statically trace. @node-rs/argon2 resolves a platform-specific .node
+   * binary at require time; bundling it produces a build that compiles and
+   * then throws at the first password hash.
    */
-  serverExternalPackages: ["@prisma/adapter-pg", "pg", "bullmq", "ioredis"],
+  serverExternalPackages: [
+    "@prisma/adapter-pg",
+    "pg",
+    "bullmq",
+    "ioredis",
+    "@node-rs/argon2",
+  ],
 
   /** Trace from the monorepo root so standalone output picks up workspace deps. */
   outputFileTracingRoot: path.join(here, "../../"),
+
+  /**
+   * The common-password denylist is read from disk at module load, and file
+   * tracing cannot see through `new URL(..., import.meta.url)` to know it is
+   * needed. Without this the build succeeds and the first signup fails with
+   * ENOENT.
+   */
+  outputFileTracingIncludes: {
+    "/**": ["../../packages/core/src/data/common-passwords.txt"],
+  },
 
   typedRoutes: true,
 };

@@ -5,7 +5,11 @@ import {
   hashToken,
   issueSessionToken,
 } from "@whatsapp-os/core";
-import { resolveCompany, withCompany } from "@whatsapp-os/db";
+import {
+  resolveCompany,
+  withCompany,
+  type CompanyClient,
+} from "@whatsapp-os/db";
 
 /**
  * Session records, as database operations.
@@ -65,21 +69,38 @@ export async function createSessionRecord(
   userId: string,
   meta: SessionMeta = {},
 ): Promise<{ token: string; csrfSecret: string; expiresAt: Date }> {
+  return withCompany(companyId, (db, scopedCompanyId) =>
+    createSessionRow(db, scopedCompanyId, userId, meta),
+  );
+}
+
+/**
+ * Create a session inside a transaction the caller already opened.
+ *
+ * Signup needs this: the company, the owner user, the verification token, the
+ * session and the audit rows all have to commit or none of them. Calling
+ * createSessionRecord there would open a second, independent transaction, and
+ * a failure between the two would leave an account nobody is signed in to.
+ */
+export async function createSessionRow(
+  db: CompanyClient,
+  companyId: string,
+  userId: string,
+  meta: SessionMeta = {},
+): Promise<{ token: string; csrfSecret: string; expiresAt: Date }> {
   const { token, tokenHash, expiresAt } = issueSessionToken();
   const csrfSecret = generateCsrfSecret();
 
-  await withCompany(companyId, async (db, scopedCompanyId) => {
-    await db.session.create({
-      data: {
-        companyId: scopedCompanyId,
-        userId,
-        tokenHash,
-        csrfSecret,
-        expiresAt,
-        ...(meta.ip ? { ipHash: hashIp(meta.ip) } : {}),
-        ...(meta.userAgent ? { userAgent: meta.userAgent.slice(0, 512) } : {}),
-      },
-    });
+  await db.session.create({
+    data: {
+      companyId,
+      userId,
+      tokenHash,
+      csrfSecret,
+      expiresAt,
+      ...(meta.ip ? { ipHash: hashIp(meta.ip) } : {}),
+      ...(meta.userAgent ? { userAgent: meta.userAgent.slice(0, 512) } : {}),
+    },
   });
 
   return { token, csrfSecret, expiresAt };

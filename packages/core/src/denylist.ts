@@ -3,13 +3,24 @@ import { readFileSync } from "node:fs";
 /**
  * The bundled common-password denylist.
  *
- * This is what makes failing open on a HaveIBeenPwned outage defensible. Without
- * it, an HIBP timeout means a signup gets length checking and nothing else, and
- * "password123456" sails through. With it, an outage degrades the breach check
- * from "600 million known-breached passwords" to "the 10,000 that actually get
- * tried" — meaningfully weaker, but not unprotected. Order matters: this runs
- * BEFORE the network call, so the common case never depends on a third party
- * being up.
+ * Runs BEFORE the network call, so the common case never depends on a third
+ * party being up.
+ *
+ * ---------------------------------------------------------------------------
+ * Be honest about how much this covers
+ * ---------------------------------------------------------------------------
+ *
+ * It is tempting to describe this as making a HaveIBeenPwned outage "degraded
+ * rather than unprotected". Measured against the actual policy, it is much
+ * weaker than that: the password minimum is 12 characters, and only 10 of these
+ * 10,000 entries are that long. The length rule already excludes 99.9% of the
+ * list before this function is consulted.
+ *
+ * So the real coverage during an outage is: length, Argon2id, and roughly ten
+ * strings. That is an argument for keeping the check — it costs one Set lookup
+ * and catches the ten — and against relying on it. If failing open ever needs
+ * to be genuinely defensible, the fix is a corpus of *long* breached passwords,
+ * not this file.
  *
  * Source: SecLists, Passwords/Common-Credentials/10k-most-common.txt
  * (github.com/danielmiessler/SecLists, MIT). Refresh by replacing the file;

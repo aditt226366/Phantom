@@ -33,7 +33,11 @@ import { prisma } from "./client.ts";
  * sites in the codebase.
  */
 
-export type ResolveKind = "username" | "session" | "verification";
+export type ResolveKind =
+  | "username"
+  | "email"
+  | "session"
+  | "verification";
 
 export async function resolveCompany(
   kind: ResolveKind,

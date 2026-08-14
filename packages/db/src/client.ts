@@ -82,6 +82,27 @@ export async function assertRuntimeRoleIsUnprivileged(): Promise<void> {
         "DATABASE_URL_APP at app_runtime (`npm run db:roles`).",
     );
   }
+
+  /*
+   * Ownership is a separate hole, and a quieter one. A role can be neither a
+   * superuser nor BYPASSRLS and still be exempt from every policy simply by
+   * owning the tables — which is the normal shape of a migration user on a
+   * managed Postgres. Attribute checks alone would wave that through.
+   */
+  const owned = await getPrismaClient().$queryRaw<Array<{ tablename: string }>>`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tableowner = current_user
+    LIMIT 5
+  `;
+
+  if (owned.length > 0) {
+    throw new Error(
+      `DATABASE_URL_APP connects as "${role.current_user}", which owns ` +
+        `${owned.map((t) => t.tablename).join(", ")}. A table's owner is ` +
+        "exempt from its own row-level security policies unless FORCE is set. " +
+        "Point DATABASE_URL_APP at app_runtime, not the migration role.",
+    );
+  }
 }
 
 type PrismaClientSingleton = ReturnType<typeof createPrismaClient>;

@@ -29,12 +29,19 @@ Only `withCompany`. Importing `prisma` directly inside `app/api/**` is a bug.
 
 ```ts
 import { withCompany } from "@whatsapp-os/db";
-const db = withCompany(session.companyId);
+
+await withCompany(session.companyId, async (db, companyId) => {
+  return db.user.findMany();
+});
 ```
 
-Note the two holes `withCompany` does not plug — `$queryRaw` / `$executeRaw` and
-nested writes are unscoped. Filter by hand there, and let RLS (rule 1) be the
-thing that actually stops a cross-tenant read.
+Never pass a company id that came from the request. `withCompany` sets the
+value RLS trusts, so `withCompany(searchParams.companyId, …)` is a complete
+bypass. It must come from the session, or from a database lookup keyed on an
+opaque token.
+
+Keep HTTP calls and password hashing *outside* the callback — it holds a pooled
+connection and times out after 5s.
 
 ### 3. Cross-tenant access returns 404, never 403
 
@@ -66,24 +73,14 @@ it loads automatically on any UI work.
 
 ## Current state vs. the rules
 
-The scaffold does not yet satisfy rules 1 and 3:
+Rule 1 holds and is enforced by `packages/db/tests/schema-invariants.test.ts`,
+which reads the live catalog: a new table without `company_id`, a composite
+index leading with it, RLS enabled *and* forced, policies for both roles, and
+CRUD-but-not-TRUNCATE grants will fail the suite. Opting a table out means
+naming it in a constant in that file.
 
-- Tenant tables carry `company_id` NOT NULL, but the index on it is still
-  single-column rather than composite. The second column arrives with the
-  tables that need one.
-- No RLS policies exist in `packages/db/prisma/migrations/`. `withCompany` is
-  today an application-layer guard only, and its own docstring lists the three
-  holes it cannot close.
-- There are no route handlers yet beyond `/api/health`, which touches no
-  tenant data.
-
-Bringing the database in line is the rest of Phase 1. Until then, treat the
-rules as binding on everything new.
-
-`withCompany`'s signature is temporary: it becomes
-`withCompany(companyId, async (db) => …)`, a callback running inside an
-interactive transaction that sets `app.company_id` for RLS to read. Don't build
-call sites expecting the current shape to survive.
+Rule 3 has nothing to apply to yet — the only route handler is `/api/health`,
+which touches no tenant data. It becomes live with the first tenant route.
 
 ---
 

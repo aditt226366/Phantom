@@ -3,8 +3,12 @@ export {
   checkDatabase,
   assertRuntimeRoleIsUnprivileged,
 } from "./client.ts";
-export { withCompany, COMPANY_SCOPED_MODELS } from "./with-company.ts";
-export type { CompanyClient } from "./with-company.ts";
+export {
+  withCompany,
+  newCompanyId,
+  COMPANY_SCOPED_MODELS,
+} from "./with-company.ts";
+export type { CompanyClient, WithCompanyOptions } from "./with-company.ts";
 
 /** Model types and the Prisma namespace, re-exported so apps import one package. */
 export { Prisma } from "./generated/prisma/client.ts";

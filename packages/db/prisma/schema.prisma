@@ -50,6 +50,9 @@ model User {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, email])
-  @@index([companyId])
+  /// Composite, leading with companyId, per rule 1 in CLAUDE.md. The second
+  /// column is what a user list is actually ordered by. A single-column index
+  /// on companyId would be redundant with this one's leading column.
+  @@index([companyId, createdAt])
   @@map("users")
 }

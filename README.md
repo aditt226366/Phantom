@@ -184,33 +184,55 @@ ALTER ROLE app_admin   LOGIN PASSWORD '...';
 
 ## Multi-tenancy
 
-`withCompany(companyId)` returns a Prisma client that is incapable of touching
-another company's rows:
+`withCompany` runs a unit of work scoped to exactly one company:
 
 ```ts
 import { withCompany } from "@whatsapp-os/db";
 
-const db = withCompany(session.companyId);
-await db.user.findMany();              // WHERE company_id = $1, always
-await db.user.create({ data: { … } }); // company_id injected
+const users = await withCompany(session.companyId, async (db, companyId) => {
+  await db.user.create({ data: { companyId, email } });
+  return db.user.findMany();          // WHERE company_id = $1, always
+});
 ```
 
-Reads, updates and deletes get `companyId` merged into `where`; creates get it
-merged into `data`.
+It opens a transaction and sets `app.company_id` on that connection, so the RLS
+policies scope **every** statement inside it — including raw SQL, including
+anything the extension never sees. On top of that it still merges `companyId`
+into `where` and `data`, as defence in depth.
 
-**Three limits worth knowing before you rely on it:**
+**Why a callback and not `withCompany(id).user.findMany()`:** because `SET` on a
+pooled connection outlives the query that set it. The next borrower — a
+different request, a different tenant — would inherit the context. The setting
+has to be transaction-local, which requires every statement to run on one
+pinned connection. The callback shape is what makes that expressible; it is not
+a stylistic choice.
 
-1. **Raw queries are not scoped.** `$queryRaw` / `$executeRaw` bypass the model
-   query hook entirely. Filter by `company_id` by hand.
-2. **Nested writes are not scoped.** Only the top-level record gets `companyId`.
-3. **Models must be registered.** Adding a company-scoped model to
-   `schema.prisma` means adding it to `COMPANY_SCOPED_MODELS` in
-   `packages/db/src/with-company.ts`.
+Two things to keep in mind:
 
-This is an application-layer guard. For a hard guarantee, add Postgres
-row-level security underneath it — which is what the rest of Phase 1 does, at
-which point this signature changes to a callback form that opens a transaction
-and sets `app.company_id` for the policies to read.
+1. **Keep slow work outside the callback.** A transaction holds a pooled
+   connection and Prisma times it out after 5s. HTTP calls and password hashing
+   belong before it. The default timeout is left in place so violations fail
+   loudly in development.
+2. **Nesting is a compile error.** `CompanyClient` has no `$transaction`, so a
+   service needing scoped access takes `db: CompanyClient` as a parameter
+   rather than opening its own scope.
+
+### Row-level security
+
+Every tenant table has `ENABLE` **and** `FORCE ROW LEVEL SECURITY`, with a
+policy keyed on `app_current_company()`. That helper exists because
+`current_setting` has two traps: it *raises* when the setting was never set
+(hence `missing_ok`), and it resets to the **empty string**, not NULL, once a
+transaction has set it (hence `NULLIF`). Handled, an unset context is NULL,
+`company_id = NULL` is NULL, and a NULL policy reads as false — reads return
+nothing, writes raise. It fails closed both ways.
+
+`packages/db/tests/rls-isolation.test.ts` is the proof, and every test in it
+bypasses `withCompany` on purpose. `schema-invariants.test.ts` is the one that
+matters longer term: it reads the live catalog and fails if *any* new table
+lacks `company_id`, an index leading with it, RLS, a policy, or the right
+grants. Opting out means adding a name to a constant in that file — a visible
+diff in a security-relevant place.
 
 > **Prisma 7 note:** the datasource URL lives in `packages/db/prisma.config.ts`,
 > not in `schema.prisma`, and the client connects through the `@prisma/adapter-pg`

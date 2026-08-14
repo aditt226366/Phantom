@@ -135,15 +135,15 @@ describe("reads with a company context", () => {
 describe("writes across companies", () => {
   it("updates nothing", async () => {
     const affected = await withCompany(alpha.id, (db) =>
-      db.$executeRaw`UPDATE users SET name = 'pwned' WHERE company_id = ${beta.id}`,
+      db.$executeRaw`UPDATE users SET full_name = 'pwned' WHERE company_id = ${beta.id}`,
     );
 
     expect(affected).toBe(0);
 
     const names = await withCompany(beta.id, (db) =>
-      db.user.findMany({ select: { name: true } }),
+      db.user.findMany({ select: { fullName: true } }),
     );
-    expect(names.every((u) => u.name !== "pwned")).toBe(true);
+    expect(names.every((u) => u.fullName !== "pwned")).toBe(true);
   });
 
   it("deletes nothing", async () => {
@@ -161,14 +161,26 @@ describe("writes across companies", () => {
     /*
      * Reads fail closed silently (zero rows). Writes fail closed loudly, because
      * WITH CHECK raises rather than filtering. Assert on the error, not a count.
+     *
+     * Every NOT NULL column is supplied deliberately. A row that would be
+     * rejected by a constraint anyway proves nothing about RLS — the test would
+     * stay green if every policy on the table were dropped.
      */
     await expect(
       withCompany(
         alpha.id,
         (db) =>
           db.$executeRaw`
-            INSERT INTO users (id, company_id, email, created_at, updated_at)
-            VALUES ('smuggled', ${beta.id}, 'x@beta.test', now(), now())
+            INSERT INTO users (
+              id, company_id, full_name, email, username,
+              password_hash, phone_e164, password_changed_at,
+              created_at, updated_at
+            )
+            VALUES (
+              'smuggled', ${beta.id}, 'Smuggled', 'smuggled@beta.test',
+              'smuggled', '$argon2id$placeholder', '+919876500000', now(),
+              now(), now()
+            )
           `,
       ),
     ).rejects.toThrow(/row-level security/i);
@@ -184,7 +196,14 @@ describe("writes across companies", () => {
     await expect(
       withCompany(alpha.id, (db) =>
         db.user.create({
-          data: { companyId: beta.id, email: "x@beta.test" },
+          data: {
+            companyId: beta.id,
+            fullName: "Smuggled",
+            email: "x@beta.test",
+            username: "smuggled_orm",
+            passwordHash: "$argon2id$placeholder",
+            phoneE164: "+919876500001",
+          },
         }),
       ),
     ).rejects.toThrow(/cannot create a row for company/i);
@@ -193,7 +212,16 @@ describe("writes across companies", () => {
   it("leaves the other company untouched after a rejected write", async () => {
     await withCompany(alpha.id, (db) =>
       db.user
-        .create({ data: { companyId: beta.id, email: "x@beta.test" } })
+        .create({
+          data: {
+            companyId: beta.id,
+            fullName: "Smuggled",
+            email: "x@beta.test",
+            username: "smuggled_untouched",
+            passwordHash: "$argon2id$placeholder",
+            phoneE164: "+919876500002",
+          },
+        })
         .catch(() => undefined),
     );
 

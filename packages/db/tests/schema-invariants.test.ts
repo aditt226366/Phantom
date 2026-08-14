@@ -23,11 +23,28 @@ const SELF_KEYED_TABLES = new Set(["companies"]);
 /**
  * Deliberately global — outside tenancy, with a reason each.
  *
- * Nothing qualifies yet. When the auth schema lands, login_attempts belongs
- * here (it is keyed on a username that may not exist, so there is no company
- * to attribute it to) along with the platform-admin tables.
+ * Adding a name here is how a table opts out of every guarantee below, so it
+ * should be a deliberate, reviewed diff rather than a quiet one.
  */
-const GLOBAL_TABLES = new Set<string>([]);
+const GLOBAL_TABLES = new Set<string>([
+  /*
+   * Keyed on (username, ip), and the username may not exist. An attempt on an
+   * unknown account has no company to attribute it to, and refusing to record
+   * it would make the absence of a lockout row an existence oracle.
+   */
+  "login_attempts",
+  /*
+   * Platform-level, belonging to no company. Separate tables rather than a role
+   * flag on User, so no code path can escalate a tenant session into an admin
+   * one. app_runtime is denied all access — asserted below.
+   */
+  "admin_users",
+  "admin_sessions",
+  "admin_audit_log",
+]);
+
+/** Global tables holding admin credentials. app_runtime gets nothing here. */
+const ADMIN_TABLES = ["admin_users", "admin_sessions", "admin_audit_log"];
 
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
@@ -240,6 +257,50 @@ describe("schema invariants", () => {
          * blank rather than the tenant boundary going away — but still a bug.
          */
         expect(rows.length, `${table}: no app_admin policy`).toBeGreaterThan(0);
+      }
+    });
+
+    it("denies app_runtime everything on the admin tables", async () => {
+      for (const table of ADMIN_TABLES) {
+        const { rows } = await db.query<{ privilege_type: string }>(
+          `SELECT privilege_type FROM information_schema.role_table_grants
+           WHERE grantee = 'app_runtime'
+             AND table_schema = 'public' AND table_name = $1`,
+          [table],
+        );
+
+        /*
+         * No RLS policy scopes a global table, so a stray default grant here
+         * would let an ordinary tenant request read admin_users.password_hash.
+         */
+        expect(
+          rows.map((r) => r.privilege_type),
+          `${table}: app_runtime holds grants on an admin table`,
+        ).toEqual([]);
+      }
+    });
+
+    it("keeps the lookup functions owned by app_resolver", async () => {
+      const { rows } = await db.query<{ proname: string; owner: string }>(
+        `SELECT p.proname, p.proowner::regrole::text AS owner
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public'
+           AND p.proname IN ('app_resolve_company', 'app_available_slug')
+         ORDER BY p.proname`,
+      );
+
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        /*
+         * A SECURITY DEFINER function runs as its owner. Reassigned to
+         * whatsapp_owner — which FORCE RLS gives no visibility to — every
+         * lookup would silently return NULL and sign-in would fail with
+         * nothing in the logs. db-roles.mjs excludes them from its ownership
+         * sweep for exactly this reason.
+         */
+        expect(row.owner, `${row.proname} is owned by ${row.owner}`).toBe(
+          "app_resolver",
+        );
       }
     });
 

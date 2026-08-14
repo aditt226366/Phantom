@@ -51,17 +51,35 @@ const ROLES = [
   {
     name: "whatsapp_owner",
     password: process.env["OWNER_DB_PASSWORD"] ?? "whatsapp_owner",
-    attributes: "NOSUPERUSER NOBYPASSRLS CREATEDB",
+    attributes: "NOSUPERUSER NOBYPASSRLS CREATEDB LOGIN",
   },
   {
     name: "app_runtime",
     password: process.env["APP_DB_PASSWORD"] ?? "app_runtime",
-    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB",
+    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB LOGIN",
   },
   {
     name: "app_admin",
     password: process.env["ADMIN_DB_PASSWORD"] ?? "app_admin",
-    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB",
+    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB LOGIN",
+  },
+  {
+    /*
+     * Owns the SECURITY DEFINER lookup functions and nothing else.
+     *
+     * Sign-in is username + password with no company selector, so the username
+     * lookup, the session-cookie lookup and the slug-collision check all have
+     * to happen before any company context exists. Rather than make users or
+     * sessions globally readable to solve that, this role holds SELECT-only
+     * policies on exactly those tables, and app_runtime is granted EXECUTE on
+     * functions that return a company id and nothing else.
+     *
+     * NOLOGIN: nothing can ever connect as it. Its privileges are reachable
+     * only by calling one of those functions.
+     */
+    name: "app_resolver",
+    password: null,
+    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB NOLOGIN",
   },
 ];
 
@@ -103,12 +121,27 @@ try {
     }
 
     /* Re-applied every run: attributes are as load-bearing as the password. */
+    const credential = role.password
+      ? ` PASSWORD ${quoteLiteral(role.password)}`
+      : "";
     await cluster.query(
-      `ALTER ROLE ${quoteIdent(role.name)} ${role.attributes} LOGIN ` +
-        `PASSWORD ${quoteLiteral(role.password)}`,
+      `ALTER ROLE ${quoteIdent(role.name)} ${role.attributes}${credential}`,
     );
-    console.log(`${role.name}: ${role.attributes} LOGIN.`);
+    console.log(`${role.name}: ${role.attributes}.`);
   }
+
+  /*
+   * whatsapp_owner must be a member of app_resolver to create functions owned
+   * by it. WITH INHERIT FALSE is the load-bearing part: without it, the owner
+   * would inherit app_resolver's SELECT policies and the "owner sees nothing"
+   * test — the only direct proof FORCE ROW LEVEL SECURITY works — would start
+   * passing for the wrong reason. Membership still permits SET ROLE, which is
+   * all the migration needs. (Requires PostgreSQL 16+.)
+   */
+  await cluster.query(
+    "GRANT app_resolver TO whatsapp_owner WITH INHERIT FALSE",
+  );
+  console.log("app_resolver: granted to whatsapp_owner WITH INHERIT FALSE.");
 } finally {
   await cluster.end();
 }
@@ -140,9 +173,15 @@ for (const database of managedDatabaseNames()) {
   const db = await connect(url.toString());
 
   try {
+    /*
+     * app_resolver needs CREATE, not just USAGE: Postgres requires the *new*
+     * owner of an object to hold CREATE on the schema containing it, so
+     * `ALTER FUNCTION ... OWNER TO app_resolver` fails without it.
+     */
     await db.query(
-      `GRANT USAGE, CREATE ON SCHEMA public TO ${quoteIdent("whatsapp_owner")}`,
+      `GRANT USAGE, CREATE ON SCHEMA public TO whatsapp_owner, app_resolver`,
     );
+    await db.query("GRANT USAGE ON SCHEMA public TO app_runtime, app_admin");
 
     /*
      * Transfer ownership object by object, in schema public only.
@@ -170,11 +209,23 @@ for (const database of managedDatabaseNames()) {
           EXECUTE format('ALTER SEQUENCE public.%I OWNER TO whatsapp_owner', obj.name);
         END LOOP;
 
+        /*
+         * app_resolver-owned functions are excluded, and that exclusion is
+         * load-bearing. The SECURITY DEFINER lookup functions run as their
+         * owner; reassigning them to whatsapp_owner would leave them running
+         * as a role that FORCE ROW LEVEL SECURITY gives no visibility to, so
+         * every username and session lookup would start returning NULL and
+         * sign-in would fail with nothing in the logs to explain it.
+         */
         FOR obj IN
           SELECT p.oid::regprocedure AS name
           FROM pg_proc p
           JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = 'public' AND p.proowner <> 'whatsapp_owner'::regrole
+          WHERE n.nspname = 'public'
+            AND p.proowner NOT IN (
+              'whatsapp_owner'::regrole,
+              'app_resolver'::regrole
+            )
         LOOP
           EXECUTE format('ALTER FUNCTION %s OWNER TO whatsapp_owner', obj.name);
         END LOOP;

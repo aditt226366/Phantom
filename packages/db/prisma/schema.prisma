@@ -1,15 +1,16 @@
 // whatsapp-os database schema.
 //
-// Scope note: this is foundation only - a company, and users belonging to a
-// company. No product models yet. What matters here is the multi-tenant shape:
-// every tenant-owned table carries a `company_id` column, an index leading with
-// it, and a compound unique that includes it. The withCompany client extension
-// in src/with-company.ts relies on that convention.
+// Two kinds of table live here, and the difference is a security boundary:
+//
+//   Tenant-owned  company_id NOT NULL, a composite index leading with it, and
+//                 RLS policies. Everything a company can see.
+//   Global        deliberately outside tenancy, each for a stated reason.
+//                 Listed in GLOBAL_TABLES in tests/schema-invariants.test.ts,
+//                 which fails if a table is neither one nor the other.
 //
 // Column naming: snake_case throughout, via @map. Prisma quotes unmapped
 // camelCase identifiers ("createdAt"), which means every hand-written migration
-// and RLS policy has to quote them too. The tenancy rules in CLAUDE.md are
-// written in snake_case (`company_id`), so the whole schema follows.
+// and RLS policy has to quote them too.
 
 generator client {
   provider = "prisma-client"
@@ -20,39 +21,256 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserRole {
+  OWNER
+  MEMBER
+
+  @@map("user_role")
+}
+
+enum AuditAction {
+  SIGNUP
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  PASSWORD_CHANGED
+  EMAIL_VERIFIED
+  /// The breach check could not be reached and the password was accepted
+  /// without it. Recorded so the gap is visible rather than silent.
+  HIBP_UNAVAILABLE
+
+  @@map("audit_action")
+}
+
 /// A customer workspace. The root of every tenant-scoped query.
 /// Not itself company-scoped - see COMPANY_SCOPED_MODELS in with-company.ts.
 model Company {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
+
   /// URL-safe handle, unique across the installation.
-  slug      String   @unique
+  ///
+  /// Derived from the name at signup, never typed by the user. Two companies
+  /// may legitimately share a name, so a collision appends a short suffix
+  /// rather than rejecting the signup - "that company name is taken" would be
+  /// a lie about someone else's data. See app_available_slug() and
+  /// src/company.ts.
+  slug String @unique
+
   name      String
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users User[]
+  users                  User[]
+  sessions               Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  auditLogs              AuditLog[]
 
   @@map("companies")
 }
 
 /// A person inside a company.
-///
-/// Email is unique *per company*, not globally: the same human may belong to
-/// two workspaces. That is why the unique constraint is compound.
 model User {
-  id        String   @id @default(cuid())
-  companyId String   @map("company_id")
-  email     String
-  name      String?
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  fullName String @map("full_name")
+
+  /// Globally unique, not per-company.
+  ///
+  /// Password reset is keyed on the email address with no company context, so
+  /// two companies holding the same address makes the lookup ambiguous - and
+  /// there is no clean migration out of that once rows exist.
+  email String @unique
+
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  /// Globally unique, and the reason app_resolve_company() exists: sign-in is
+  /// username + password with no company selector, so the username has to
+  /// resolve to exactly one account before any company context is available.
+  /// Stored lowercase; the ^[a-z0-9_.]{3,32}$ rule makes uppercase invalid
+  /// input rather than a different-case duplicate, so no citext is needed.
+  username String @unique
+
+  passwordHash      String   @map("password_hash")
+  phoneE164         String   @map("phone_e164")
+  role              UserRole @default(MEMBER)
+  passwordChangedAt DateTime @default(now()) @map("password_changed_at")
+  lastLoginAt       DateTime? @map("last_login_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  auditLogs               AuditLog[]
 
-  @@unique([companyId, email])
-  /// Composite, leading with companyId, per rule 1 in CLAUDE.md. The second
-  /// column is what a user list is actually ordered by. A single-column index
-  /// on companyId would be redundant with this one's leading column.
   @@index([companyId, createdAt])
   @@map("users")
+}
+
+/// A signed-in browser. Server-side, so revocation is immediate.
+model Session {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  userId    String @map("user_id")
+
+  /// SHA-256 of the cookie value. The raw token is never stored, so a database
+  /// leak does not hand over live sessions.
+  tokenHash String @unique @map("token_hash")
+
+  /// Per-session CSRF secret. Binding the token to the session makes it immune
+  /// to a cookie injected from a sibling subdomain.
+  csrfSecret String @map("csrf_secret")
+
+  /// Hashed, not raw: an IP is personal data and this is only ever compared.
+  ipHash    String?  @map("ip_hash")
+  userAgent String?  @map("user_agent")
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId])
+  /// For the expiry sweeper, which runs without a company context.
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// A single-use email verification link.
+model EmailVerificationToken {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  userId    String @map("user_id")
+
+  tokenHash String @unique @map("token_hash")
+
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId])
+  @@map("email_verification_tokens")
+}
+
+/// Security-relevant events, per company.
+model AuditLog {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Nullable: the actor may have been deleted, and some events have no actor.
+  userId String? @map("user_id")
+
+  action    AuditAction
+  ip        String?
+  userAgent String?     @map("user_agent")
+  metadata  Json?
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+/// ---------------------------------------------------------------------------
+/// Global tables below this line. Each is outside tenancy for a stated reason.
+/// ---------------------------------------------------------------------------
+
+/// Failed sign-in counter, for lockout.
+///
+/// GLOBAL because the username may not exist. A sign-in attempt for
+/// "notauser" has no company to attribute it to, and refusing to record it
+/// would make the absence of a lockout row an oracle for which usernames are
+/// real.
+///
+/// Two row shapes share this table:
+///   (username, <ip>)  5 failures  -> 15 min, exponential after
+///   (username, '*')   25 failures -> 1 hour
+/// The second exists because per-IP lockout is trivially defeated by the IP
+/// rotation that real credential stuffing uses.
+model LoginAttempt {
+  id String @id @default(cuid())
+
+  username String
+  /// A literal IP, or '*' for the per-username aggregate row.
+  ip       String
+
+  failureCount  Int       @default(0) @map("failure_count")
+  /// How many times this pair has been locked out. Drives exponential backoff,
+  /// and is NOT reset by a successful sign-in - only failureCount is.
+  lockoutCount  Int       @default(0) @map("lockout_count")
+  lockedUntil   DateTime? @map("locked_until")
+  lastFailureAt DateTime  @default(now()) @map("last_failure_at")
+
+  @@unique([username, ip])
+  @@index([lockedUntil])
+  @@map("login_attempts")
+}
+
+/// Platform operator. GLOBAL by design: belongs to no company.
+///
+/// Seeded from ADMIN_USERNAME / ADMIN_PASSWORD_HASH. Deliberately a separate
+/// table rather than a role flag on User, so there is no code path where a
+/// tenant session can be escalated into an admin one.
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  sessions AdminSession[]
+  auditLogs AdminAuditLog[]
+
+  @@map("admin_users")
+}
+
+/// Admin session. Separate table AND separate cookie name from Session, so a
+/// tenant cookie can never be presented as an admin one.
+model AdminSession {
+  id          String @id @default(cuid())
+  adminUserId String @map("admin_user_id")
+
+  tokenHash  String @unique @map("token_hash")
+  csrfSecret String @map("csrf_secret")
+
+  ipHash     String?   @map("ip_hash")
+  userAgent  String?   @map("user_agent")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+/// Every admin action, including reads. The admin panel can see across every
+/// company, so what it looked at is itself worth recording.
+model AdminAuditLog {
+  id          String  @id @default(cuid())
+  adminUserId String? @map("admin_user_id")
+
+  action    String
+  ip        String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@map("admin_audit_log")
 }

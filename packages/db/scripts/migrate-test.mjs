@@ -45,6 +45,26 @@ async function ensureDatabase() {
 await ensureDatabase();
 
 /*
+ * Provision roles and per-database grants before migrating.
+ *
+ * Role identity is cluster-wide, but schema privileges are not: a database
+ * created a moment ago has none of them, and the authentication migration
+ * needs app_resolver to hold CREATE on schema public before it can transfer
+ * ownership of the SECURITY DEFINER functions. Running db-roles here is what
+ * makes `npm test` work against a database that did not exist when the command
+ * started.
+ */
+const roles = spawnSync(
+  process.execPath,
+  [path.join(packageRoot, "scripts", "db-roles.mjs")],
+  { stdio: "inherit" },
+);
+
+if (roles.status !== 0) {
+  process.exit(roles.status ?? 1);
+}
+
+/*
  * Resolve the Prisma CLI entry point and run it on the current Node binary,
  * rather than spawning `npx` through a shell. `shell: true` concatenates
  * arguments without escaping them (Node DEP0190) and drags in a shell

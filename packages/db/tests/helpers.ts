@@ -1,6 +1,6 @@
 import pg from "pg";
 import { testAppDatabaseUrl, testDatabaseUrl } from "../scripts/db-urls.mjs";
-import { newCompanyId, withCompany } from "../src/index.ts";
+import { createCompany, newCompanyId, withCompany } from "../src/index.ts";
 
 /**
  * Test fixtures.
@@ -19,17 +19,30 @@ export interface SeededCompany {
   id: string;
   slug: string;
   userIds: string[];
+  usernames: string[];
 }
 
-/** Wipe every table. Runs as the owner; TRUNCATE bypasses RLS by design. */
+/**
+ * Wipe every table. Runs as the owner; TRUNCATE bypasses RLS by design.
+ *
+ * Discovered rather than listed: a hardcoded list silently stops covering the
+ * next table someone adds, and the residue shows up as a confusing failure in
+ * an unrelated test.
+ */
 export async function truncateAll(): Promise<void> {
   const client = new pg.Client({ connectionString: testDatabaseUrl() });
   await client.connect();
 
   try {
-    await client.query(
-      `TRUNCATE TABLE "users", "companies" RESTART IDENTITY CASCADE`,
+    const { rows } = await client.query<{ tablename: string }>(
+      `SELECT tablename FROM pg_tables
+       WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`,
     );
+
+    if (rows.length === 0) return;
+
+    const tables = rows.map((r) => `"${r.tablename}"`).join(", ");
+    await client.query(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
   } finally {
     await client.end();
   }
@@ -59,31 +72,42 @@ export function ownerClient(): pg.Pool {
   return new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
 }
 
-/** Create a company and `userCount` users inside it, through the real path. */
+/**
+ * Create a company and `userCount` users inside it, through the real path.
+ *
+ * `label` seeds the company name and the users' unique fields; the slug is
+ * allocated by the same code signup uses, so it is not necessarily the label.
+ */
 export async function seedCompany(
-  slug: string,
+  label: string,
   userCount = 2,
 ): Promise<SeededCompany> {
   const id = newCompanyId();
+  const usernames: string[] = [];
 
-  const userIds = await withCompany(id, async (db, companyId) => {
-    await db.company.create({
-      data: { id: companyId, slug, name: `${slug} Ltd` },
-    });
+  const { slug, userIds } = await withCompany(id, async (db, companyId) => {
+    const company = await createCompany(db, companyId, `${label} Ltd`);
 
     const created: string[] = [];
     for (let index = 0; index < userCount; index++) {
+      const username = `${label}_user${index}`;
       const user = await db.user.create({
         data: {
           companyId,
-          email: `user${index}@${slug}.test`,
-          name: `${slug} ${index}`,
+          fullName: `${label} ${index}`,
+          email: `user${index}@${label}.test`,
+          username,
+          passwordHash: "$argon2id$placeholder",
+          phoneE164: `+9198765432${index}0`,
+          role: index === 0 ? "OWNER" : "MEMBER",
         },
       });
       created.push(user.id);
+      usernames.push(username);
     }
-    return created;
+
+    return { slug: company.slug, userIds: created };
   });
 
-  return { id, slug, userIds };
+  return { id, slug, userIds, usernames };
 }

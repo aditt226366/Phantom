@@ -21,7 +21,12 @@ Every tenant-owned table has:
 - a Postgres row-level security policy, defined in a migration.
 
 A model without all three is not finished, no matter what the application layer
-does on top of it.
+does on top of it. A table opts out only by being named in `GLOBAL_TABLES` in
+`packages/db/tests/schema-invariants.test.ts`, with a comment saying why —
+which makes opting out a visible diff in a security-relevant file.
+
+A policy is not a privilege: RLS narrows what a role sees *within* rows a
+`GRANT` already permits. Both are needed, and both are asserted.
 
 ### 2. Route handlers never touch the raw Prisma client
 
@@ -37,8 +42,15 @@ await withCompany(session.companyId, async (db, companyId) => {
 
 Never pass a company id that came from the request. `withCompany` sets the
 value RLS trusts, so `withCompany(searchParams.companyId, …)` is a complete
-bypass. It must come from the session, or from a database lookup keyed on an
-opaque token.
+bypass. Company ids may originate in exactly two places: the session row, and
+`resolveCompany()`.
+
+`resolveCompany(kind, key)` is the pre-authentication lookup — sign-in is
+username-only, so the username and session-cookie lookups happen before any
+company context exists. It calls a `SECURITY DEFINER` function owned by
+`app_resolver` and returns a company id and nothing else, never a row.
+`packages/db/src/resolve-company.ts` and `company.ts` are the only sanctioned
+raw-SQL sites in the codebase.
 
 Keep HTTP calls and password hashing *outside* the callback — it holds a pooled
 connection and times out after 5s.

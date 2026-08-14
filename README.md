@@ -146,35 +146,64 @@ swap the display face to **Cormorant Garamond**, which does ship one:
 
 ## Database roles
 
-There are three connection strings, and which role each uses is load-bearing:
+Four connection strings, and which role each uses is load-bearing:
 
 | Variable | Role | Used by |
 | --- | --- | --- |
-| `DATABASE_URL` | owner | migrations and the Prisma CLI, nothing else |
+| `POSTGRES_SUPERUSER_URL` | superuser | `npm run db:roles`, nothing else |
+| `DATABASE_URL` | `whatsapp_owner` | migrations and the Prisma CLI |
 | `DATABASE_URL_APP` | `app_runtime` | every application query |
 | `DATABASE_URL_ADMIN` | `app_admin` | the `/admin` route group only |
 
 **Postgres exempts a table's owner from that table's row-level security
-policies.** An application connected as the owner would pass straight through
-every policy, and the isolation tests would go green while enforcing nothing.
-So the app has its own non-owner role, and `packages/db/src/client.ts`
-deliberately does *not* fall back to `DATABASE_URL` when `DATABASE_URL_APP` is
-missing — it throws, and explains why.
+policies** unless `FORCE` is set, and exempts **superusers unconditionally**,
+`FORCE` or not. Both exemptions matter here:
+
+- The application has its own non-owner role, and
+  `packages/db/src/client.ts` deliberately does *not* fall back to
+  `DATABASE_URL` when `DATABASE_URL_APP` is missing — it throws and explains
+  why.
+- The owner is a plain `NOSUPERUSER NOBYPASSRLS` role rather than the container
+  superuser. That is what turns "the owner sees nothing without a company
+  context" into something the suite can check: against a superuser owner the
+  assertion would pass for the wrong reason and every `FORCE` clause would be
+  decoration. `whatsapp_owner` needs `CREATEDB` because `prisma migrate dev`
+  provisions a shadow database and the test harness creates `whatsapp_os_test`.
+
+`app_admin` reads across companies through an explicit per-table policy, **not**
+`BYPASSRLS`. That attribute requires a real superuser to grant, which RDS,
+Supabase and Neon do not provide, so the role would simply be uncreatable in
+production. Forgetting an admin policy on a new table is a fail-closed bug — the
+panel goes blank rather than the tenant boundary going away.
+
+> **Default privileges are keyed to the role that CREATES a table**, not to the
+> schema. When ownership moved to `whatsapp_owner`, the old entries stopped
+> applying and new tables would have been created with no grants at all —
+> `permission denied` on a table that looks perfectly correct. The
+> `owner_default_privileges` migration re-points them, and the grant assertions
+> in `schema-invariants.test.ts` are what would catch it happening again.
 
 `assertRuntimeRoleIsUnprivileged()` is one query that refuses to proceed if the
 runtime connection turns out to be a superuser or `BYPASSRLS`. It costs
 nothing and it makes the single worst misconfiguration in this system
 impossible to ship quietly.
 
-Role *identity* is created by a migration, with no password, so it is committed
-and works in production. The *credential* comes from `npm run db:roles`, which
-refuses to run with `NODE_ENV=production` — set those passwords from your
-secrets manager instead:
+`npm run db:roles` provisions all three roles and transfers ownership of every
+object in `public` to `whatsapp_owner`. It is idempotent, safe against a
+database that already has data, and the only thing in the repo that uses the
+superuser credential. It refuses to run with `NODE_ENV=production` — create the
+roles there from your secrets manager with the same attributes:
 
 ```sql
-ALTER ROLE app_runtime LOGIN PASSWORD '...';
-ALTER ROLE app_admin   LOGIN PASSWORD '...';
+CREATE ROLE whatsapp_owner NOSUPERUSER NOBYPASSRLS CREATEDB LOGIN PASSWORD '...';
+CREATE ROLE app_runtime    NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD '...';
+CREATE ROLE app_admin      NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD '...';
 ```
+
+It deliberately transfers ownership object by object rather than with
+`REASSIGN OWNED BY`: the container's `POSTGRES_USER` is this cluster's
+*bootstrap* superuser, so it also owns the system catalogs, the template
+databases and `postgres` itself.
 
 > **`prisma db push` is gone on purpose.** It writes the schema directly and
 > skips migration SQL, which is where the roles, grants and RLS policies live.

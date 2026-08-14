@@ -1,69 +1,73 @@
 import pg from "pg";
-import { maintenanceDatabaseUrl } from "./db-urls.mjs";
+import { managedDatabaseNames, superuserDatabaseUrl } from "./db-urls.mjs";
 
 /**
- * Grant LOGIN and a password to the application roles.
- *
- * The roles themselves are created by a migration, without a password, so the
- * committed SQL carries no secret. This script supplies the credential half.
- * It is idempotent and safe to re-run.
+ * Provision the database roles. Idempotent; safe to re-run at any time.
  *
  *     npm run db:roles
  *
- * In production, do not run this. Set the passwords from your secrets manager:
+ * This is the one place in the codebase that connects as the cluster
+ * superuser, because creating roles and transferring table ownership are the
+ * only operations that genuinely require it. Everything else — migrations
+ * included — runs as whatsapp_owner.
  *
- *     ALTER ROLE app_runtime LOGIN PASSWORD '...';
- *     ALTER ROLE app_admin   LOGIN PASSWORD '...';
+ * ---------------------------------------------------------------------------
+ * Why three roles
+ * ---------------------------------------------------------------------------
  *
- * which is why this refuses to run with NODE_ENV=production.
+ *   whatsapp_owner  owns the tables, runs migrations.  NOSUPERUSER NOBYPASSRLS
+ *   app_runtime     every application query.           owns nothing
+ *   app_admin       the platform admin panel.          owns nothing
+ *
+ * The container superuser used to own the tables, and that quietly defeated
+ * the point of FORCE ROW LEVEL SECURITY: superusers bypass RLS unconditionally,
+ * so the FORCE clause could never be observed to do anything locally. With a
+ * plain owner role, "the owner sees nothing without a company context" becomes
+ * a testable claim — see the owner-connection test in rls-isolation.test.ts.
+ *
+ * whatsapp_owner needs CREATEDB for two real reasons: `prisma migrate dev`
+ * provisions a shadow database, and migrate-test.mjs creates whatsapp_os_test.
+ *
+ * ---------------------------------------------------------------------------
+ * Production
+ * ---------------------------------------------------------------------------
+ *
+ * Do not run this. Create the roles once from your secrets manager, with the
+ * same attributes, and never hand the application DATABASE_URL. Note that
+ * app_admin is deliberately not BYPASSRLS: that attribute requires a real
+ * superuser to grant, which RDS, Supabase and Neon do not provide, so the role
+ * would simply be uncreatable. It gets an explicit per-table policy instead.
  */
 
 if (process.env["NODE_ENV"] === "production") {
   console.error(
-    "Refusing to run with NODE_ENV=production.\n" +
-      "Set the role passwords from your secrets manager instead:\n" +
-      "  ALTER ROLE app_runtime LOGIN PASSWORD '...';\n" +
-      "  ALTER ROLE app_admin   LOGIN PASSWORD '...';",
+    "Refusing to run with NODE_ENV=production. Provision roles from your " +
+      "secrets manager instead; see the header of this file.",
   );
   process.exit(1);
 }
 
 const ROLES = [
-  { name: "app_runtime", password: process.env["APP_DB_PASSWORD"] ?? "app_runtime" },
-  { name: "app_admin", password: process.env["ADMIN_DB_PASSWORD"] ?? "app_admin" },
+  {
+    name: "whatsapp_owner",
+    password: process.env["OWNER_DB_PASSWORD"] ?? "whatsapp_owner",
+    attributes: "NOSUPERUSER NOBYPASSRLS CREATEDB",
+  },
+  {
+    name: "app_runtime",
+    password: process.env["APP_DB_PASSWORD"] ?? "app_runtime",
+    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB",
+  },
+  {
+    name: "app_admin",
+    password: process.env["ADMIN_DB_PASSWORD"] ?? "app_admin",
+    attributes: "NOSUPERUSER NOBYPASSRLS NOCREATEDB",
+  },
 ];
-
-const client = new pg.Client({ connectionString: maintenanceDatabaseUrl() });
-await client.connect();
-
-try {
-  for (const role of ROLES) {
-    const { rowCount } = await client.query(
-      "SELECT 1 FROM pg_roles WHERE rolname = $1",
-      [role.name],
-    );
-
-    if (rowCount === 0) {
-      // Roles are cluster-wide, so this happens only when db:roles runs before
-      // any migration has been applied. Create it here; the migration's
-      // IF NOT EXISTS will then skip.
-      await client.query(`CREATE ROLE ${quoteIdent(role.name)} NOLOGIN`);
-      console.log(`Created role ${role.name}.`);
-    }
-
-    await client.query(
-      `ALTER ROLE ${quoteIdent(role.name)} LOGIN PASSWORD ${quoteLiteral(role.password)}`,
-    );
-    console.log(`${role.name}: LOGIN granted.`);
-  }
-} finally {
-  await client.end();
-}
 
 /**
  * ALTER ROLE accepts no bind parameters for identifiers or passwords, so both
- * are quoted by hand. Doubling the delimiter is exactly what Postgres'
- * quote_ident / quote_literal do.
+ * are quoted by hand — exactly what quote_ident / quote_literal do.
  */
 function quoteIdent(value) {
   return `"${value.replaceAll('"', '""')}"`;
@@ -71,4 +75,142 @@ function quoteIdent(value) {
 
 function quoteLiteral(value) {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function connect(connectionString) {
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  return client;
+}
+
+/* ------------------------------------------------------------------ */
+/* 1. Roles (cluster-wide, so this happens once)                       */
+/* ------------------------------------------------------------------ */
+
+const superuserUrl = superuserDatabaseUrl();
+const cluster = await connect(superuserUrl);
+
+try {
+  for (const role of ROLES) {
+    const { rowCount } = await cluster.query(
+      "SELECT 1 FROM pg_roles WHERE rolname = $1",
+      [role.name],
+    );
+
+    if (rowCount === 0) {
+      await cluster.query(`CREATE ROLE ${quoteIdent(role.name)}`);
+      console.log(`Created role ${role.name}.`);
+    }
+
+    /* Re-applied every run: attributes are as load-bearing as the password. */
+    await cluster.query(
+      `ALTER ROLE ${quoteIdent(role.name)} ${role.attributes} LOGIN ` +
+        `PASSWORD ${quoteLiteral(role.password)}`,
+    );
+    console.log(`${role.name}: ${role.attributes} LOGIN.`);
+  }
+} finally {
+  await cluster.end();
+}
+
+/* ------------------------------------------------------------------ */
+/* 2. Per-database ownership and privileges                            */
+/* ------------------------------------------------------------------ */
+
+for (const database of managedDatabaseNames()) {
+  const exists = await connect(superuserUrl);
+  let present;
+  try {
+    const { rowCount } = await exists.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [database],
+    );
+    present = rowCount > 0;
+  } finally {
+    await exists.end();
+  }
+
+  if (!present) {
+    console.log(`${database}: does not exist yet, skipping.`);
+    continue;
+  }
+
+  const url = new URL(superuserUrl);
+  url.pathname = `/${database}`;
+  const db = await connect(url.toString());
+
+  try {
+    await db.query(
+      `GRANT USAGE, CREATE ON SCHEMA public TO ${quoteIdent("whatsapp_owner")}`,
+    );
+
+    /*
+     * Transfer ownership object by object, in schema public only.
+     *
+     * REASSIGN OWNED BY would be shorter and is the wrong tool here: the
+     * container's POSTGRES_USER is this cluster's *bootstrap* superuser, so it
+     * also owns the system catalogs, the template databases and the postgres
+     * database itself. Reassigning all of that is not a thing to do.
+     */
+    const { rows: moved } = await db.query(`
+      DO $$
+      DECLARE obj record;
+      BEGIN
+        FOR obj IN
+          SELECT tablename AS name FROM pg_tables
+          WHERE schemaname = 'public' AND tableowner <> 'whatsapp_owner'
+        LOOP
+          EXECUTE format('ALTER TABLE public.%I OWNER TO whatsapp_owner', obj.name);
+        END LOOP;
+
+        FOR obj IN
+          SELECT sequencename AS name FROM pg_sequences
+          WHERE schemaname = 'public' AND sequenceowner <> 'whatsapp_owner'
+        LOOP
+          EXECUTE format('ALTER SEQUENCE public.%I OWNER TO whatsapp_owner', obj.name);
+        END LOOP;
+
+        FOR obj IN
+          SELECT p.oid::regprocedure AS name
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proowner <> 'whatsapp_owner'::regrole
+        LOOP
+          EXECUTE format('ALTER FUNCTION %s OWNER TO whatsapp_owner', obj.name);
+        END LOOP;
+      END $$;
+
+      SELECT count(*)::int AS remaining FROM pg_tables
+      WHERE schemaname = 'public' AND tableowner <> 'whatsapp_owner';
+    `);
+
+    /*
+     * Drop the stale default privileges bound to the previous creating role.
+     * ALTER DEFAULT PRIVILEGES is keyed to whoever CREATES the object, so the
+     * entries left over from when the superuser ran migrations now describe a
+     * situation that can no longer occur. Removing them keeps pg_default_acl
+     * honest about what actually happens. Superuser-only, hence here rather
+     * than in a migration; the replacement entries are created by the
+     * migration, running as whatsapp_owner.
+     */
+    const superuserName = new URL(superuserUrl).username;
+    if (superuserName && superuserName !== "whatsapp_owner") {
+      await db.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdent(superuserName)} IN SCHEMA public
+           REVOKE ALL ON TABLES FROM app_runtime, app_admin`,
+      );
+      await db.query(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdent(superuserName)} IN SCHEMA public
+           REVOKE ALL ON SEQUENCES FROM app_runtime, app_admin`,
+      );
+    }
+
+    const remaining = moved?.[0]?.remaining ?? 0;
+    console.log(
+      `${database}: public objects owned by whatsapp_owner ` +
+        `(${remaining} still not owned).`,
+    );
+  } finally {
+    await db.end();
+  }
 }

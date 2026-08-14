@@ -62,6 +62,63 @@ function protectedTables(): string[] {
   return [...tenantTables, ...SELF_KEYED_TABLES];
 }
 
+describe("the owning role", () => {
+  /**
+   * FORCE ROW LEVEL SECURITY only constrains the owner. If the owner is a
+   * superuser it is exempt regardless, and every FORCE clause in every
+   * migration silently becomes decoration. This is the invariant that keeps
+   * that from happening quietly — including for tables added later, which is
+   * the case ownership drift actually shows up in.
+   */
+  it("is not a superuser and does not bypass RLS", async () => {
+    const { rows } = await db.query<{
+      rolname: string;
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+    }>(
+      `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+       WHERE rolname = 'whatsapp_owner'`,
+    );
+
+    expect(rows, "whatsapp_owner does not exist — run npm run db:roles").toHaveLength(
+      1,
+    );
+    expect(rows[0]?.rolsuper, "whatsapp_owner is a superuser").toBe(false);
+    expect(rows[0]?.rolbypassrls, "whatsapp_owner has BYPASSRLS").toBe(false);
+  });
+
+  it("owns every table in public", async () => {
+    const { rows } = await db.query<{ tablename: string; tableowner: string }>(
+      `SELECT tablename, tableowner FROM pg_tables
+       WHERE schemaname = 'public' AND tableowner <> 'whatsapp_owner'`,
+    );
+
+    /*
+     * A table owned by anything else is exempt from FORCE in a way nothing
+     * else in this suite would notice.
+     */
+    expect(
+      rows.map((r) => `${r.tablename} (owned by ${r.tableowner})`),
+      "tables not owned by whatsapp_owner — run npm run db:roles",
+    ).toEqual([]);
+  });
+
+  it("has no role holding BYPASSRLS", async () => {
+    const { rows } = await db.query<{ rolname: string }>(
+      `SELECT rolname FROM pg_roles
+       WHERE rolbypassrls AND rolname IN ('whatsapp_owner', 'app_runtime', 'app_admin')`,
+    );
+
+    /*
+     * app_admin reads across companies through an explicit per-table policy,
+     * not BYPASSRLS. That is not a stylistic choice: CREATE ROLE ... BYPASSRLS
+     * requires a real superuser, which RDS, Supabase and Neon do not provide,
+     * so the role would be uncreatable in production.
+     */
+    expect(rows.map((r) => r.rolname)).toEqual([]);
+  });
+});
+
 describe("schema invariants", () => {
   it("found tables to check", () => {
     /*

@@ -8,3 +8,9 @@ export declare function testAppDatabaseUrl(): string;
 
 /** A database we can always connect to in order to CREATE another one. */
 export declare function maintenanceDatabaseUrl(): string;
+
+/** The cluster superuser. Used by db-roles.mjs and nothing else. */
+export declare function superuserDatabaseUrl(): string;
+
+/** Databases db-roles.mjs should fix up ownership in, when they exist. */
+export declare function managedDatabaseNames(): string[];

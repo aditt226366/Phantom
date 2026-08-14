@@ -2,6 +2,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, withCompany } from "../src/index.ts";
 import {
+  ownerClient,
   rawRuntimeClient,
   seedCompany,
   truncateAll,
@@ -23,15 +24,18 @@ import {
  */
 
 let raw: pg.Pool;
+let owner: pg.Pool;
 let alpha: SeededCompany;
 let beta: SeededCompany;
 
 beforeAll(() => {
   raw = rawRuntimeClient();
+  owner = ownerClient();
 });
 
 afterAll(async () => {
   await raw.end();
+  await owner.end();
 });
 
 beforeEach(async () => {
@@ -209,6 +213,76 @@ describe("writes across companies", () => {
         }),
       ),
     ).rejects.toThrow(/row-level security/i);
+  });
+});
+
+describe("the table owner", () => {
+  /** Every table whose owner must still be subject to its own policies. */
+  const TENANT_TABLES = ["users", "companies"] as const;
+
+  it("is not a superuser and does not bypass RLS", async () => {
+    /*
+     * This is what makes the next test mean anything. A superuser ignores RLS
+     * unconditionally — FORCE or not — so if the owner were the container's
+     * postgres superuser, "the owner sees nothing" would be untestable and the
+     * FORCE clause would be decorative.
+     */
+    const { rows } = await owner.query(
+      `SELECT current_user AS role, rolsuper, rolbypassrls
+       FROM pg_roles WHERE rolname = current_user`,
+    );
+
+    expect(rows[0].role).toBe("whatsapp_owner");
+    expect(rows[0].rolsuper).toBe(false);
+    expect(rows[0].rolbypassrls).toBe(false);
+  });
+
+  it("owns these tables", async () => {
+    const { rows } = await owner.query(
+      `SELECT tablename FROM pg_tables
+       WHERE schemaname = 'public' AND tableowner = current_user
+       ORDER BY tablename`,
+    );
+
+    const owned = rows.map((r: { tablename: string }) => r.tablename);
+    for (const table of TENANT_TABLES) {
+      expect(owned, `${table} is not owned by the connecting role`).toContain(
+        table,
+      );
+    }
+  });
+
+  it.each(TENANT_TABLES)(
+    "sees no rows in %s without a company context",
+    async (table) => {
+      /*
+       * The only direct proof that FORCE ROW LEVEL SECURITY does anything.
+       *
+       * The connection owns this table and there are seeded rows in it. ENABLE
+       * alone would let the owner read every one of them; FORCE is what
+       * subjects the owner to the same policies as everyone else, and those
+       * policies are scoped TO app_runtime / app_admin, so this role matches
+       * none of them and the table reads as empty.
+       */
+      const { rows } = await owner.query(`SELECT * FROM "${table}"`);
+
+      expect(rows, `${table}: FORCE ROW LEVEL SECURITY is not in effect`).toEqual(
+        [],
+      );
+    },
+  );
+
+  it("can still TRUNCATE, which is why app_runtime must not", async () => {
+    /*
+     * TRUNCATE ignores RLS entirely. The owner keeps it because the test
+     * harness needs it; app_runtime is denied it precisely because it would be
+     * a one-statement bypass of every policy above.
+     */
+    await expect(owner.query('TRUNCATE TABLE "users" CASCADE')).resolves.toBeDefined();
+
+    await expect(
+      raw.query('TRUNCATE TABLE "users" CASCADE'),
+    ).rejects.toThrow(/permission denied/i);
   });
 });
 

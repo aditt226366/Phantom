@@ -31,10 +31,15 @@ export const sharedEnvSchema = z.object({
   NODE_ENV: nodeEnv,
 
   /**
-   * The owner role. Migrations and the Prisma CLI only.
+   * whatsapp_owner. Migrations and the Prisma CLI only.
    *
-   * Application code must never connect with this: the owner is exempt from
-   * its own tables' row-level security policies.
+   * NOSUPERUSER, NOBYPASSRLS, CREATEDB. It owns the tables, and FORCE ROW
+   * LEVEL SECURITY means even it sees nothing without a company context.
+   * Application code must still never connect with it — it can turn FORCE off.
+   *
+   * The cluster superuser lives in POSTGRES_SUPERUSER_URL and is deliberately
+   * absent from this schema: only `npm run db:roles` needs it, and a
+   * production app should not be able to read a superuser credential at all.
    */
   DATABASE_URL: postgresUrl("DATABASE_URL"),
 

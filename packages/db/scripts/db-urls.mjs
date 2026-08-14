@@ -52,9 +52,32 @@ export function testAppDatabaseUrl() {
 }
 
 /**
- * A database we can always connect to in order to CREATE another one, or to
- * ALTER cluster-wide roles. `postgres` always exists and is never the target.
+ * A database we can always connect to in order to CREATE another one.
+ * `postgres` always exists and is never the target.
+ *
+ * Connects as whatsapp_owner, which is why that role needs CREATEDB.
  */
 export function maintenanceDatabaseUrl() {
   return withDatabase(required("DATABASE_URL"), "postgres");
+}
+
+/**
+ * The cluster superuser. Used by db-roles.mjs and by nothing else, ever.
+ *
+ * Creating roles and reassigning table ownership are the only operations in
+ * this codebase that genuinely need superuser. Keeping that credential in its
+ * own variable means DATABASE_URL unambiguously means whatsapp_owner — the
+ * non-superuser, non-BYPASSRLS role that owns the tables and runs migrations.
+ */
+export function superuserDatabaseUrl() {
+  return withDatabase(required("POSTGRES_SUPERUSER_URL"), "postgres");
+}
+
+/** Databases db-roles.mjs should fix up ownership in, when they exist. */
+export function managedDatabaseNames() {
+  const devDatabase = new URL(required("DATABASE_URL")).pathname.replace(
+    /^\//,
+    "",
+  );
+  return [devDatabase, TEST_DATABASE_NAME];
 }

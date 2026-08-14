@@ -46,6 +46,19 @@ export function rawRuntimeClient(): pg.Pool {
   return new pg.Pool({ connectionString: testAppDatabaseUrl(), max: 1 });
 }
 
+/**
+ * A client connected as whatsapp_owner — the role that OWNS these tables.
+ *
+ * Postgres exempts a table's owner from its own policies unless FORCE ROW
+ * LEVEL SECURITY is set, so this connection is the only direct way to observe
+ * whether FORCE is doing anything. It only became a meaningful test once the
+ * owner stopped being the container superuser: superusers bypass RLS
+ * unconditionally, FORCE or not, so the assertion would have been vacuous.
+ */
+export function ownerClient(): pg.Pool {
+  return new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
+}
+
 /** Create a company and `userCount` users inside it, through the real path. */
 export async function seedCompany(
   slug: string,

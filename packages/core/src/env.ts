@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { err, ok, type Result } from "./types.ts";
 
 /**
  * Environment contract.
@@ -66,6 +67,35 @@ export type WebEnv = z.infer<typeof webEnvSchema>;
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
 
 /**
+ * Parse a schema against a source, returning a Result instead of exiting.
+ *
+ * This is the non-fatal half of parseEnv, extracted so tests can exercise the
+ * contract without `process.exit(1)` taking the test runner down with it.
+ * Application code should keep using parseEnv - failing to boot on bad
+ * configuration is the correct default.
+ */
+export function safeParseEnv<T extends z.ZodType>(
+  schema: T,
+  source: Record<string, unknown> = process.env,
+  label = "environment",
+): Result<z.infer<T>, string> {
+  const result = schema.safeParse(source);
+
+  if (result.success) {
+    return ok(result.data);
+  }
+
+  const issues = result.error.issues
+    .map((issue) => {
+      const path = issue.path.join(".") || "(root)";
+      return `  - ${path}: ${issue.message}`;
+    })
+    .join("\n");
+
+  return err(`Invalid ${label}:\n${issues}`);
+}
+
+/**
  * Parse a schema against process.env (or any source), printing a readable
  * report and exiting non-zero on failure.
  *
@@ -78,23 +108,16 @@ export function parseEnv<T extends z.ZodType>(
   source: Record<string, unknown> = process.env,
   label = "environment",
 ): z.infer<T> {
-  const result = schema.safeParse(source);
+  const parsed = safeParseEnv(schema, source, label);
 
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((issue) => {
-        const path = issue.path.join(".") || "(root)";
-        return `  - ${path}: ${issue.message}`;
-      })
-      .join("\n");
-
+  if (!parsed.ok) {
     // eslint-disable-next-line no-console
     console.error(
-      `\nInvalid ${label}:\n${issues}\n\n` +
+      `\n${parsed.error}\n\n` +
         "Copy .env.example to .env and fill in the missing values.\n",
     );
     process.exit(1);
   }
 
-  return result.data;
+  return parsed.value;
 }

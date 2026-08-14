@@ -17,6 +17,9 @@
     "start": "npm run start --workspace=web",
     "lint": "npm run lint --workspace=web",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:test:setup": "node packages/db/scripts/migrate-test.mjs",
     "db:setup": "npm run migrate:deploy --workspace=@whatsapp-os/db && npm run generate --workspace=@whatsapp-os/db",
     "db:generate": "npm run generate --workspace=@whatsapp-os/db",
     "db:migrate": "npm run migrate --workspace=@whatsapp-os/db",
@@ -28,6 +31,9 @@
     "services:logs": "docker compose logs -f"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@types/pg": "^8.21.0",
+    "pg": "^8.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

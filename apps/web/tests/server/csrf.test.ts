@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CSRF_FIELD_NAME } from "@/lib/auth/cookies";
+import type { SessionContext } from "@/lib/auth/session-store";
 
 /**
  * `next/headers` only works inside a request, so cookies() is mocked. The logic
@@ -24,7 +25,7 @@ function formWith(token?: string): FormData {
   return data;
 }
 
-const session = {
+const session: SessionContext = {
   sessionId: "s1",
   companyId: "c1",
   userId: "u1",
@@ -35,9 +36,11 @@ const session = {
     fullName: "Ada",
     email: "ada@example.test",
     username: "ada",
+    phoneE164: "+919876543210",
     emailVerifiedAt: null,
     role: "OWNER",
   },
+  company: { id: "c1", name: "Analytical Engines", slug: "analytical-engines" },
 };
 
 afterEach(() => {

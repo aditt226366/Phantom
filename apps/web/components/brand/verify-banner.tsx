@@ -22,12 +22,18 @@ export interface VerifyBannerProps {
    * one; the button is disabled when it is absent.
    */
   resendAction?: (formData: FormData) => void | Promise<void>;
+  /**
+   * Hidden CSRF input, rendered by a Server Component parent and placed inside
+   * this component's form. Resend is a mutating POST like any other.
+   */
+  csrf?: React.ReactNode;
   className?: string;
 }
 
 export function VerifyBanner({
   email,
   resendAction,
+  csrf,
   className,
 }: VerifyBannerProps) {
   const [dismissed, setDismissed] = React.useState(false);
@@ -50,6 +56,7 @@ export function VerifyBanner({
 
       <div className="flex shrink-0 items-center gap-xs">
         <form action={resendAction}>
+          {csrf}
           <Button type="submit" variant="outline" size="sm" disabled={!resendAction}>
             Resend link
           </Button>

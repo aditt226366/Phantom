@@ -4,6 +4,7 @@ import {
   CSRF_COOKIE_OPTIONS,
   SESSION_COOKIE_NAME,
 } from "@/lib/auth/cookies";
+import { PROTECTED_PREFIXES } from "@/lib/nav";
 
 /**
  * Runs before every matched request.
@@ -32,9 +33,12 @@ import {
  *   3. Sets response headers that have no per-route logic.
  */
 
-/** Path prefixes that require a session. Everything else is public. */
-const PROTECTED_PREFIXES = ["/dashboard"];
-
+/**
+ * Path prefixes that require a session. Everything else is public.
+ *
+ * Derived from lib/nav.ts rather than listed again here, so adding a section
+ * cannot leave it unprotected — the list and the sidebar are the same list.
+ */
 function isProtected(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),

@@ -35,8 +35,22 @@ export interface SessionContext {
     fullName: string;
     email: string;
     username: string;
+    phoneE164: string;
     emailVerifiedAt: Date | null;
     role: string;
+  };
+  /**
+   * Loaded here rather than by the shell.
+   *
+   * The layout needs the company name and every page needs the session, so
+   * fetching them separately would mean two interactive transactions per
+   * request — each holding a pooled connection — to read two rows that are one
+   * join apart. Included in this query, the whole request costs one.
+   */
+  company: {
+    id: string;
+    name: string;
+    slug: string;
   };
 }
 
@@ -139,10 +153,12 @@ export async function resolveSessionByToken(
             fullName: true,
             email: true,
             username: true,
+            phoneE164: true,
             emailVerifiedAt: true,
             role: true,
           },
         },
+        company: { select: { id: true, name: true, slug: true } },
       },
     });
 
@@ -178,6 +194,7 @@ export async function resolveSessionByToken(
       csrfSecret: session.csrfSecret,
       expiresAt: session.expiresAt,
       user: session.user,
+      company: session.company,
     };
   });
 }

@@ -25,14 +25,14 @@ does on top of it.
 
 ### 2. Route handlers never touch the raw Prisma client
 
-Only `withTenant`. Importing `prisma` directly inside `app/api/**` is a bug.
+Only `withCompany`. Importing `prisma` directly inside `app/api/**` is a bug.
 
 ```ts
-import { withTenant } from "@whatsapp-os/db";
-const db = withTenant(session.companyId);
+import { withCompany } from "@whatsapp-os/db";
+const db = withCompany(session.companyId);
 ```
 
-Note the two holes `withTenant` does not plug — `$queryRaw` / `$executeRaw` and
+Note the two holes `withCompany` does not plug — `$queryRaw` / `$executeRaw` and
 nested writes are unscoped. Filter by hand there, and let RLS (rule 1) be the
 thing that actually stops a cross-tenant read.
 
@@ -66,17 +66,24 @@ it loads automatically on any UI work.
 
 ## Current state vs. the rules
 
-The Phase 0 scaffold predates rules 1–3 and does not yet satisfy them:
+The scaffold does not yet satisfy rules 1 and 3:
 
-- The tenant key is currently named `tenantId` (`packages/db/prisma/schema.prisma`),
-  not `company_id`, and its index is single-column.
-- No RLS policies exist in `packages/db/prisma/migrations/`. `withTenant` is
-  today an application-layer guard only.
+- Tenant tables carry `company_id` NOT NULL, but the index on it is still
+  single-column rather than composite. The second column arrives with the
+  tables that need one.
+- No RLS policies exist in `packages/db/prisma/migrations/`. `withCompany` is
+  today an application-layer guard only, and its own docstring lists the three
+  holes it cannot close.
 - There are no route handlers yet beyond `/api/health`, which touches no
   tenant data.
 
-Bringing the schema in line is Phase 1 work. Until then, treat the rules as
-binding on everything new.
+Bringing the database in line is the rest of Phase 1. Until then, treat the
+rules as binding on everything new.
+
+`withCompany`'s signature is temporary: it becomes
+`withCompany(companyId, async (db) => …)`, a callback running inside an
+interactive transaction that sets `app.company_id` for RLS to read. Don't build
+call sites expecting the current shape to survive.
 
 ---
 
@@ -87,7 +94,7 @@ apps/
   web/          Next.js 16 App Router, Tailwind, shadcn/ui
   worker/       BullMQ consumers, plain Node via tsx
 packages/
-  db/           Prisma schema, generated client, withTenant extension
+  db/           Prisma schema, generated client, withCompany extension
   core/         Shared types, Zod schemas, env contract, encryption helper
 ```
 

@@ -1,7 +1,7 @@
 export { prisma, checkDatabase } from "./client.ts";
-export { withTenant, TENANT_SCOPED_MODELS } from "./with-tenant.ts";
-export type { TenantClient } from "./with-tenant.ts";
+export { withCompany, COMPANY_SCOPED_MODELS } from "./with-company.ts";
+export type { CompanyClient } from "./with-company.ts";
 
 /** Model types and the Prisma namespace, re-exported so apps import one package. */
 export { Prisma } from "./generated/prisma/client.ts";
-export type { Tenant, User } from "./generated/prisma/client.ts";
+export type { Company, User } from "./generated/prisma/client.ts";

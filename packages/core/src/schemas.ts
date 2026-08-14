@@ -16,7 +16,7 @@ export const idSchema = z
   .max(40)
   .regex(/^[a-z0-9]+$/i, "Not a valid id");
 
-export const tenantIdSchema = idSchema.describe("Tenant id");
+export const companyIdSchema = idSchema.describe("Company id");
 
 export const emailSchema = z
   .email("Not a valid email address")

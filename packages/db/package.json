@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Prisma schema, generated client and the withTenant extension.",
+  "description": "Prisma schema, generated client and the withCompany extension.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./with-tenant": "./src/with-tenant.ts"
+    "./with-company": "./src/with-company.ts"
   },
   "scripts": {
     "generate": "prisma generate",

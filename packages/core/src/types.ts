@@ -6,9 +6,9 @@
  * is safe to pull into a client component.
  */
 
-/** Every tenant-scoped operation carries one of these. */
-export interface TenantContext {
-  tenantId: string;
+/** Every company-scoped operation carries one of these. */
+export interface CompanyContext {
+  companyId: string;
 }
 
 /** Result of a service call that can fail in an expected, non-exceptional way. */

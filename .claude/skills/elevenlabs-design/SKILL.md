@@ -6,7 +6,7 @@ description: Visual design system for this repo. Use whenever creating or modify
 # whatsapp-os design system
 
 Editorial, near-monochrome, serif display over sans body. Derived from
-`docs/DESIGN-elevenlabs.md`. The implementation lives in
+`DESIGN-elevenlabs.md` at the repo root. The implementation lives in
 `apps/web/app/globals.css` — that file is the single source of truth for raw
 values, and `/styleguide` renders every token by parsing it at build time.
 

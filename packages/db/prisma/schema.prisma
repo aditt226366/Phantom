@@ -1,10 +1,15 @@
 // whatsapp-os database schema.
 //
-// Scope note: this is foundation only - a tenant, and users belonging to a
-// tenant. No product models yet. What matters here is the multi-tenant shape:
-// every tenant-scoped table carries a `tenantId` column, an index on it, and
-// a compound unique that includes it. The withTenant client extension in
-// src/with-tenant.ts relies on that convention.
+// Scope note: this is foundation only - a company, and users belonging to a
+// company. No product models yet. What matters here is the multi-tenant shape:
+// every tenant-owned table carries a `company_id` column, an index leading with
+// it, and a compound unique that includes it. The withCompany client extension
+// in src/with-company.ts relies on that convention.
+//
+// Column naming: snake_case throughout, via @map. Prisma quotes unmapped
+// camelCase identifiers ("createdAt"), which means every hand-written migration
+// and RLS policy has to quote them too. The tenancy rules in CLAUDE.md are
+// written in snake_case (`company_id`), so the whole schema follows.
 
 generator client {
   provider = "prisma-client"
@@ -16,35 +21,35 @@ datasource db {
 }
 
 /// A customer workspace. The root of every tenant-scoped query.
-/// Not itself tenant-scoped - see TENANT_SCOPED_MODELS in with-tenant.ts.
-model Tenant {
+/// Not itself company-scoped - see COMPANY_SCOPED_MODELS in with-company.ts.
+model Company {
   id        String   @id @default(cuid())
   /// URL-safe handle, unique across the installation.
   slug      String   @unique
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   users User[]
 
-  @@map("tenants")
+  @@map("companies")
 }
 
-/// A person inside a tenant.
+/// A person inside a company.
 ///
-/// Email is unique *per tenant*, not globally: the same human may belong to
+/// Email is unique *per company*, not globally: the same human may belong to
 /// two workspaces. That is why the unique constraint is compound.
 model User {
   id        String   @id @default(cuid())
-  tenantId  String
+  companyId String   @map("company_id")
   email     String
   name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, email])
-  @@index([tenantId])
+  @@unique([companyId, email])
+  @@index([companyId])
   @@map("users")
 }

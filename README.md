@@ -66,7 +66,7 @@ apps/
   web/          Next.js 16 App Router, Tailwind, shadcn/ui
   worker/       BullMQ consumers, plain Node via tsx
 packages/
-  db/           Prisma schema, generated client, withTenant extension
+  db/           Prisma schema, generated client, withCompany extension
   core/         Shared types, Zod schemas, env contract, encryption helper
 ```
 
@@ -141,31 +141,33 @@ swap the display face to **Cormorant Garamond**, which does ship one:
 
 ## Multi-tenancy
 
-`withTenant(tenantId)` returns a Prisma client that is incapable of touching
-another tenant's rows:
+`withCompany(companyId)` returns a Prisma client that is incapable of touching
+another company's rows:
 
 ```ts
-import { withTenant } from "@whatsapp-os/db";
+import { withCompany } from "@whatsapp-os/db";
 
-const db = withTenant(session.tenantId);
-await db.user.findMany();              // WHERE tenant_id = $1, always
-await db.user.create({ data: { … } }); // tenant_id injected
+const db = withCompany(session.companyId);
+await db.user.findMany();              // WHERE company_id = $1, always
+await db.user.create({ data: { … } }); // company_id injected
 ```
 
-Reads, updates and deletes get `tenantId` merged into `where`; creates get it
+Reads, updates and deletes get `companyId` merged into `where`; creates get it
 merged into `data`.
 
 **Three limits worth knowing before you rely on it:**
 
 1. **Raw queries are not scoped.** `$queryRaw` / `$executeRaw` bypass the model
-   query hook entirely. Filter by `tenant_id` by hand.
-2. **Nested writes are not scoped.** Only the top-level record gets `tenantId`.
-3. **Models must be registered.** Adding a tenant-scoped model to
-   `schema.prisma` means adding it to `TENANT_SCOPED_MODELS` in
-   `packages/db/src/with-tenant.ts`.
+   query hook entirely. Filter by `company_id` by hand.
+2. **Nested writes are not scoped.** Only the top-level record gets `companyId`.
+3. **Models must be registered.** Adding a company-scoped model to
+   `schema.prisma` means adding it to `COMPANY_SCOPED_MODELS` in
+   `packages/db/src/with-company.ts`.
 
 This is an application-layer guard. For a hard guarantee, add Postgres
-row-level security underneath it.
+row-level security underneath it — which is what the rest of Phase 1 does, at
+which point this signature changes to a callback form that opens a transaction
+and sets `app.company_id` for the policies to read.
 
 > **Prisma 7 note:** the datasource URL lives in `packages/db/prisma.config.ts`,
 > not in `schema.prisma`, and the client connects through the `@prisma/adapter-pg`

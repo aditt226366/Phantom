@@ -5,6 +5,7 @@ import {
   priceUsage,
   startOfPlatformDay,
   startOfPlatformMonth,
+  type CompanyFilter,
   type IntegrationProviderName,
   type UsageKind,
 } from "@whatsapp-os/core";
@@ -180,41 +181,134 @@ export async function findUserForReset(username: string): Promise<{
   });
 }
 
+/**
+ * Exactly what a company card renders, and nothing else.
+ *
+ * Six fields, each of which appears in the markup. The owner's email and
+ * phone are not here, and neither is a user count, because the card does not
+ * show them — and a field that is fetched but not displayed is one that has
+ * crossed the tenant boundary for no reason anybody can point at.
+ *
+ * `slug` went for the same reason. Search still matches against it; matching
+ * on a column does not require returning it.
+ */
 export interface CompanySummary {
   id: string;
   name: string;
-  slug: string;
-  userCount: number;
-  createdAt: Date;
+  /** The OWNER-role user. Null for a company whose owner has been deleted. */
+  ownerUsername: string | null;
+  plan: Plan;
+  status: "ACTIVE" | "DEACTIVATED";
+  /**
+   * The owner's last sign-in, not the company's most recent across all users.
+   *
+   * Named for what it is: paired with the owner's username on the card, an
+   * unqualified "last login" invites the reader to assume the other meaning,
+   * and the two diverge as soon as a company has staff.
+   */
+  ownerLastLoginAt: Date | null;
+}
+
+export interface CompanyPage {
+  companies: CompanySummary[];
+  /** Pass back as `cursor` for the next page. Null when this is the last. */
+  nextCursor: string | null;
+  /** True when a search or status filter narrowed the result. */
+  filtered: boolean;
 }
 
 /**
- * Every company on the installation.
+ * Companies, filtered and paged in the database.
  *
- * The one cross-tenant read in this commit, and deliberately a summary: no
- * message content, no contact data, nothing that would make the admin panel a
- * convenient way to read a customer's inbox. Widening it is a change to this
- * function, in this file.
+ * Never "fetch all and filter in the browser": this is every tenant on the
+ * installation, so that would ship the entire customer list to the client and
+ * stop working at exactly the scale where it matters.
+ *
+ * ---------------------------------------------------------------------------
+ * A note for whoever adds trigram indexing
+ * ---------------------------------------------------------------------------
+ *
+ * `contains` compiles to ILIKE '%term%', and a leading wildcard cannot use a
+ * btree index — Postgres has no way to seek into the middle of a string, so
+ * this is a sequential scan over companies with a per-row match against three
+ * columns.
+ *
+ * That is fine and will stay fine for a long time: the row count here is the
+ * number of paying customers, and a seq scan over a few thousand of those is
+ * faster than the planning it would take to avoid. When it stops being fine
+ * the fix is pg_trgm with a GIN index on name and slug, not a schema change
+ * and not client-side filtering. Written down so the next person inherits the
+ * reasoning rather than the surprise.
  */
-export async function listCompanies(): Promise<CompanySummary[]> {
-  const companies = await adminPrisma.company.findMany({
+export async function listCompanies(
+  filter: CompanyFilter = { status: "all", limit: 25 },
+): Promise<CompanyPage> {
+  const search = filter.q?.trim() ?? "";
+  const filtered = search !== "" || filter.status !== "all";
+
+  /*
+   * Deliberately not annotated Prisma.CompanyWhereInput. no-raw-prisma.test.ts
+   * allows exactly one Prisma type in this file, and satisfying that honestly
+   * costs an `as const` — weakening the check to permit "only internal" uses
+   * would make it a rule about where the type appears rather than whether it
+   * does, and that is the version nobody can apply confidently.
+   */
+  const where = {
+    ...(filter.status === "active" ? { deactivatedAt: null } : {}),
+    ...(filter.status === "deactivated"
+      ? { deactivatedAt: { not: null } }
+      : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" as const } },
+            { slug: { contains: search, mode: "insensitive" as const } },
+            {
+              users: {
+                some: {
+                  username: { contains: search, mode: "insensitive" as const },
+                },
+              },
+            },
+          ],
+        }
+      : {}),
+  };
+
+  /* One more than asked for, so "is there a next page" needs no count query. */
+  const rows = await adminPrisma.company.findMany({
+    where,
     orderBy: { createdAt: "desc" },
+    take: filter.limit + 1,
+    ...(filter.cursor ? { cursor: { id: filter.cursor }, skip: 1 } : {}),
     select: {
       id: true,
       name: true,
-      slug: true,
-      createdAt: true,
-      _count: { select: { users: true } },
+      plan: true,
+      deactivatedAt: true,
+      users: {
+        where: { role: "OWNER" },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: { username: true, lastLoginAt: true },
+      },
     },
   });
 
-  return companies.map((company) => ({
-    id: company.id,
-    name: company.name,
-    slug: company.slug,
-    createdAt: company.createdAt,
-    userCount: company._count.users,
-  }));
+  const page = rows.slice(0, filter.limit);
+
+  return {
+    companies: page.map((company) => ({
+      id: company.id,
+      name: company.name,
+      ownerUsername: company.users[0]?.username ?? null,
+      plan: company.plan,
+      status: company.deactivatedAt === null ? "ACTIVE" : "DEACTIVATED",
+      ownerLastLoginAt: company.users[0]?.lastLoginAt ?? null,
+    })),
+    nextCursor: rows.length > filter.limit ? (page.at(-1)?.id ?? null) : null,
+    filtered,
+  };
 }
 
 /* ------------------------------------------------------------------ */

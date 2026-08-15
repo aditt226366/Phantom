@@ -179,13 +179,13 @@ describe("listCompanies", () => {
     );
     if (!first.ok || !second.ok) throw new Error("signup failed");
 
-    const companies = await listCompanies();
+    const { companies } = await listCompanies();
     expect(companies).toHaveLength(2);
     expect(companies.map((c) => c.name).sort()).toEqual([
       "Analytical Engines",
       "Beta Works",
     ]);
-    expect(companies.every((c) => c.userCount === 1)).toBe(true);
+    expect(companies.every((c) => c.ownerUsername !== null)).toBe(true);
 
     /*
      * The same read through the tenant role, with no company context, returns
@@ -200,15 +200,25 @@ describe("listCompanies", () => {
     const signup = await signUp(tenantForm(), {});
     if (!signup.ok) throw new Error("signup failed");
 
-    const [company] = await listCompanies();
+    const { companies } = await listCompanies();
 
-    /* Widening this is a change to lib/admin-db.ts, in review. */
-    expect(Object.keys(company!).sort()).toEqual([
-      "createdAt",
+    /*
+     * Widening this is a change to lib/admin-db.ts, in review — which is the
+     * point of asserting the whole shape rather than the fields in use.
+     *
+     * It got smaller in Phase 2, not larger. slug, createdAt and userCount
+     * came out because the company card renders none of them, and a field
+     * fetched across the tenant boundary that nobody can point at in the
+     * markup is one that should not have been fetched. Search still matches
+     * on slug; matching does not require returning.
+     */
+    expect(Object.keys(companies[0]!).sort()).toEqual([
       "id",
       "name",
-      "slug",
-      "userCount",
+      "ownerLastLoginAt",
+      "ownerUsername",
+      "plan",
+      "status",
     ]);
   });
 });

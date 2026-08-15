@@ -44,6 +44,36 @@ export const paginationSchema = z.object({
 export type Pagination = z.infer<typeof paginationSchema>;
 
 /* -------------------------------------------------------------------------
+   Admin listing
+   ------------------------------------------------------------------------- */
+
+export const COMPANY_STATUS_FILTERS = ["all", "active", "deactivated"] as const;
+
+export type CompanyStatusFilter = (typeof COMPANY_STATUS_FILTERS)[number];
+
+/**
+ * The companies list, as it appears in the URL.
+ *
+ * Extends paginationSchema rather than declaring its own cursor and limit: a
+ * second pagination shape is a second set of bounds to get wrong, and the one
+ * that matters here is `max(100)` — this list is every tenant on the
+ * installation, and it is unbounded by design.
+ *
+ * Search and status live in the query string, not in component state, so the
+ * page stays a server component running a real filtered query. Fetching every
+ * company and filtering in the browser would ship the whole customer list to
+ * the client and stop working at exactly the point it matters. It also makes
+ * the view bookmarkable, back-button-able, and linkable into a support thread.
+ */
+export const companyFilterSchema = paginationSchema.extend({
+  /** Matched against company name, slug and owner username. */
+  q: z.string().trim().max(120).optional(),
+  status: z.enum(COMPANY_STATUS_FILTERS).default("all"),
+});
+
+export type CompanyFilter = z.infer<typeof companyFilterSchema>;
+
+/* -------------------------------------------------------------------------
    Health
    ------------------------------------------------------------------------- */
 

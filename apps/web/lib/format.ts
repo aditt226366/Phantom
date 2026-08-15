@@ -48,13 +48,49 @@ export function formatDate(value: Date): string {
   }).format(value);
 }
 
-export function formatDateTime(value: Date): string {
-  return `${new Intl.DateTimeFormat("en-IN", {
+/**
+ * The one timestamp formatter.
+ *
+ * Every time this panel prints goes through here, in the same zone the
+ * "today" boundaries are computed in. The alternative is two figures on
+ * adjacent screens disagreeing by five and a half hours with neither of them
+ * labelled — "8 calls today" measured from IST midnight, beside a last-login
+ * rendered in whatever zone the container runs in.
+ *
+ * DD/MM/YYYY HH:MM:SS, which is unambiguous for the audience: 08/09 is the
+ * eighth of September here and the ninth of August in en-US, and a support
+ * conversation about the wrong day costs more than the four characters.
+ *
+ * Null is "Never" rather than a dash. A user who has never signed in is a
+ * fact worth stating; a dash reads as missing data.
+ */
+export function formatTimestamp(value: Date | null | undefined): string {
+  if (!value) return "Never";
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: PLATFORM_TIMEZONE,
-    day: "numeric",
-    month: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false,
-  }).format(value)} ${PLATFORM_TIMEZONE_LABEL}`;
+  }).formatToParts(value);
+
+  const read = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return (
+    `${read("day")}/${read("month")}/${read("year")} ` +
+    `${read("hour")}:${read("minute")}:${read("second")}`
+  );
+}
+
+/** The same instant with the zone spelled out, where there is room for it. */
+export function formatTimestampWithZone(value: Date | null | undefined): string {
+  const formatted = formatTimestamp(value);
+  return formatted === "Never"
+    ? formatted
+    : `${formatted} ${PLATFORM_TIMEZONE_LABEL}`;
 }

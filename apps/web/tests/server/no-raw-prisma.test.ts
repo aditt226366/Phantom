@@ -163,11 +163,24 @@ describe("the admin query surface", () => {
      * Prisma.InputJsonValue is the one exception and is not an argument type:
      * it is the shape of an audit metadata blob on the way in.
      */
+    /*
+     * Block comments stripped first.
+     *
+     * The same trap this file's header describes, hit again: a comment in
+     * admin-db.ts explaining why a Prisma type is *not* used named the type,
+     * and the check flagged the explanation. A rule that cannot be discussed
+     * in a comment is one people work around silently.
+     *
+     * Only block comments, and only for this check: stripping `//` would mean
+     * deciding whether a `//` sits inside a string literal, and a URL in a
+     * string is common enough that getting it wrong would hide a real match.
+     */
     const source = readFileSync(join(webRoot, "lib", "admin-db.ts"), "utf8");
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "");
 
     const referenced = [
       ...new Set(
-        [...source.matchAll(/\bPrisma\.(\w+)/g)].map((match) => match[1]!),
+        [...code.matchAll(/\bPrisma\.(\w+)/g)].map((match) => match[1]!),
       ),
     ].sort();
 

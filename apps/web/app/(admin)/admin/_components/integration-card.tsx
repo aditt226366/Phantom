@@ -1,6 +1,8 @@
 import Link from "next/link";
 import {
   INTEGRATION_LABELS,
+  effectiveIntegrationStatus,
+  missingRequiredKeys,
   type IntegrationProviderName,
 } from "@whatsapp-os/core";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +21,15 @@ import { IntegrationForm, TestConnectionForm } from "./integration-form";
  * integration that says CONNECTED because the browser assumed so is worse
  * than one that takes a second to say NOT_CONNECTED, because the operator
  * acts on the badge.
+ *
+ * It also reads from what is actually stored, not only from that status. A
+ * verifier answers "did the provider accept the credentials we sent", which is
+ * not "is this integration going to work" - verifyWhatsAppCloud calls
+ * GET /{phone_number_id} and never touches the app secret, so an integration
+ * with no app secret verifies perfectly and cannot check a single inbound
+ * webhook signature. effectiveIntegrationStatus closes that gap, and the row
+ * below names the missing key so the badge is actionable rather than just
+ * discouraging.
  */
 export function IntegrationCard({
   companyId,
@@ -32,8 +43,18 @@ export function IntegrationCard({
   /** The most recent verification for this provider, if there is one. */
   latest: VerificationEntry | undefined;
 }) {
-  const connected = integration?.status === "CONNECTED";
   const stored = integration?.secrets ?? [];
+  const missing = missingRequiredKeys(
+    provider,
+    stored.map((secret) => secret.key),
+  );
+  const connected =
+    integration !== undefined &&
+    effectiveIntegrationStatus(
+      provider,
+      stored.map((secret) => secret.key),
+      integration.status === "CONNECTED" ? "CONNECTED" : "NOT_CONNECTED",
+    ) === "CONNECTED";
 
   return (
     <Card className="flex flex-col gap-base">
@@ -51,6 +72,14 @@ export function IntegrationCard({
           {connected ? "CONNECTED" : "NOT CONNECTED"}
         </Badge>
       </div>
+
+      {missing.length > 0 && integration !== undefined ? (
+        <p className="rounded-md border border-hairline bg-surface-strong p-sm text-body-sm text-error">
+          Action needed: {missing.join(", ")} {missing.length === 1 ? "is" : "are"}{" "}
+          missing. The connection cannot be used until{" "}
+          {missing.length === 1 ? "it is" : "they are"} saved.
+        </p>
+      ) : null}
 
       {integration?.lastError ? (
         <p className="rounded-md border border-hairline bg-surface-strong p-sm text-body-sm text-error">

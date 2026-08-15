@@ -139,12 +139,14 @@ const SECRETS = {
     WHATSAPP_BUSINESS_ACCOUNT_ID: "204857610394827",
     WHATSAPP_ACCESS_TOKEN: "EAAfixtureaccesstokenvalue0000000000004417",
     WHATSAPP_VERIFY_TOKEN: "fixture-verify-token-6620",
+    WHATSAPP_APP_SECRET: "fixture-app-secret-8f2a1c7d4b90",
   },
   [INTEGRATION.otherCompany]: {
     WHATSAPP_PHONE_NUMBER_ID: "118273645500912",
     WHATSAPP_BUSINESS_ACCOUNT_ID: "227364554001283",
     WHATSAPP_ACCESS_TOKEN: "EAAfixturesecondcompanytoken000000000883",
     WHATSAPP_VERIFY_TOKEN: "fixture-verify-second-0917",
+    WHATSAPP_APP_SECRET: "fixture-app-secret-second-31d6cf",
   },
   [INTEGRATION.thirdCompany]: {
     GOOGLE_SHEETS_ID: "1fixtureThirdSheetIdBBBBBBBBBBBBBBBBBB7734",

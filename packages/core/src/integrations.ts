@@ -46,34 +46,88 @@ export interface IntegrationField {
    * and which business account this tenant is wired to.
    */
   secret: boolean;
+  /**
+   * Whether the integration is unusable without it.
+   *
+   * Explicit on every field rather than optional, so adding a credential
+   * forces the question. Getting it wrong in the lenient direction is how a
+   * card ends up reading CONNECTED for an integration that cannot do its job.
+   *
+   * Requiredness used to live inside each verifier, as a hard-coded check that
+   * produced a `config` failure. That is still where the *message* comes from;
+   * this is the declaration everything else can read - in particular the badge,
+   * which cannot call a verifier to find out whether a value is missing.
+   */
+  required: boolean;
   /** Shown under the label. */
   hint?: string;
 }
 
 export const INTEGRATION_FIELDS = {
   GOOGLE_SHEETS: [
-    { key: "GOOGLE_SHEETS_ID", label: "Spreadsheet ID", secret: true },
+    /* verifyGoogleSheets refuses without all three. */
+    { key: "GOOGLE_SHEETS_ID", label: "Spreadsheet ID", secret: true, required: true },
     {
       key: "GOOGLE_SERVICE_ACCOUNT_EMAIL",
       label: "Service account email",
       secret: false,
+      required: true,
       hint: "Share the spreadsheet with this address.",
     },
-    { key: "GOOGLE_PRIVATE_KEY", label: "Private key", secret: true },
+    { key: "GOOGLE_PRIVATE_KEY", label: "Private key", secret: true, required: true },
   ],
   WHATSAPP_CLOUD: [
-    { key: "WHATSAPP_PHONE_NUMBER_ID", label: "Phone number ID", secret: false },
+    {
+      key: "WHATSAPP_PHONE_NUMBER_ID",
+      label: "Phone number ID",
+      secret: false,
+      required: true,
+    },
     {
       key: "WHATSAPP_BUSINESS_ACCOUNT_ID",
       label: "Business account ID",
       secret: false,
+      /* Only templates need it, and those are Phase 4b. Marked required when
+         the Template Studio arrives, not before - a key nothing reads yet must
+         not hold a badge down. */
+      required: false,
     },
-    { key: "WHATSAPP_ACCESS_TOKEN", label: "Access token", secret: true },
-    { key: "WHATSAPP_VERIFY_TOKEN", label: "Verify token", secret: true },
+    {
+      key: "WHATSAPP_ACCESS_TOKEN",
+      label: "Access token",
+      secret: true,
+      required: true,
+    },
+    {
+      key: "WHATSAPP_VERIFY_TOKEN",
+      label: "Verify token",
+      secret: true,
+      /* Echoed back to Meta during the GET subscription handshake. Without it
+         the webhook can never be subscribed in the first place. */
+      required: true,
+    },
+    {
+      key: "WHATSAPP_APP_SECRET",
+      label: "App secret",
+      secret: true,
+      /*
+       * The HMAC key for X-Hub-Signature-256. Without it an inbound delivery
+       * cannot be distinguished from a forgery, so the endpoint would have to
+       * either accept anything or reject everything.
+       *
+       * Nothing in verifyWhatsAppCloud touches it - that calls
+       * GET /{phone_number_id}, which succeeds perfectly well without an app
+       * secret. Which is exactly why requiredness is declared here and read by
+       * the badge, rather than left to the verifier to discover.
+       */
+      required: true,
+      hint: "Meta app dashboard, under Settings > Basic.",
+    },
   ],
   META_ADS: [
-    { key: "META_ADS_ACCESS_TOKEN", label: "Access token", secret: true },
-    { key: "META_AD_ACCOUNT_ID", label: "Ad account ID", secret: true },
+    /* verifyMetaAds refuses without both. */
+    { key: "META_ADS_ACCESS_TOKEN", label: "Access token", secret: true, required: true },
+    { key: "META_AD_ACCOUNT_ID", label: "Ad account ID", secret: true, required: true },
   ],
 } as const satisfies Record<IntegrationProviderName, readonly IntegrationField[]>;
 
@@ -93,6 +147,65 @@ export function integrationFields(
   provider: IntegrationProviderName,
 ): readonly IntegrationField[] {
   return INTEGRATION_FIELDS[provider];
+}
+
+/** The keys an integration cannot work without. */
+export function requiredIntegrationKeys(
+  provider: IntegrationProviderName,
+): readonly string[] {
+  return INTEGRATION_FIELDS[provider]
+    .filter((field) => field.required)
+    .map((field) => field.key);
+}
+
+/** Which required keys are absent, in declaration order. */
+export function missingRequiredKeys(
+  provider: IntegrationProviderName,
+  storedKeys: readonly string[],
+): readonly string[] {
+  const held = new Set(storedKeys);
+  return requiredIntegrationKeys(provider).filter((key) => !held.has(key));
+}
+
+export type IntegrationStatusName = "CONNECTED" | "NOT_CONNECTED";
+
+/**
+ * What the badge should say, as opposed to what the database last recorded.
+ *
+ * These are not the same question and conflating them is the bug this exists to
+ * prevent.
+ *
+ * The stored status answers "what did the provider say the last time we asked".
+ * It is written by a verifier and it is correct: verifyWhatsAppCloud calls
+ * GET /{phone_number_id}, that call genuinely succeeds without an app secret,
+ * and recording CONNECTED is an honest report of what happened.
+ *
+ * The badge answers "is this integration going to work", which is a different
+ * thing, because a WhatsApp connection with no app secret cannot verify a
+ * single inbound delivery. An operator glancing at CONNECTED would stop
+ * looking, and the conventions are explicit that the operator acts on the
+ * badge.
+ *
+ * ---------------------------------------------------------------------------
+ * Derived, never written
+ * ---------------------------------------------------------------------------
+ *
+ * The alternative was to write NOT_CONNECTED into the column when a required
+ * key is missing. That is wrong twice over: it puts a claim in the status
+ * column that no provider ever made, and the very next successful verification
+ * overwrites it with CONNECTED while the key is still missing. A derived value
+ * cannot drift out of agreement with the secrets that produced it.
+ *
+ * It also needs no third enum member, so IntegrationStatus keeps its "two
+ * states, not three" property.
+ */
+export function effectiveIntegrationStatus(
+  provider: IntegrationProviderName,
+  storedKeys: readonly string[],
+  storedStatus: IntegrationStatusName,
+): IntegrationStatusName {
+  if (missingRequiredKeys(provider, storedKeys).length > 0) return "NOT_CONNECTED";
+  return storedStatus;
 }
 
 /** Whether a value may be echoed back to the browser. Unknown keys are secret. */

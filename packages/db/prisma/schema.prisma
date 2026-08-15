@@ -417,23 +417,45 @@ model UsageEvent {
   kind     String
   quantity Int    @default(1)
 
-  /// Cost in `currency`'s minor unit - paise for INR, cents for USD. Integer
-  /// arithmetic, because money in a float is a bug with a delay on it.
+  /// Cost in millionths of one unit of `currency`. 1_000_000 micros = ₹1.
   ///
-  /// Deliberately not named "cents". Meta bills in the ad account's own
-  /// currency and the AI providers bill USD, so one column named for one of
-  /// them would end up summing INR and USD into a number that means nothing,
-  /// and it would look like a total rather than like a bug.
-  costMinor Int @map("cost_minor")
+  /// Micros, not minor units. Phase 7 prices AI calls below a cent each, and a
+  /// paise- or cent-denominated column rounds a $0.0003 reply to zero - so a
+  /// thousand conversations sum to nothing and the invoice is silently short.
+  /// Micros keep every arithmetic step an integer, with rounding deferred to
+  /// the one place it belongs, which is display.
+  ///
+  /// BigInt because Int32 tops out around 2,147 units of currency per row. A
+  /// single verification costs nothing like that, but Phase 5 records ad spend,
+  /// and a day of it does.
+  ///
+  /// NULLABLE, and unpriced events write null rather than zero. Zero is a
+  /// claim that something was free; null is the absence of a claim. Summed,
+  /// the two are indistinguishable, and the total renders with the same
+  /// authority either way. SUM ignores nulls, so an unpriced event lowers no
+  /// total - it just has to be counted separately, which the Overview does.
+  costMicros BigInt? @map("cost_micros")
 
-  /// ISO 4217, e.g. INR or USD. A total is only meaningful within one
-  /// currency, so every read groups by this rather than adding across it.
-  currency String
+  /// ISO 4217, e.g. INR or USD. Comes from the matched price entry and never
+  /// from the caller. Null exactly when the event is unpriced: with no entry
+  /// there is no currency to claim.
+  currency String?
 
-  /// Which revision of USAGE_PRICES priced this row. Stamped beside the cost
-  /// so a reprice stays auditable: the row records what it was charged and
-  /// under which list, and neither is ever recomputed.
+  /// Which revision of USAGE_PRICES was in force. Stamped even when nothing
+  /// matched, because "priced under version 1 and found nothing" is the fact
+  /// worth keeping - it says which list to look in.
   priceVersion Int @map("price_version")
+
+  /// Why this row has no cost. Null when it does.
+  unpricedReason String? @map("unpriced_reason")
+
+  /// Idempotency, because DEFAULT_JOB_OPTIONS sets attempts: 5.
+  ///
+  /// A job that emits its usage event and then fails emits again on every
+  /// retry - five rows for one provider call, in the table that becomes an
+  /// invoice. Derived deterministically from the work being priced, so the
+  /// retry produces the same key and the insert is a no-op.
+  dedupeKey String @map("dedupe_key")
 
   /// When it happened, which is not always when it was written - a retried job
   /// records the original moment.
@@ -441,6 +463,9 @@ model UsageEvent {
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
+  /// The idempotency constraint. Scoped to the company so two tenants cannot
+  /// collide on a key derived from a job id.
+  @@unique([companyId, dedupeKey])
   @@index([companyId, occurredAt(sort: Desc)])
   @@map("usage_events")
 }

@@ -8,10 +8,20 @@
 -- later phase would start with a hole exactly as wide as the delay in creating
 -- it. The integration verification path is its first emitter.
 --
--- cost_minor, currency and price_version are NOT NULL with no default, which is
--- correct while the table is empty and forces every emitter to say what it
--- charged, in what currency, under which price list. A default of 0 would let a
--- caller that forgot to price something write a free row that looks deliberate.
+-- cost_micros is millionths of a currency unit, not minor units. Phase 7 prices
+-- AI calls below a cent each, and a paise-denominated column rounds a $0.0003
+-- reply to zero: a thousand conversations then sum to nothing and the invoice
+-- is quietly short. BIGINT because INTEGER tops out near 2,147 currency units
+-- per row, which a day of ad spend passes.
+--
+-- It is nullable, and an unpriced event writes NULL rather than 0. Zero claims
+-- something was free; NULL records that no claim was made. Summed they are
+-- indistinguishable and the total looks equally authoritative either way, so
+-- the count of unpriced rows is reported beside it instead.
+--
+-- dedupe_key exists because DEFAULT_JOB_OPTIONS sets attempts: 5. A job that
+-- emits its usage event and then fails emits again on every retry - five rows
+-- for one provider call, in the table that becomes an invoice.
 
 -- CreateTable
 CREATE TABLE "usage_events" (
@@ -19,13 +29,18 @@ CREATE TABLE "usage_events" (
     "company_id" TEXT NOT NULL,
     "kind" TEXT NOT NULL,
     "quantity" INTEGER NOT NULL DEFAULT 1,
-    "cost_minor" INTEGER NOT NULL,
-    "currency" TEXT NOT NULL,
+    "cost_micros" BIGINT,
+    "currency" TEXT,
     "price_version" INTEGER NOT NULL,
+    "unpriced_reason" TEXT,
+    "dedupe_key" TEXT NOT NULL,
     "occurred_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "usage_events_pkey" PRIMARY KEY ("id")
 );
+
+-- CreateIndex
+CREATE UNIQUE INDEX "usage_events_company_id_dedupe_key_key" ON "usage_events"("company_id", "dedupe_key");
 
 -- CreateIndex
 CREATE INDEX "usage_events_company_id_occurred_at_idx" ON "usage_events"("company_id", "occurred_at" DESC);

@@ -390,16 +390,17 @@ describe("the credential vault", () => {
 describe("usage events", () => {
   async function record(
     company: SeededCompany,
-    costMinor: number,
+    costMicros: number,
   ): Promise<void> {
     await withCompany(company.id, (db, companyId) =>
       db.usageEvent.create({
         data: {
           companyId,
           kind: "integration.verify",
-          costMinor,
+          costMicros: BigInt(costMicros),
           currency: "INR",
           priceVersion: 1,
+          dedupeKey: `seed:${company.id}:${costMicros}`,
         },
       }),
     );
@@ -417,7 +418,7 @@ describe("usage events", () => {
     const rows = await withCompany(alpha.id, (db) =>
       db.$queryRaw<
         Array<{ total: bigint | null }>
-      >`SELECT SUM(cost_minor)::bigint AS total FROM usage_events WHERE currency = 'INR'`,
+      >`SELECT SUM(cost_micros)::bigint AS total FROM usage_events WHERE currency = 'INR'`,
     );
 
     expect(Number(rows[0]?.total ?? 0)).toBe(7);

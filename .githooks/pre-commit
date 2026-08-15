@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# The gate, where it cannot be talked out of running.
+#
+# `npm run verify` has been bypassed three times in this phase, every time the
+# same way: piping it to `tail` or `grep` to read the summary. A pipeline's exit
+# status is the LAST command's, so `npm run verify | tail -2 && git commit`
+# commits on a red gate because `tail` succeeded. Nothing warns.
+#
+# Redirect, never pipe. `>` preserves the exit status of the command; `|` hands
+# you the status of whatever you piped into. That rule is why this script writes
+# to a file and reads it afterwards rather than doing the obvious thing.
+#
+# Skipping is still possible with `git commit --no-verify`, and that is fine -
+# it is explicit, it appears in the command, and someone chose it. What this
+# removes is the accidental version.
+
+log="$(git rev-parse --git-dir)/verify.log"
+
+printf 'pre-commit: running the gate. This includes a build and the screenshot\n'
+printf '            suite, so it takes a few minutes. --no-verify skips it.\n'
+
+#
+# Capture the status on the same line that produces it.
+#
+# The first version of this script wrapped the run in `if ... then exit 0; fi`
+# and then read `$?` below, which is the status of the COMPLETED IF STATEMENT -
+# always 0. It printed "commit refused" and exited zero, and the probe commit
+# it was supposed to block landed anyway.
+#
+# That is the same failure as the pipeline this hook exists to prevent: a check
+# that reports a problem without enforcing it. Worth keeping in the file, since
+# the broken version reads perfectly well.
+#
+status=0
+npm run verify >"$log" 2>&1 || status=$?
+
+if [ "$status" -eq 0 ]; then
+  printf 'pre-commit: gate passed.\n'
+  exit 0
+fi
+
+printf '\npre-commit: THE GATE FAILED. Last 40 lines of %s:\n\n' "$log"
+tail -40 "$log"
+printf '\npre-commit: commit refused. Full output is in %s\n' "$log"
+
+exit "$status"

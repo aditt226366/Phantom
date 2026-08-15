@@ -273,6 +273,36 @@ was deleted, because the word survived in a neighbouring heading. Extracting
 the decision into a small exported function and asserting both branches is
 usually two lines more and actually fails.
 
+**Redirect the gate, never pipe it.** `npm run verify | tail -2 && git commit`
+commits on a red gate, because a pipeline's exit status is the *last* command's
+and `tail` succeeded. This swallowed a failing gate three times in Phase 4a
+before anybody noticed. Write to a file and read it afterwards:
+
+```
+npm run verify > verify.log 2>&1; echo "exit=$?"; tail -40 verify.log
+```
+
+A pre-commit hook in `.githooks/pre-commit` now runs the gate regardless of how
+the command was invoked, wired by a `prepare` script that sets
+`core.hooksPath`. `--no-verify` still skips it, which is fine: that is explicit
+and appears in the command. What the hook removes is the accidental version.
+
+**A deliberate break must prove it broke something.** Two of three breaks in one
+Phase 4a commit reported no failures, and the reason was not that the assertions
+were weak - the `perl` substitutions never matched, so nothing had changed and
+the suite was green because the code was still correct. Break-it-once discipline
+failing in exactly the way it exists to catch.
+
+So: assert the edit landed before reading the result. Match the anchor and fail
+if it is absent, or diff the file, or print the changed line. An unverified
+substitution is a test of nothing.
+
+The same shape caught the pre-commit hook itself. Its first version ran the gate
+inside `if ... then exit 0; fi` and read `$?` afterwards - which is the status of
+the completed `if`, always 0. It printed "commit refused" and exited zero, and
+the probe commit it was written to block landed anyway. Capture a status on the
+line that produces it: `cmd || status=$?`.
+
 **Break every new assertion once before committing it.** Several tests in this
 repository initially passed for the wrong reason — matching a word inside a
 comment, asserting on `textContent` for an element whose name comes from

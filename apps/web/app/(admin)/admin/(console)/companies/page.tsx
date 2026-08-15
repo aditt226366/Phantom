@@ -76,7 +76,12 @@ export default async function AdminCompaniesPage({
         <>
           <ul className="grid list-none gap-base tablet:grid-cols-2 desktop:grid-cols-3">
             {companies.map((company) => (
-              <li key={company.id}>
+              /* min-w-0, because a grid item's automatic minimum size is its
+                 min-content width and `truncate` does not reduce that — it
+                 sets white-space: nowrap, so the card's floor was the untruncated
+                 company name plus two badges. At 390 that pushed the whole page
+                 57px wide and every card past the edge of the screen. */
+              <li key={company.id} className="min-w-0">
                 <CompanyCard company={company} />
               </li>
             ))}

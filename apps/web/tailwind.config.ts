@@ -262,6 +262,12 @@ const config: Config = {
         sidebar: "var(--wa-sidebar-width)",
       },
 
+      minHeight: {
+        /* The nav bar's height is a floor, not a fixture: at 390 the admin
+           console's chrome needs two lines and h-nav clipped it. */
+        nav: "var(--wa-nav-height)",
+      },
+
       maxWidth: {
         container: "var(--wa-container-max)",
         /* One readable column. Named `narrow` rather than reusing a spacing

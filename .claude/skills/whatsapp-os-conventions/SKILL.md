@@ -257,30 +257,77 @@ It hides well: `integration-form.tsx` had the barrel import for six commits and
 built fine, because until a page rendered it the component was reachable only
 from tests and never entered the client graph at all.
 
-**A spacing key silently overrides the built-in max-width of the same name.**
-Tailwind derives its max-width utilities from the spacing scale as well as its
-own, so `spacing.md` and the built-in `md` size are the same utility and the
-config wins. This system defines spacing keys called xs, sm, base, md, lg, xl
-and xxl — so every Tailwind max-width of those names is a spacing value.
+**A spacing key silently overrides the built-in size of the same name.**
+Tailwind derives its size utilities from the spacing scale as well as its own,
+and the config's key wins. This system defines spacing keys called xs, sm,
+base, md, lg, xl and xxl — every one of which is also a Tailwind size name. So
+`max-w-md` is 20px, `w-xl` is 32px, `h-lg` is 24px, across `w- min-w- max-w-
+h- min-h- max-h- size- basis-`.
 
-One of them capped every auth card, every empty state and a table cell at 20px:
+`max-w-md` capped every auth card, every empty state and a table cell at 20px:
 the card rendered at its padding, one word per line, and the pill CTA looked
 like a circle. Nothing warned. `cn()` merges an inert class happily, the class
-exists in the stylesheet, and the type system has no opinion.
+exists in the stylesheet, and the type system has no opinion. It was not the
+bug — it was one draw from a bag of seven names across eight prefixes.
 
-Width utilities named for a measure must use a name that cannot collide —
-`--wa-measure-*` mapped to `maxWidth.narrow` is the pattern. Do not name a
-maxWidth key after a spacing key.
+An extent named for a measure must use a name that cannot collide —
+`--wa-measure-*` mapped to `maxWidth.narrow` is the pattern. Never name a size
+key after a spacing key. Padding, margin and gap are the opposite case: those
+are *supposed* to come from the spacing scale.
 
 `apps/web/tests/server/css-utilities.test.ts` guards both halves: every class
-in `app/**` and `components/**` resolves to a rule, and no max-width resolves
-to a spacing token. The second check is the one that matters — the collapsing
-class *existed*, so an existence check alone passes it.
+in `app/**` and `components/**` resolves to a rule, and no size utility
+resolves to a spacing token. The second check is the one that matters — the
+collapsing class *existed*, so an existence check alone passes it. Legitimate
+exceptions (a 4px bar genuinely is one spacing base) go in that test's
+`INTENDED` map with a reason, the way `GLOBAL_TABLES` works in the schema
+invariants.
 
 That test reads the compiled stylesheet, so it needs a build and skips
 explicitly without one. Keep classes as literal strings: a class assembled from
 a variable is invisible to Tailwind's scanner too, which is the better reason
 not to write one.
+
+---
+
+### The screenshot suite
+
+`npm run test:visual` — Playwright, every rendered page at 1440 and 390,
+against `apps/web/tests/visual/__screenshots__`. Part of `npm run verify`,
+which is the gate.
+
+It exists because six UI commits shipped with the suite green and no page ever
+opened, and because the checks above cannot see everything: they prove a class
+resolves to a plausible value, not that the result looks right. Two faults that
+survived every source-level check were found by measuring the rendered pages —
+the admin nav on one fixed-height row, and a grid item whose automatic minimum
+size was the untruncated company name. Both took the console 90-odd pixels wide
+on a phone.
+
+Things worth knowing before touching it:
+
+- **The fixture is literal.** `apps/web/scripts/visual-seed.mjs` writes fixed
+  ids, names, counts and timestamps into `whatsapp_os_test`. A suite that diffs
+  on a moving value is one people re-record without looking.
+- **The one moving part is the platform day.** "API calls today" and "Est.
+  spend this month" are windowed at render time, so their events are stamped
+  `now()`. A run crossing midnight IST between seed and screenshot sees both
+  cards go to zero. Re-seed and re-run.
+- **Baselines are per platform** — `{platform}` is in the snapshot path,
+  because the same Chromium rasterises text differently on Windows, macOS and
+  Linux. A first run on a new platform reports them missing and writes them.
+- **Sign-in goes through the form**, not a hand-written session row, so the
+  cookie contract in `lib/auth/cookies.ts` is stated once. It then puts
+  `last_login_at` back, because the console renders it.
+- **Every page is asserted narrower than the viewport** before it is
+  photographed. `fullPage` captures the whole scroll area, so an overflowing
+  page would otherwise produce a wider baseline that matches itself forever.
+- **Adding a page means adding it to `ROUTES`** in `tests/visual/fixture.ts`.
+  A coverage test walks `app/**` and fails on anything missing, in both
+  directions.
+
+Re-record with `npm run test:visual:update` — and then look at the images. A
+baseline nobody reviewed is a screenshot of a bug.
 
 **Never resolve a data file relative to `import.meta.url` in bundled code.**
 `denylist.ts` did `new URL("./data/…", import.meta.url)` and handed it to

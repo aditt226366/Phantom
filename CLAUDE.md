@@ -108,5 +108,7 @@ explicit `.ts` extensions.
 | `npm run db:roles` | Provision roles and ownership (idempotent) |
 | `npm run db:nuke -- dev\|test` | Rebuild that database from nothing. Target required |
 | `npm test` | Every project |
+| `npm run test:visual` | Screenshots of every page at 1440 and 390 |
+| `npm run verify` | The gate: typecheck, lint, build, test, test:visual |
 | `npm run typecheck` / `lint` / `build` | The usual |
 | `npm run admin:hash` / `admin:seed` | Platform admin credential |

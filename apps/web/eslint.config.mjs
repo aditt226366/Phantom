@@ -46,7 +46,17 @@ const RESTRICTED_DB_IMPORTS = {
 
 const config = [
   {
-    ignores: [".next/**", "node_modules/**", "next-env.d.ts"],
+    /* playwright-report and test-results hold Playwright's own bundled
+       reporter and whatever a failed run captured. Both are gitignored, and
+       linting a minified vendor bundle produces 186 errors about a variable
+       called `be`. */
+    ignores: [
+      ".next/**",
+      "node_modules/**",
+      "next-env.d.ts",
+      "playwright-report/**",
+      "test-results/**",
+    ],
   },
   ...next,
 

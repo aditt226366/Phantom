@@ -37,3 +37,9 @@ Thumbs.db
 # misc
 .turbo/
 coverage/
+
+# playwright — the baselines under tests/visual/__screenshots__ ARE committed;
+# these three are the run's own scratch
+apps/web/tests/visual/.auth/
+apps/web/test-results/
+apps/web/playwright-report/

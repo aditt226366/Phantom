@@ -11,6 +11,13 @@ import { adminSignOutAction } from "../actions";
  *
  * Log out is a form, not a link: it changes server state, and a GET that
  * changes state is one a prefetcher can fire on hover.
+ *
+ * It wraps rather than collapsing into a menu. Five items — a wordmark, two
+ * links, a username and a button — need about 500px and a phone offers 342, so
+ * on one fixed-height row they ran off the side of every console page and took
+ * 94px of horizontal scroll with them. Two links do not justify a drawer; they
+ * justify a second line, which is why the height below is a floor and not a
+ * fixture. Nothing about the desktop row changes.
  */
 
 const LINKS = [
@@ -21,8 +28,8 @@ const LINKS = [
 export function AdminNav({ username }: { username: string }) {
   return (
     <header className="border-b border-hairline bg-surface-card">
-      <div className="mx-auto flex h-nav max-w-container items-center justify-between gap-base px-lg">
-        <div className="flex items-center gap-lg">
+      <div className="mx-auto flex min-h-nav max-w-container flex-wrap items-center justify-between gap-x-base gap-y-xs px-lg py-xs">
+        <div className="flex flex-wrap items-center gap-x-lg gap-y-xxs">
           <span className="font-display text-title-md text-ink">
             Platform admin
           </span>
@@ -40,7 +47,7 @@ export function AdminNav({ username }: { username: string }) {
           </nav>
         </div>
 
-        <div className="flex items-center gap-base">
+        <div className="flex shrink-0 items-center gap-base">
           <span className="text-body-sm text-muted">{username}</span>
 
           <form action={adminSignOutAction}>

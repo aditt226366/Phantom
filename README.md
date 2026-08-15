@@ -92,14 +92,35 @@ Run from the repo root:
 
 | Command | Does |
 | --- | --- |
+| `npm run verify` | The gate: typecheck, lint, build, tests, screenshots |
 | `npm run dev` | Web app on :3000 |
 | `npm run dev:worker` | Worker, watching for changes |
 | `npm run build` | Production build of the web app |
 | `npm run typecheck` | `tsc --noEmit` across every workspace |
 | `npm run lint` | ESLint on the web app |
+| `npm test` | Vitest, five projects |
+| `npm run test:visual` | Screenshots of every page, 1440 and 390 |
+| `npm run test:visual:update` | Re-record the baselines — then look at them |
 | `npm run db:migrate` | `prisma migrate dev` |
 | `npm run db:studio` | Prisma Studio |
 | `npm run services:up` / `:down` | Postgres + Redis |
+
+`verify` runs in that order for a reason: two of the checks read the compiled
+stylesheet and one drives a built server, so the build has to come before the
+tests rather than after them.
+
+The screenshot suite needs a browser once:
+
+```bash
+npx playwright install chromium
+```
+
+It runs `next start` on :3210 against `whatsapp_os_test`, seeds a fixed fixture
+into it — same company, same timestamps, same counts every run — and diffs 50
+full-page screenshots against `apps/web/tests/visual/__screenshots__`. The
+baselines are per platform, because the same Chromium rasterises text
+differently on Windows, macOS and Linux; a first run on a new platform reports
+the snapshots as missing and writes them rather than passing quietly.
 
 ---
 

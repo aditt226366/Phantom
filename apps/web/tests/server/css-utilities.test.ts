@@ -30,9 +30,12 @@ import { describe, expect, it } from "vitest";
  * ---------------------------------------------------------------------------
  *
  * The first is "does a rule exist", which catches w-button. The second is
- * "does a max-width resolve to a spacing token", which catches max-w-md — a
- * class that exists and is wrong. A check for existence alone would have
- * passed the bug that actually collapsed the pages.
+ * "is an element's extent taken from the spacing scale", which catches
+ * max-w-md — a class that exists and is wrong. A check for existence alone
+ * would have passed the bug that actually collapsed the pages.
+ *
+ * The second check covers the whole size family rather than the one utility
+ * that shipped broken; see its own comment for why that is not scope creep.
  *
  * This reads the compiled stylesheet, so it needs a build. It is skipped with
  * a clear message rather than failing when .next is absent, because a
@@ -188,29 +191,82 @@ describe.skipIf(css === null)("every utility used resolves to a rule", () => {
     ).toEqual([]);
   });
 
-  it("never resolves a max-width to a spacing token", () => {
+  it("never sizes an element from a spacing token", () => {
     /*
-     * The failure that existence alone cannot catch. Tailwind builds
-     * max-w-* from the spacing scale too, so a spacing key sharing a name
-     * with a built-in size silently wins — and a card capped at 20px looks
-     * like a layout bug rather than a config one.
+     * The failure that existence alone cannot catch.
      *
-     * A max-width in spacing units is never what anybody means. Name the
-     * token something that cannot collide, as --wa-measure-* does.
+     * Tailwind builds its size utilities from the spacing scale as well as its
+     * own named scale, and the config's key wins. This system names spacing
+     * xs, sm, base, md, lg, xl and xxl — every one of which is also a Tailwind
+     * size name. So `max-w-md` is 20px, `w-xl` is 32px, `h-lg` is 24px, and
+     * each of them reads in source as the size it is not.
+     *
+     * max-w-md is the one that shipped. It was not the bug; it was one draw
+     * from a bag of seven names across eight utility prefixes, and the next
+     * draw is as likely as that one was. So the rule covers the family:
+     *
+     *     w-  min-w-  max-w-  h-  min-h-  max-h-  size-  basis-
+     *
+     * Padding, margin and gap are untouched — those are *supposed* to come
+     * from the spacing scale, and p-md meaning 20px is the system working.
+     * What is never intended is a box whose extent is a gap.
+     *
+     * The fix is always a name that cannot collide, as --wa-measure-narrow
+     * does, never a different spacing key.
      */
-    const collapsed: string[] = [];
+    /**
+     * The exceptions, each with its reason.
+     *
+     * A rule about a whole family has legitimate exceptions, and the way this
+     * repo handles those is the way GLOBAL_TABLES does in the schema
+     * invariants: name them here with a justification, so opting out is a
+     * visible diff inside the test rather than a loophole in it.
+     *
+     * A *height* from the spacing scale is the honest case — a 4px rule is
+     * exactly one spacing base, and that is what it means to be one. A width
+     * from it almost never is, which is why nothing below is a width.
+     */
+    const INTENDED = new Map([
+      ["h-xxs", "the plan-distribution bar is a 4px rule, which is the base unit"],
+    ]);
 
-    for (const [cls] of usedClasses()) {
-      const decl = declarations.get(cls) ?? declarations.get(bareOf(cls));
+    const SIZE_PROPERTIES = [
+      "width",
+      "min-width",
+      "max-width",
+      "height",
+      "min-height",
+      "max-height",
+      "flex-basis",
+    ];
+
+    /* `size-*` sets width and height together, `basis-*` sets flex-basis, and
+       the shorthand `flex: … var(--x)` some versions emit carries the basis
+       in third position. Matching on the declaration text rather than on the
+       class prefix means a renamed utility cannot slip past. */
+    const pattern = new RegExp(
+      `(^|;)\\s*(${SIZE_PROPERTIES.join("|")})\\s*:\\s*var\\(--wa-space-`,
+    );
+
+    const sized: string[] = [];
+
+    for (const [cls, where] of usedClasses()) {
+      const bare = bareOf(cls);
+      if (INTENDED.has(bare)) continue;
+
+      const decl = declarations.get(cls) ?? declarations.get(bare);
       if (!decl) continue;
-      if (/^\s*(max-width|min-width)\s*:\s*var\(--wa-space-/.test(decl)) {
-        collapsed.push(`${cls} -> ${decl.trim()}`);
-      }
+      if (!pattern.test(decl)) continue;
+
+      const property = pattern.exec(decl)?.[2];
+      sized.push(
+        `${cls} -> ${property}:var(--wa-space-…)  (${where.join(", ")})`,
+      );
     }
 
     expect(
-      collapsed.sort(),
-      "a max-width resolving to a spacing token collapses the element",
+      sized.sort(),
+      "an extent taken from the spacing scale is a collapsed element, not a small one",
     ).toEqual([]);
   });
 });

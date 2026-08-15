@@ -37,6 +37,21 @@ process.env["DATABASE_URL_ADMIN"] = testAdminDatabaseUrl();
 process.env["ENCRYPTION_KEY"] ??= Buffer.alloc(32).toString("base64");
 
 /*
+ * The vault keyring, separately from ENCRYPTION_KEY above — the two are
+ * unrelated and both required.
+ *
+ * A fixed placeholder rather than a generated key, so a ciphertext written by
+ * one test run can be read by the assertions in the same run and nothing
+ * depends on ordering. Two ids, because rotation is a real code path and a
+ * single-key ring cannot exercise it.
+ */
+process.env["ENCRYPTION_KEYS"] ??= [
+  `k1:${Buffer.alloc(32, 1).toString("base64")}`,
+  `k2:${Buffer.alloc(32, 2).toString("base64")}`,
+].join(",");
+process.env["ENCRYPTION_KEY_ACTIVE"] ??= "k1";
+
+/*
  * Belt and braces: every connection string the app reads must now resolve to
  * the test database. Three variables have each caused a silent
  * wrong-database run once.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseKeyMaterial } from "./encryption.ts";
 import { err, ok, type Result } from "./types.ts";
 
 /**
@@ -60,13 +61,63 @@ export const sharedEnvSchema = z.object({
       "REDIS_URL must be a redis:// or rediss:// connection string",
     ),
 
-  /** 32 raw bytes, base64-encoded. Generate: openssl rand -base64 32 */
+  /**
+   * 32 raw bytes, base64-encoded. Generate: openssl rand -base64 32
+   *
+   * Not part of the vault keyring, and not interchangeable with it. This is the
+   * HMAC key that hashIp() uses in session-store.ts and admin-session.ts, so
+   * changing it invalidates every stored ip_hash rather than anything
+   * decryptable. It stays required independently of ENCRYPTION_KEYS.
+   */
   ENCRYPTION_KEY: z
     .string()
     .min(1, "ENCRYPTION_KEY is required")
     .refine(
       (value) => Buffer.from(value, "base64").length === 32,
       "ENCRYPTION_KEY must decode to exactly 32 bytes (openssl rand -base64 32)",
+    ),
+
+  /**
+   * The vault keyring: `id:base64key,id:base64key`.
+   *
+   * Several at once, because rotation needs the old key to still open old rows
+   * while the new one seals new ones. Validated with the same parser the
+   * encryption module uses, rather than a second regex that agrees with it
+   * until it does not.
+   *
+   * Single-quote this in .env: Docker Compose reads the same file, and base64
+   * is fine but the habit is what keeps an Argon2 hash two lines down from
+   * being expanded.
+   */
+  ENCRYPTION_KEYS: z
+    .string()
+    .min(1, "ENCRYPTION_KEYS is required")
+    .refine(
+      (value) => {
+        try {
+          parseKeyMaterial(value);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      "ENCRYPTION_KEYS must be id:base64key pairs, comma-separated, each key " +
+        "decoding to 32 bytes and each id matching [a-z0-9_]{1,16}",
+    ),
+
+  /**
+   * Which key seals new writes.
+   *
+   * That it names a key actually present in ENCRYPTION_KEYS is checked by
+   * createKeyring(), not here: an object-level refinement would make this
+   * schema unextendable, and both webEnvSchema and workerEnvSchema extend it.
+   */
+  ENCRYPTION_KEY_ACTIVE: z
+    .string()
+    .min(1, "ENCRYPTION_KEY_ACTIVE is required")
+    .regex(
+      /^[a-z0-9_]{1,16}$/,
+      "ENCRYPTION_KEY_ACTIVE must match [a-z0-9_]{1,16}",
     ),
 });
 

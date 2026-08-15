@@ -317,6 +317,34 @@ model Integration {
 /// reached through it. RLS evaluates per table: a policy that had to join
 /// integrations to find the company would be a policy that can be got wrong,
 /// and the composite index this requires is the one the vault reads by anyway.
+///
+/// ---------------------------------------------------------------------------
+/// Three columns are load-bearing beyond their values
+/// ---------------------------------------------------------------------------
+///
+/// Each ciphertext is bound to where it lives. AES-GCM takes additional
+/// authenticated data, and the vault passes
+/// `${company_id}:${integration_id}:${key}` - derived from the row at call
+/// time, never stored. A ciphertext lifted out of one company's row and written
+/// into another's fails to decrypt instead of quietly working, which is the
+/// same guarantee RLS gives one table lower down.
+///
+/// The cost is that those three values are effectively immutable:
+///
+///   company_id      a secret cannot be moved between companies. Correct, and
+///                   nothing should ever want to.
+///   integration_id  re-pointing a secret at a different integration row is a
+///                   decrypt-and-re-encrypt, not an UPDATE. This matters when
+///                   the unique on (company_id, provider) relaxes in Phase 4/6
+///                   and secrets start moving between integration rows.
+///   key             renaming a credential in INTEGRATION_KEYS is a
+///                   decrypt-and-re-encrypt too, not a string change in
+///                   packages/core/src/integrations.ts. Meta has renamed
+///                   credentials before, so this is the one likely to be
+///                   discovered by breaking it.
+///
+/// In all three cases the symptom is EncryptionError on every read of the
+/// affected rows, not silent wrong data.
 model IntegrationSecret {
   id            String @id @default(cuid())
   companyId     String @map("company_id")

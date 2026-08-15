@@ -338,6 +338,36 @@ the completed `if`, always 0. It printed "commit refused" and exited zero, and
 the probe commit it was written to block landed anyway. Capture a status on the
 line that produces it: `cmd || status=$?`.
 
+**Break-once mutates the database, and a killed process never cleans up.**
+That is not a discipline problem and cannot be fixed by being more careful.
+A probe that adds a column, drops a policy or disables RLS undoes itself in a
+`finally`, an `afterEach`, or the next line — none of which run when the worker
+is killed, and this suite has a worker that dies for reasons nobody has found.
+
+What it looks like next time: a suite that was green an hour ago fails in
+several unrelated files at once, with unique and foreign-key violations that
+read exactly like a broken feature, and **nothing in the diff explains it**. One
+occurrence cost an afternoon — `email_verification_tokens.forced_failure`,
+NOT NULL with no default, left behind by a probe and present in no migration, no
+`schema.prisma` and no source file.
+
+Nothing routine catches it. `prisma migrate deploy` only applies migrations and
+never removes what one did not create, and the drift check runs against the
+*development* database, which stays clean the whole time.
+
+So the answer is detection at the start of the next run, not prevention:
+`migrate-test.mjs` diffs `whatsapp_os_test` against `schema.prisma` before any
+test file loads, and refuses the run with `EXIT_SCHEMA_DRIFT`. Both the script
+and the Vitest globalSetup name the remedy, which is:
+
+```
+npm run db:nuke -- test
+```
+
+Deliberately before the tests rather than after: the run that *inherits* the
+stray object is the one that should fail. Failing afterwards would report it on
+the run after the one that was actually confusing.
+
 **Break every new assertion once before committing it.** Several tests in this
 repository initially passed for the wrong reason — matching a word inside a
 comment, asserting on `textContent` for an element whose name comes from

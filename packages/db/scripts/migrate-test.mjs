@@ -8,6 +8,7 @@ import {
   maintenanceDatabaseUrl,
   testDatabaseUrl,
 } from "./db-urls.mjs";
+import { EXIT_SCHEMA_DRIFT } from "./setup-exit-codes.mjs";
 
 /**
  * Create the test database if it is missing, then bring it up to date.
@@ -91,6 +92,7 @@ try {
   }
 
   runMigrations();
+  assertTestDatabaseMatchesSchema();
 } finally {
   await lockHolder.end();
 }
@@ -115,4 +117,103 @@ function runMigrations() {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+/**
+ * Refuse to run against a test database holding something no migration created.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this runs before the tests rather than after them
+ * ---------------------------------------------------------------------------
+ *
+ * Because the run that INHERITS a stray object is the one that should fail, not
+ * the one after it.
+ *
+ * The case this was written for: a break-once probe added
+ * email_verification_tokens.forced_failure — NOT NULL, no default — and its
+ * cleanup never ran, most likely because the fork crash killed the worker
+ * holding it. The next run then failed 62 tests across 15 files in two
+ * projects, with unique and foreign-key violations that read exactly like a
+ * broken feature, and the cause was in no migration, no schema.prisma and no
+ * source file. Every tool that looks for drift missed it:
+ * `prisma migrate deploy` only applies migrations and never removes what one
+ * did not create, and the drift check in the conventions runs against the
+ * DEVELOPMENT database, which was clean throughout.
+ *
+ * A trap or a finally in the probe would not have helped. A killed process runs
+ * neither. Detection at the start of the next run is the durable answer,
+ * because it does not depend on the previous run having exited at all.
+ *
+ * Held inside the advisory lock with the migration, so a concurrent
+ * `npm run db:test:setup` cannot be diffed against half way through applying.
+ */
+function assertTestDatabaseMatchesSchema() {
+  const require = createRequire(import.meta.url);
+  const prismaCli = require.resolve("prisma/build/index.js");
+
+  /*
+   * --from-config-datasource reads prisma.config.ts, which reads DATABASE_URL —
+   * overridden below, so this compares the TEST database against the schema.
+   * Piped rather than inherited: the printed steps are the evidence of what
+   * drifted, and they are worth showing under our own message rather than on
+   * their own.
+   */
+  const diff = spawnSync(
+    process.execPath,
+    [
+      prismaCli,
+      "migrate",
+      "diff",
+      "--from-config-datasource",
+      "--to-schema",
+      "prisma/schema.prisma",
+      "--exit-code",
+    ],
+    {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_URL: testDatabaseUrl() },
+    },
+  );
+
+  /* 0 = identical, 2 = a difference, anything else = the check itself failed. */
+  if (diff.status === 0) return;
+
+  if (diff.status !== 2) {
+    console.error(
+      `\nCould not compare ${TEST_DATABASE_NAME} against prisma/schema.prisma ` +
+        `(prisma migrate diff exited ${diff.status}).\n`,
+    );
+    console.error(diff.stderr || diff.stdout || "");
+    process.exit(diff.status ?? 1);
+  }
+
+  console.error(
+    [
+      "",
+      `${TEST_DATABASE_NAME} does not match prisma/schema.prisma.`,
+      "",
+      "The migrations all applied, so this is something in the database that no",
+      "migration created — most likely a deliberate break whose cleanup never ran",
+      "because the process was killed mid-test. It is not a code change, and",
+      "looking for one in the diff will waste an afternoon: the symptom is",
+      "unrelated suites failing at once with constraint violations.",
+      "",
+      "Fix it by rebuilding the test database:",
+      "",
+      "    npm run db:nuke -- test",
+      "",
+      "Nothing of value lives there — every suite seeds what it needs.",
+      "",
+      "What the database has that the schema does not (as migration steps that",
+      "would bring it back into line):",
+      "",
+      diff.stdout.trim(),
+      "",
+    ].join("\n"),
+  );
+
+  /* A code of its own, so the globalSetup that spawned this repeats the right
+     instruction rather than the generic "is Postgres up". */
+  process.exit(EXIT_SCHEMA_DRIFT);
 }

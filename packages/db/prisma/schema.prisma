@@ -53,9 +53,9 @@ enum AuditAction {
 /// What a company pays for. Drives the plan distribution on the admin
 /// overview, and nothing else yet - entitlements are Phase 6.
 enum Plan {
-  FREE
+  STARTER
   PRO
-  SCALE
+  ENTERPRISE
 
   @@map("plan")
 }
@@ -75,7 +75,7 @@ model Company {
   slug String @unique
 
   name String
-  plan Plan @default(FREE)
+  plan Plan @default(STARTER)
 
   /// Set to suspend the workspace. Null means active.
   ///
@@ -378,8 +378,8 @@ model IntegrationVerification {
 /// this way repricing only ever affects the future, and the read path is a SUM.
 ///
 /// `kind` is text, not an enum, because the price list in @whatsapp-os/core is
-/// the source of truth for what kinds exist - USAGE_PRICES is a
-/// Record<UsageKind, number>, so a kind that nothing has priced does not
+/// the source of truth for what kinds exist - USAGE_PRICES is keyed by
+/// (kind, currency, version), so a kind that nothing has priced does not
 /// compile. A second list in the database could only disagree with it. Every
 /// write goes through recordUsage(), which takes the union.
 model UsageEvent {
@@ -388,9 +388,24 @@ model UsageEvent {
 
   kind     String
   quantity Int    @default(1)
-  /// Whole cents. Integer arithmetic, because money in a float is a bug with a
-  /// delay on it.
-  costCents Int   @default(0) @map("cost_cents")
+
+  /// Cost in `currency`'s minor unit - paise for INR, cents for USD. Integer
+  /// arithmetic, because money in a float is a bug with a delay on it.
+  ///
+  /// Deliberately not named "cents". Meta bills in the ad account's own
+  /// currency and the AI providers bill USD, so one column named for one of
+  /// them would end up summing INR and USD into a number that means nothing,
+  /// and it would look like a total rather than like a bug.
+  costMinor Int @map("cost_minor")
+
+  /// ISO 4217, e.g. INR or USD. A total is only meaningful within one
+  /// currency, so every read groups by this rather than adding across it.
+  currency String
+
+  /// Which revision of USAGE_PRICES priced this row. Stamped beside the cost
+  /// so a reprice stays auditable: the row records what it was charged and
+  /// under which list, and neither is ever recomputed.
+  priceVersion Int @map("price_version")
 
   /// When it happened, which is not always when it was written - a retried job
   /// records the original moment.

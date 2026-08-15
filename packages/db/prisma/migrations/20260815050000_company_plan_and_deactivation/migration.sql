@@ -5,11 +5,11 @@
 -- actually stop working.
 
 -- CreateEnum
-CREATE TYPE "plan" AS ENUM ('FREE', 'PRO', 'SCALE');
+CREATE TYPE "plan" AS ENUM ('STARTER', 'PRO', 'ENTERPRISE');
 
 -- AlterTable
 ALTER TABLE "companies" ADD COLUMN     "deactivated_at" TIMESTAMP(3),
-ADD COLUMN     "plan" "plan" NOT NULL DEFAULT 'FREE';
+ADD COLUMN     "plan" "plan" NOT NULL DEFAULT 'STARTER';
 
 
 -- ===========================================================================

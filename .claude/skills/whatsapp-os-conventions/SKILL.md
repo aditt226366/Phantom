@@ -27,6 +27,19 @@ have moved, and the failure is a confusing usage dump rather than a clear error.
   ```
   Run it after every hand-written migration. Exit 0 means no drift.
 - The datasource URL is in `prisma.config.ts`, not `schema.prisma`.
+- `migrate reset` takes only `--config`, `--schema` and `--force`. There is no
+  `--skip-seed`, and passing it makes the CLI print a usage dump rather than
+  name the bad flag.
+
+**`prisma migrate reset` leaves the owner unable to migrate.** It drops and
+recreates schema `public`, which lands owned by the bootstrap superuser, so
+`whatsapp_owner` loses `CREATE` and the very next `migrate deploy` fails with
+`permission denied for schema public` — then records a *failed* migration, so
+subsequent runs refuse with P3009 and the database is stuck.
+
+Recovering is `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` as the owner,
+then `npm run db:roles`, then `migrate deploy`. Run `db:roles` after any reset:
+it is what re-grants schema privileges and re-establishes ownership.
 
 **P2002 carries no constraint name.** Through a driver adapter the message is
 literally `Unique constraint failed on the (not available)` and `meta.target` is
@@ -160,6 +173,39 @@ comment, asserting on `textContent` for an element whose name comes from
 `aria-label`, or creating a row so incomplete that a `NOT NULL` constraint
 rejected it before the policy under test could. A test that has never failed has
 not been tested.
+
+**Isolation tests use raw SQL, never the ORM.** Any query through a model in
+`COMPANY_SCOPED_MODELS` has its `companyId` filter injected by the extension, so
+it passes with every policy dropped. An ORM test proves the convention holds;
+only raw SQL proves the boundary does. Verify by dropping the policies and
+confirming the test fails.
+
+Three of the five vault isolation tests in Phase 2 passed with RLS switched off
+before being rewritten. `packages/db/tests/no-orm-in-isolation.test.ts` now
+enforces the rule at source level, with an allowlist of the five tests that are
+legitimately not about a policy — role attributes, catalog facts, fixture
+sanity, and the TRUNCATE grant.
+
+**The destructive audit.** The source-level check catches ORM calls; only this
+catches an assertion that is green for some other wrong reason. Disable RLS on
+every tenant table, run the db suite, and confirm that everything outside the
+allowlist fails:
+
+```sql
+ALTER TABLE "<each tenant table>" DISABLE ROW LEVEL SECURITY;
+-- npx vitest run --project db packages/db/tests/rls-isolation.test.ts --reporter=verbose
+ALTER TABLE "<each tenant table>" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "<each tenant table>" FORCE ROW LEVEL SECURITY;
+```
+
+A test still passing is proving something other than the boundary. As of Phase 2
+exactly five survive, and they are the five in the allowlist — so any sixth is
+the finding.
+
+Run it again at the end of a phase, not only when the tests are written. The
+tests that drifted were all correct when committed; what changed underneath them
+was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
+ORM assertions into extension tests.
 
 ## Next.js 16
 

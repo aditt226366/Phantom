@@ -331,6 +331,42 @@ describe("schema invariants", () => {
       }
     });
 
+    it("keeps app_resolver's reach into companies to three columns", async () => {
+      const { rows: whole } = await db.query<{ privilege_type: string }>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+         WHERE grantee = 'app_resolver'
+           AND table_schema = 'public' AND table_name = 'companies'`,
+      );
+
+      /*
+       * The entire argument for giving app_resolver cross-company reach is
+       * that it can see almost nothing. A whole-table grant is how that stops
+       * being true silently: `deactivated_at` was readable by the resolver
+       * before anything granted it, purely because the original grant was
+       * wider than intended, and the next column added to companies would
+       * have been too.
+       */
+      expect(
+        whole.map((r) => r.privilege_type),
+        "app_resolver holds a whole-table grant on companies",
+      ).toEqual([]);
+
+      const { rows: columns } = await db.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.column_privileges
+         WHERE grantee = 'app_resolver'
+           AND table_schema = 'public' AND table_name = 'companies'
+         ORDER BY column_name`,
+      );
+
+      /* id and deactivated_at for app_resolve_company, slug for
+         app_available_slug. Widening this is a migration and a diff here. */
+      expect(columns.map((r) => r.column_name)).toEqual([
+        "deactivated_at",
+        "id",
+        "slug",
+      ]);
+    });
+
     it("keeps the lookup functions owned by app_resolver", async () => {
       const { rows } = await db.query<{ proname: string; owner: string }>(
         `SELECT p.proname, p.proowner::regrole::text AS owner

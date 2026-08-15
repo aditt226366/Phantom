@@ -7,6 +7,11 @@
 -- point: usage that was never recorded cannot be backfilled, so Billing in a
 -- later phase would start with a hole exactly as wide as the delay in creating
 -- it. The integration verification path is its first emitter.
+--
+-- cost_minor, currency and price_version are NOT NULL with no default, which is
+-- correct while the table is empty and forces every emitter to say what it
+-- charged, in what currency, under which price list. A default of 0 would let a
+-- caller that forgot to price something write a free row that looks deliberate.
 
 -- CreateTable
 CREATE TABLE "usage_events" (
@@ -14,7 +19,9 @@ CREATE TABLE "usage_events" (
     "company_id" TEXT NOT NULL,
     "kind" TEXT NOT NULL,
     "quantity" INTEGER NOT NULL DEFAULT 1,
-    "cost_cents" INTEGER NOT NULL DEFAULT 0,
+    "cost_minor" INTEGER NOT NULL,
+    "currency" TEXT NOT NULL,
+    "price_version" INTEGER NOT NULL,
     "occurred_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "usage_events_pkey" PRIMARY KEY ("id")

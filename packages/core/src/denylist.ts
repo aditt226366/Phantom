@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { COMMON_PASSWORDS } from "./data/common-passwords.ts";
 
 /**
  * The bundled common-password denylist.
@@ -23,24 +23,45 @@ import { readFileSync } from "node:fs";
  * not this file.
  *
  * Source: SecLists, Passwords/Common-Credentials/10k-most-common.txt
- * (github.com/danielmiessler/SecLists, MIT). Refresh by replacing the file;
- * nothing here needs to change.
+ * (github.com/danielmiessler/SecLists, MIT). Refresh by replacing
+ * data/common-passwords.txt and running:
  *
- * Read once at module load. ~72 KB of text becomes a Set of 10,000 strings —
- * a few hundred KB resident, and O(1) lookups for the life of the process.
+ *     npm run build:denylist --workspace=@whatsapp-os/core
+ *
+ * Built into a Set on first use — 10,000 strings, a few hundred KB resident,
+ * and O(1) lookups for the life of the process.
  */
 
-const listUrl = new URL("./data/common-passwords.txt", import.meta.url);
-
+/**
+ * ---------------------------------------------------------------------------
+ * Embedded, not read from disk
+ * ---------------------------------------------------------------------------
+ *
+ * This used to resolve the .txt with `new URL(..., import.meta.url)` and hand
+ * it to readFileSync. Correct Node, correct under Vitest, broken under
+ * Turbopack: the bundler supplies its own URL implementation, so the object
+ * fails Node's `instanceof URL` check and fs rejects it with
+ *
+ *     The "path" argument must be of type string or an instance of URL.
+ *     Received an instance of URL
+ *
+ * which reads like a contradiction and means "not the URL class I compare
+ * against". Converting with fileURLToPath does not help — the URL handed to it
+ * is the foreign one — and that change only moved the failure from runtime to
+ * `next build`.
+ *
+ * So the list is generated into a TypeScript module by
+ * scripts/build-denylist.mjs and imported. No filesystem, no import.meta.url,
+ * and no outputFileTracingIncludes entry to carry a data file into the
+ * deployment. The .txt remains the source of truth and a test asserts the two
+ * agree.
+ *
+ * Same shape as the core barrel pulling @node-rs/argon2 into a client bundle:
+ * correct under the test runner, wrong under the bundler, and only reachable
+ * once a page actually calls it.
+ */
 function loadDenylist(): ReadonlySet<string> {
-  const contents = readFileSync(listUrl, "utf8");
-
-  const entries = contents
-    .split("\n")
-    .map((line) => line.trim().toLowerCase())
-    .filter((line) => line.length > 0);
-
-  return new Set(entries);
+  return new Set(COMMON_PASSWORDS);
 }
 
 let cached: ReadonlySet<string> | undefined;

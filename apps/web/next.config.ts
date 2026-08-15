@@ -76,16 +76,6 @@ const nextConfig: NextConfig = {
   /** Trace from the monorepo root so standalone output picks up workspace deps. */
   outputFileTracingRoot: path.join(here, "../../"),
 
-  /**
-   * The common-password denylist is read from disk at module load, and file
-   * tracing cannot see through `new URL(..., import.meta.url)` to know it is
-   * needed. Without this the build succeeds and the first signup fails with
-   * ENOENT.
-   */
-  outputFileTracingIncludes: {
-    "/**": ["../../packages/core/src/data/common-passwords.txt"],
-  },
-
   typedRoutes: true,
 
   /**

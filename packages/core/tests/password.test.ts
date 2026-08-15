@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { COMMON_PASSWORDS } from "../src/data/common-passwords.ts";
+
 import {
   ARGON2_PARAMS,
   MAX_PASSWORD_LENGTH,
@@ -106,5 +111,40 @@ describe("verifyDummy", () => {
 
     expect(dummy).toBeGreaterThan(real * 0.25);
     expect(dummy).toBeLessThan(real * 4);
+  });
+});
+
+describe("the generated denylist", () => {
+  /*
+   * data/common-passwords.ts is generated from data/common-passwords.txt by
+   * scripts/build-denylist.mjs. The .txt is the source of truth — reviewable
+   * and diffable — and the .ts is what ships, because resolving a data file
+   * relative to import.meta.url breaks under Turbopack.
+   *
+   * Two files means they can disagree, so forgetting to re-run the generator
+   * is a failing test rather than a denylist that silently stopped matching
+   * the file somebody edited.
+   */
+  it("matches the text file it was generated from", () => {
+    const txt = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "src",
+        "data",
+        "common-passwords.txt",
+      ),
+      "utf8",
+    )
+      .split(/\r?\n/)
+      .map((line) => line.trim().toLowerCase())
+      .filter((line) => line.length > 0);
+
+    expect(COMMON_PASSWORDS.length).toBe(txt.length);
+    expect([...COMMON_PASSWORDS]).toEqual(txt);
+  });
+
+  it("is not empty, which an empty source file would silently produce", () => {
+    expect(COMMON_PASSWORDS.length).toBeGreaterThan(9000);
   });
 });

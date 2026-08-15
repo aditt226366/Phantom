@@ -257,6 +257,30 @@ It hides well: `integration-form.tsx` had the barrel import for six commits and
 built fine, because until a page rendered it the component was reachable only
 from tests and never entered the client graph at all.
 
+**Never resolve a data file relative to `import.meta.url` in bundled code.**
+`denylist.ts` did `new URL("./data/…", import.meta.url)` and handed it to
+`readFileSync`. Correct Node, correct under Vitest, broken under Turbopack: the
+bundler supplies its own `URL`, so the object fails Node's `instanceof URL`
+check and fs rejects it with
+
+    The "path" argument must be of type string or an instance of URL.
+    Received an instance of URL
+
+which reads like a contradiction and means "not the URL class I compare
+against". `fileURLToPath` does **not** fix it — the URL handed to it is the
+foreign one — and applying it only moved the failure from runtime to
+`next build`, collecting page data.
+
+Embed the data instead: a generator writes a `.ts` module, the source file
+stays reviewable, and a test asserts the two agree. That also removes the
+`outputFileTracingIncludes` entry that existed only to carry the file.
+
+Third instance of one pattern — the core barrel dragging `@node-rs/argon2` into
+a client bundle, and this. **Anything that is correct under the test runner can
+still be wrong under the bundler, and only a rendered page or a build reaches
+it.** When a module touches the filesystem, native code or `import.meta`, make
+sure something exercises it through a page.
+
 **Scripts must import a side-effect env module first.** ESM hoists imports, so
 calling `dotenv.config()` at the top of a script still runs *after* every module
 it imports has been evaluated — `lib/env.ts` has already parsed an empty

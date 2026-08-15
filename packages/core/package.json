@@ -16,7 +16,8 @@
     "./time": "./src/time.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:denylist": "node scripts/build-denylist.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",

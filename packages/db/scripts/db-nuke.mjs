@@ -10,8 +10,8 @@ import { TEST_DATABASE_NAME } from "./db-urls.mjs";
 /**
  * Rebuild a development database from nothing.
  *
- *     npm run db:nuke            # the development database
- *     npm run db:nuke -- --test  # whatsapp_os_test
+ *     npm run db:nuke -- dev
+ *     npm run db:nuke -- test
  *
  * ---------------------------------------------------------------------------
  * Why this is a script and not four commands in a README
@@ -50,12 +50,14 @@ import { TEST_DATABASE_NAME } from "./db-urls.mjs";
  * this script, which is the property the circular version was pretending to
  * have.
  *
- * And the host must be loopback. That is the check doing the real work: a
- * production database is not on your machine, so refusing anything that is not
- * 127.0.0.1, ::1 or localhost rules out the entire class rather than one name.
+ * Then two conditions, both required. The host must be loopback, and the
+ * database must be named whatsapp_os or whatsapp_os_test.
  *
- * Then the name: it must end in _test, or match the development database named
- * in that same .env file.
+ * Neither is sufficient alone. "A production database is not on your machine"
+ * is comfortable and false: kubectl port-forward and SSH tunnels put one on
+ * localhost:5432 as a matter of routine, which is precisely how an engineer
+ * reaches production. And nothing stops a remote database from being called
+ * whatsapp_os. Together they are hard to satisfy by accident.
  */
 
 const packageRoot = path.resolve(
@@ -69,6 +71,15 @@ if (process.env["NODE_ENV"] === "production") {
 }
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]", ""]);
+
+/**
+ * The only two databases this script may ever touch, by name.
+ *
+ * Literal names, not a name derived from DATABASE_URL — deriving is what made
+ * the first version of this guard tautological. Renaming the development
+ * database means editing this line, which is the point.
+ */
+const NUKEABLE_DATABASES = new Set(["whatsapp_os", TEST_DATABASE_NAME]);
 
 /* From the file, never from process.env — see the header. */
 const envPath = path.resolve(packageRoot, "..", "..", ".env");
@@ -86,31 +97,56 @@ if (!declaredUrl) {
   process.exit(1);
 }
 
-const developmentDatabase = new URL(declaredUrl).pathname.replace(/^\//, "");
+/*
+ * The target is mandatory, and positional rather than a flag.
+ *
+ * Both halves are scar tissue. `npm run db:nuke -- --test` reaches this script
+ * as no arguments at all: npm treats a leading `--test` as one of its own
+ * config flags, warns "Unknown cli config", and drops it — so a run that asked
+ * for the test database silently rebuilt the development one. A positional
+ * word survives that. Requiring it means the same accident now refuses instead
+ * of quietly choosing.
+ */
+const target = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
 
-const targetUrl = process.argv.includes("--test")
-  ? withDatabase(declaredUrl, TEST_DATABASE_NAME)
-  : declaredUrl;
-
-const target = new URL(targetUrl);
-const targetName = target.pathname.replace(/^\//, "");
-
-if (!LOOPBACK.has(target.hostname)) {
+if (target !== "dev" && target !== "test") {
   console.error(
-    `Refusing to nuke a database on "${target.hostname}".\n\n` +
-      "This rebuilds development databases only, and a development database " +
-      "is on this machine. Nothing reachable over the network qualifies, " +
-      "whatever it is called.",
+    "Usage: npm run db:nuke -- dev | test\n\n" +
+      "The target is required. This drops and rebuilds a database, so there " +
+      "is no default worth guessing at.",
   );
   process.exit(1);
 }
 
-if (!targetName.endsWith("_test") && targetName !== developmentDatabase) {
+const targetUrl =
+  target === "test" ? withDatabase(declaredUrl, TEST_DATABASE_NAME) : declaredUrl;
+
+const parsedTarget = new URL(targetUrl);
+const targetName = parsedTarget.pathname.replace(/^\//, "");
+
+/*
+ * Both conditions, never either.
+ *
+ * Loopback alone is not enough: kubectl port-forward and SSH tunnels put
+ * production databases on localhost every day, and that is the ordinary way an
+ * engineer reaches one. "A production database is not on your machine" is a
+ * comfortable assumption rather than a true one.
+ *
+ * The name alone is not enough either: nothing stops a remote database from
+ * being called whatsapp_os.
+ */
+if (!LOOPBACK.has(parsedTarget.hostname)) {
+  console.error(
+    `Refusing to nuke a database on "${parsedTarget.hostname}".\n\n` +
+      "This rebuilds local development databases only.",
+  );
+  process.exit(1);
+}
+
+if (!NUKEABLE_DATABASES.has(targetName)) {
   console.error(
     `Refusing to nuke "${targetName}".\n\n` +
-      `Only a database ending in _test, or the development database named in ` +
-      `${envPath} (currently "${developmentDatabase}"), may be rebuilt this ` +
-      `way. If you meant ${TEST_DATABASE_NAME}, pass --test.`,
+      `Only ${[...NUKEABLE_DATABASES].join(" and ")} may be rebuilt this way.`,
   );
   process.exit(1);
 }

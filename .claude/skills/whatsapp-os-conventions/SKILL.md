@@ -37,19 +37,31 @@ recreates schema `public`, which lands owned by the bootstrap superuser, so
 `permission denied for schema public` — then records a *failed* migration, so
 subsequent runs refuse with P3009 and the database is stuck.
 
-Recovery is **`npm run db:nuke`** (add `-- --test` for `whatsapp_os_test`), which
-runs the four steps in the order that matters: drop schema, recreate it owned by
+Recovery is **`npm run db:nuke -- dev`** (or `-- test`), which runs the four
+steps in the order that matters: drop schema, recreate it owned by
 `whatsapp_owner`, `db:roles`, `migrate deploy`. Roles must come after the schema
 exists and before migrations run — the authentication migration needs
 `app_resolver` to hold CREATE on `public` before it can transfer ownership of the
 SECURITY DEFINER functions.
 
-It reads `DATABASE_URL` from `.env` with `dotenv.parse`, never from
-`process.env`, and refuses any host that is not loopback. Both matter: the
-obvious guard — compare the target against `DATABASE_URL` — is circular, because
-the target *is* `DATABASE_URL`, so it passes by construction while an exported
-override quietly redirects the nuke. That version was written, tested against a
-made-up `production_db`, and sailed straight through.
+**`npm run <script> -- --flag` does not reach the script.** npm reads a leading
+`--flag` as one of its own config options, warns `Unknown cli config`, and drops
+it. `db:nuke -- --test` therefore arrived as no arguments at all and rebuilt the
+*development* database. Pass positional words, and forward them from a
+delegating root script with a trailing `--`
+(`npm run nuke --workspace=@whatsapp-os/db --`).
+
+Three guards, each for a specific bad reason the obvious version fails:
+
+- The URL is read from `.env` with `dotenv.parse`, never `process.env`.
+  Comparing the target against `DATABASE_URL` is circular — the target *is*
+  `DATABASE_URL` — so it passes by construction while an exported override
+  redirects the nuke. That version printed "Rebuilding production_db".
+- Host must be loopback **and** the name must be `whatsapp_os` or
+  `whatsapp_os_test`. Loopback alone is not enough: `kubectl port-forward` and
+  SSH tunnels put production on localhost routinely.
+- The target argument is mandatory. A swallowed flag then refuses rather than
+  silently picking a database.
 
 **P2002 carries no constraint name.** Through a driver adapter the message is
 literally `Unique constraint failed on the (not available)` and `meta.target` is

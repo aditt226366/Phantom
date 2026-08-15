@@ -252,6 +252,10 @@ const config: Config = {
       width: {
         "voice-icon": "var(--wa-voice-icon-size)",
         sidebar: "var(--wa-sidebar-width)",
+        /* The icon button is square, so it takes the button height as its
+           width. Absent, the icon variant — which also sets p-0 — had no
+           width at all and collapsed to nothing. */
+        button: "var(--wa-button-height)",
       },
 
       minWidth: {
@@ -260,6 +264,11 @@ const config: Config = {
 
       maxWidth: {
         container: "var(--wa-container-max)",
+        /* One readable column. Named `narrow` rather than reusing a spacing
+           key: Tailwind builds max-w-* from the spacing scale too, so
+           `maxWidth.md` and `spacing.md` are the same utility and the spacing
+           value wins. That is how max-w-md became 20px. */
+        narrow: "var(--wa-measure-narrow)",
       },
 
       /* Matches the design doc's responsive table:

@@ -24,7 +24,7 @@ export default async function ResetPasswordPage({
 
   if (!lookup.ok) {
     return (
-      <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl text-center shadow-soft-drop">
+      <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl text-center shadow-soft-drop">
         <h1 className="text-display-sm text-ink">This link has expired</h1>
         <p className="mt-sm text-body-sm text-body">
           Reset links last one hour and can be used once.
@@ -42,7 +42,7 @@ export default async function ResetPasswordPage({
   }
 
   return (
-    <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
+    <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
       <h1 className="text-display-sm text-ink">Set a new password</h1>
       <p className="mb-lg mt-xs text-body-sm text-muted">
         Every signed-in device will be signed out.

@@ -56,7 +56,7 @@ export function VerificationLog({
                   </Badge>
                 </Td>
                 <Td>{entry.statusCode ?? "—"}</Td>
-                <Td className="max-w-md break-words">{entry.error ?? "—"}</Td>
+                <Td className="max-w-narrow break-words">{entry.error ?? "—"}</Td>
               </tr>
             ))}
           </tbody>

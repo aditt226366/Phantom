@@ -19,7 +19,7 @@ export default async function ForgotPasswordPage({
    */
   if (sent) {
     return (
-      <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl text-center shadow-soft-drop">
+      <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl text-center shadow-soft-drop">
         <h1 className="text-display-sm text-ink">Check your email</h1>
         <p className="mt-sm text-body-sm text-body">
           If that address belongs to an account, a reset link is on its way. It
@@ -38,7 +38,7 @@ export default async function ForgotPasswordPage({
   }
 
   return (
-    <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
+    <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
       <h1 className="text-display-sm text-ink">Reset your password</h1>
       <p className="mb-lg mt-xs text-body-sm text-muted">
         We will email you a link.{" "}

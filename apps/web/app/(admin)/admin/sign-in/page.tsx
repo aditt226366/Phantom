@@ -18,7 +18,7 @@ export default async function AdminSignInPage({
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-canvas px-lg py-xxl">
-      <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl">
+      <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl">
         <p className="text-caption-uppercase uppercase text-muted">
           whatsapp-os
         </p>

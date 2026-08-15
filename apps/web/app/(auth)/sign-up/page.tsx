@@ -22,7 +22,7 @@ export default function SignUpPage() {
         <h1 className="text-display-xl text-ink">
           One workspace for every conversation.
         </h1>
-        <p className="max-w-md text-body-md text-body">
+        <p className="max-w-narrow text-body-md text-body">
           Templates, campaigns and replies in one place — with the isolation
           guarantees that let you put real customer data in it.
         </p>

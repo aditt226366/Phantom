@@ -257,6 +257,31 @@ It hides well: `integration-form.tsx` had the barrel import for six commits and
 built fine, because until a page rendered it the component was reachable only
 from tests and never entered the client graph at all.
 
+**A spacing key silently overrides the built-in max-width of the same name.**
+Tailwind derives its max-width utilities from the spacing scale as well as its
+own, so `spacing.md` and the built-in `md` size are the same utility and the
+config wins. This system defines spacing keys called xs, sm, base, md, lg, xl
+and xxl — so every Tailwind max-width of those names is a spacing value.
+
+One of them capped every auth card, every empty state and a table cell at 20px:
+the card rendered at its padding, one word per line, and the pill CTA looked
+like a circle. Nothing warned. `cn()` merges an inert class happily, the class
+exists in the stylesheet, and the type system has no opinion.
+
+Width utilities named for a measure must use a name that cannot collide —
+`--wa-measure-*` mapped to `maxWidth.narrow` is the pattern. Do not name a
+maxWidth key after a spacing key.
+
+`apps/web/tests/server/css-utilities.test.ts` guards both halves: every class
+in `app/**` and `components/**` resolves to a rule, and no max-width resolves
+to a spacing token. The second check is the one that matters — the collapsing
+class *existed*, so an existence check alone passes it.
+
+That test reads the compiled stylesheet, so it needs a build and skips
+explicitly without one. Keep classes as literal strings: a class assembled from
+a variable is invisible to Tailwind's scanner too, which is the better reason
+not to write one.
+
 **Never resolve a data file relative to `import.meta.url` in bundled code.**
 `denylist.ts` did `new URL("./data/…", import.meta.url)` and handed it to
 `readFileSync`. Correct Node, correct under Vitest, broken under Turbopack: the

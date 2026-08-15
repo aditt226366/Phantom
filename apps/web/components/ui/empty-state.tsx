@@ -42,7 +42,7 @@ export function EmptyState({
         className="-top-xxl left-1/2 h-[240px] w-[240px] -translate-x-1/2"
       />
 
-      <div className="wa-above-orbs mx-auto flex max-w-md flex-col items-center gap-sm">
+      <div className="wa-above-orbs mx-auto flex max-w-narrow flex-col items-center gap-sm">
         <h2 className="text-display-sm text-ink">{title}</h2>
         <p className="text-body-sm text-body">{description}</p>
         {action ? <div className="mt-xs">{action}</div> : null}

@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Sign in" };
 /** Single narrow column — sign-in asks for two things. */
 export default function SignInPage() {
   return (
-    <div className="w-full max-w-md rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
+    <div className="w-full max-w-narrow rounded-xl border border-hairline bg-surface-card p-xl shadow-soft-drop">
       <h1 className="text-display-sm text-ink">Sign in</h1>
       <p className="mb-lg mt-xs text-body-sm text-muted">
         New here?{" "}

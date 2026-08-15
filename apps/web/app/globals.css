@@ -185,6 +185,22 @@
      12. COMPONENT METRICS
      ---------------------------------------------------------------------- */
   --wa-container-max: 1200px;
+
+  /* A single readable column: the auth card, an empty state's copy, a table
+     cell that must not run the width of the page.
+
+     Deliberately not one of Tailwind's own named sizes. It derives its
+     max-width utilities from the spacing scale as well as its own, so a
+     spacing key called "md" wins over the built-in size of the same name —
+     which silently became 20px and collapsed every auth card to a column of
+     single words. Any name shared with a spacing key is unsafe; this one
+     cannot collide.
+
+     Class names are not written out in this comment on purpose: Tailwind
+     scans CSS too, and naming them here emits dead rules for utilities
+     nothing uses. */
+  --wa-measure-narrow: 28rem;
+
   --wa-nav-height: 64px;
   /* Application shell sidebar. Persistent at desktop, an overlay below it. */
   --wa-sidebar-width: 264px;

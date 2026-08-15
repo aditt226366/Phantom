@@ -37,7 +37,7 @@ export function AdminResetForm({
           name="username"
           defaultValue={defaultUsername}
           autoComplete="off"
-          containerClassName="tablet:max-w-xs tablet:flex-1"
+          containerClassName="tablet:max-w-narrow tablet:flex-1"
           required
         />
         <Submit />

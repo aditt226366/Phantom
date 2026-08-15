@@ -25,7 +25,7 @@ export default function HomePage() {
           whatsapp-os
         </h1>
 
-        <p className="mt-lg max-w-xl text-body-md text-body">
+        <p className="mt-lg max-w-2xl text-body-md text-body">
           Next.js 16 App Router, Prisma and a BullMQ worker, wired together with
           a token layer translated from the ElevenLabs design system. No product
           features yet.

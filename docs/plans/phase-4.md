@@ -340,10 +340,17 @@ symptom again, because it presents as a suite that was green an hour ago
 failing in several unrelated files at once, with unique and foreign-key
 violations that look like a broken feature.
 
-Not fixed here, and it is a real gap: nothing runs the drift check against the
-test database. The cheap version is a `migrate diff` against it in
-`migrate-test.mjs`, which would fail the run that inherits a stray object
-rather than the one after it.
+Fixed in `d724b8c`. `migrate-test.mjs` diffs the test database against
+`schema.prisma` before any test file loads and refuses the run, so the run that
+*inherits* the stray object is the one that fails rather than the one after it.
+A distinct exit code carries the diagnosis up to the Vitest globalSetup, which
+prints last and would otherwise repeat "is Postgres up" over a database that is
+demonstrably up. Both messages name `npm run db:nuke -- test`.
+
+The conventions entry states the cause rather than the symptom: break-once
+mutates the database, a killed process runs no cleanup, and no `finally` or trap
+helps against that - so detection at the start of the next run is the durable
+answer rather than prevention.
 
 ---
 

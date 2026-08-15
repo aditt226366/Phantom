@@ -99,6 +99,9 @@ model Company {
   integrationVerifications IntegrationVerification[]
   usageEvents            UsageEvent[]
   whatsappNumbers        WhatsAppNumber[]
+  contacts               Contact[]
+  conversations          Conversation[]
+  messages               Message[]
 
   @@map("companies")
 }
@@ -155,6 +158,8 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   auditLogs               AuditLog[]
+  conversationsAssigned   Conversation[]           @relation("ConversationsAssigned")
+  messagesSent            Message[]                @relation("MessagesSent")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -527,8 +532,9 @@ model WhatsAppNumber {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration   Integration    @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
 
   /// The natural key. Meta's phone_number_id is globally unique, but scoping it
   /// per company keeps the uniqueness a tenant fact rather than a global one -
@@ -537,6 +543,252 @@ model WhatsAppNumber {
   @@unique([companyId, phoneNumberId])
   @@index([companyId, createdAt(sort: Desc)])
   @@map("whatsapp_numbers")
+}
+
+/// Which way a message travelled. Ours to define, so an enum.
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("message_direction")
+}
+
+/// The delivery ladder.
+///
+/// Ours, not Meta's, which is what makes an enum safe here: Meta's status
+/// strings are mapped into this by the webhook parser, and one it does not
+/// recognise is ignored rather than written. PENDING has no Meta equivalent at
+/// all - it means accepted by us and not yet handed over.
+///
+/// The order of the members is documentation. The authority is the rank in
+/// @whatsapp-os/core, which the worker consults before every write, and FAILED
+/// sits above SENT there deliberately - Meta emits `failed` after `sent` for
+/// downstream rejections, so a ladder that ranked it below would drop the
+/// failure and leave a message reading as on-its-way for ever.
+enum MessageStatus {
+  PENDING
+  SENT
+  FAILED
+  DELIVERED
+  READ
+
+  @@map("message_status")
+}
+
+/// How a conversation started. Our categorisation, so an enum.
+enum ConversationSource {
+  INBOUND
+  CAMPAIGN
+  ADS_CLICK_TO_WHATSAPP
+  MANUAL
+
+  @@map("conversation_source")
+}
+
+/// Who refused to deliver a message.
+///
+/// Meta's codes and our own policy's reasons are different namespaces, and
+/// conflating them means a support reply quoting a Graph code Meta never
+/// issued. Only META rows carry error_code.
+enum MessageFailureSource {
+  META
+  POLICY
+
+  @@map("message_failure_source")
+}
+
+/// A WhatsApp user who has messaged this company, or been messaged by it.
+model Contact {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's wa_id: the only stable identity a WhatsApp user has, and the key
+  /// every webhook arrives under.
+  ///
+  /// Matched on rather than phone_e164, because the two are not always the
+  /// same number. Brazil and Mexico have historically differed by a digit
+  /// between the number that messages and the wa_id it arrives as, so matching
+  /// on our normalised form would split one person into two contacts and split
+  /// their 24-hour window with them.
+  waId String @map("wa_id")
+
+  /// E.164 from parsePhone, for display and for Phase 5's audience building.
+  /// Null when wa_id does not parse as a number we recognise - which is not a
+  /// reason to drop the message.
+  phoneE164 String? @map("phone_e164")
+
+  /// The name the contact set on their own profile. Meta sends it on the first
+  /// inbound message of a window and not reliably afterwards, so it is only
+  /// ever written when present and never overwritten with null.
+  profileName String? @map("profile_name")
+  /// A name somebody here typed. Wins over profileName when set.
+  displayName String? @map("display_name")
+
+  /// Set when the contact opts out. STOP handling is Phase 12; the column is
+  /// here now because Phase 5's send queue filters on it, and adding it later
+  /// is a backfill on what will by then be the largest table in the schema.
+  optedOutAt DateTime? @map("opted_out_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([companyId, waId])
+  @@index([companyId, createdAt(sort: Desc)])
+  /// Phase 5 excludes opted-out contacts from every campaign. Composite and
+  /// company-first so that exclusion is a seek and not a scan of the whole
+  /// contact book.
+  @@index([companyId, optedOutAt])
+  @@map("contacts")
+}
+
+/// One contact, on one of the company's numbers.
+model Conversation {
+  id               String @id @default(cuid())
+  companyId        String @map("company_id")
+  contactId        String @map("contact_id")
+  whatsappNumberId String @map("whatsapp_number_id")
+
+  source ConversationSource @default(INBOUND)
+
+  /// When the customer last wrote. The fact the window derives from.
+  lastInboundAt DateTime? @map("last_inbound_at")
+  /// When anything last happened, either direction. What the list sorts on.
+  lastMessageAt DateTime? @map("last_message_at")
+  /// Denormalised so the list renders without touching messages at all.
+  lastMessagePreview String? @map("last_message_preview")
+
+  /// When free-form messaging stops being allowed.
+  ///
+  /// Stored rather than derived from the newest inbound message, for three
+  /// reasons in order of weight: canSend reads one row on the send path, in the
+  /// worker, immediately before a Graph call; the inbox filters and sorts on
+  /// it, and a derived value cannot be indexed; and the rule is not always
+  /// last_inbound_at + 24h - a free-entry-point conversation gets 72h, and Meta
+  /// has moved these boundaries before. Storing it puts the rule in one writer
+  /// instead of every reader.
+  ///
+  /// Advanced with GREATEST(), never assigned. Two inbound messages delivered
+  /// out of order - which Meta does - would otherwise move it backwards and
+  /// close the composer while the window is genuinely open.
+  windowExpiresAt DateTime? @map("window_expires_at")
+
+  unreadCount Int @default(0) @map("unread_count")
+
+  /// Null means nobody has picked it up.
+  assignedUserId String?   @map("assigned_user_id")
+  assignedAt     DateTime? @map("assigned_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact        Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  whatsappNumber WhatsAppNumber @relation(fields: [whatsappNumberId], references: [id], onDelete: Cascade)
+  /// SetNull, not Cascade, and deliberately unlike every other relation in this
+  /// schema: deleting an employee must not delete the conversations they
+  /// handled. The thread is the company's record of what a customer was told.
+  assignedUser   User?          @relation("ConversationsAssigned", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages       Message[]
+
+  /// One thread per contact per number, and the conflict target the inbound
+  /// upsert needs. Without it two deliveries for the same contact arriving
+  /// together both find no conversation and both insert, and the customer ends
+  /// up with two half-threads whose windows disagree.
+  @@unique([companyId, contactId, whatsappNumberId])
+  /// The inbox list.
+  @@index([companyId, lastMessageAt(sort: Desc)])
+  /// canSend, and Phase 9's "windows closing within the hour".
+  @@index([companyId, windowExpiresAt])
+  @@index([companyId, assignedUserId])
+  @@map("conversations")
+}
+
+/// One message, in either direction.
+model Message {
+  id             String @id @default(cuid())
+  companyId      String @map("company_id")
+  conversationId String @map("conversation_id")
+
+  direction MessageDirection
+  status    MessageStatus    @default(PENDING)
+
+  /// Meta's type string, stored as text and never an enum.
+  ///
+  /// The vocabulary is Meta's, not ours - text, image, document, audio, video,
+  /// sticker, location, contacts, interactive, button, order, system, reaction
+  /// - and they add to it without notice. An enum would turn "Meta shipped a
+  /// new message type" into a failed write on an inbound webhook, which is the
+  /// worst place in the system to fail: no user is watching, the delivery
+  /// retries, and the customer's message is lost.
+  ///
+  /// An unrecognised type stores as itself and renders in the thread as an
+  /// unsupported-type placeholder, so the gap is visible and the row survives.
+  type String
+
+  /// Meta's message id. Null on an outbound message until Meta answers, which
+  /// is why the unique below tolerates it: Postgres treats NULLs as distinct,
+  /// so many pending sends coexist and every real wamid is still claimed once.
+  wamid String?
+
+  /// The rendered text. Null for a media message with no caption.
+  body String?
+
+  /// The template as sent, in the same component shape the builder previews and
+  /// the Graph call carries. Stored on the message rather than only referenced,
+  /// because a template edited or deleted later must not rewrite history.
+  templatePayload Json? @map("template_payload")
+
+  /// Why this message is not going to arrive. Only META rows carry errorCode; a
+  /// canSend refusal - the window closed between enqueue and send - writes
+  /// POLICY and a sentence a person can act on.
+  errorSource MessageFailureSource? @map("error_source")
+  errorCode   Int?                  @map("error_code")
+  errorTitle  String?               @map("error_title")
+
+  /// How many times a person has asked for this to be sent again. Part of the
+  /// send job's id, because BullMQ keeps completed job ids for an hour and a
+  /// retry reusing one is silently dropped.
+  sendAttempt Int @default(0) @map("send_attempt")
+
+  /// Who pressed send. Null for inbound and for anything a job originated.
+  sentByUserId String? @map("sent_by_user_id")
+
+  /// The one column the thread orders by, and the reason createdAt is not it.
+  ///
+  /// Inbound carries Meta's own unix-seconds timestamp; outbound is stamped
+  /// when we accept it. createdAt is when our worker inserted the row, and a
+  /// delayed or retried delivery makes the two diverge by minutes - so a thread
+  /// sorted by createdAt shows an order the customer never saw.
+  ///
+  /// Meta's granularity is one second, so ties are real. Every ordered read
+  /// breaks them on id, and the thread index below carries it for that reason.
+  occurredAt DateTime @map("occurred_at")
+
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+  failedAt    DateTime? @map("failed_at")
+
+  /// When we wrote the row. Diagnostics only - never an ordering.
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// SetNull for the same reason as Conversation.assignedUser: deleting an
+  /// employee must not delete the messages they sent to customers.
+  sentBy       User?        @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  /// Inbound idempotency. Meta redelivers, and a redelivered message must not
+  /// appear twice in the thread.
+  @@unique([companyId, wamid])
+  /// The thread read, ordered and tie-broken.
+  @@index([companyId, conversationId, occurredAt(sort: Desc), id])
+  /// The send worker claims rows by status.
+  @@index([companyId, status])
+  @@map("messages")
 }
 
 /// One countable thing that happened, priced at the moment it happened.

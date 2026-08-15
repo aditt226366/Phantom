@@ -512,6 +512,112 @@ describe("whatsapp numbers", () => {
   });
 });
 
+describe("conversations and messages", () => {
+  /** A contact, a conversation and one message, through the real path. */
+  async function seedThread(
+    company: SeededCompany,
+    label: string,
+  ): Promise<{ conversationId: string; wamid: string }> {
+    const integrationId = await withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+      });
+      return integration.id;
+    });
+
+    return withCompany(company.id, async (db, companyId) => {
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId,
+          phoneNumberId: `${label}-pn`,
+          displayNumber: "+91 98765 43210",
+        },
+      });
+      const contact = await db.contact.create({
+        data: { companyId, waId: `${label}-wa`, profileName: `${label} person` },
+      });
+      const conversation = await db.conversation.create({
+        data: {
+          companyId,
+          contactId: contact.id,
+          whatsappNumberId: number.id,
+          lastMessageAt: new Date(),
+        },
+      });
+      const wamid = `${label}-wamid`;
+      await db.message.create({
+        data: {
+          companyId,
+          conversationId: conversation.id,
+          direction: "INBOUND",
+          type: "text",
+          status: "DELIVERED",
+          wamid,
+          body: `${label} said something`,
+          occurredAt: new Date(),
+        },
+      });
+
+      return { conversationId: conversation.id, wamid };
+    });
+  }
+
+  it("does not show one company's messages to another", async () => {
+    await seedThread(alpha, "alpha");
+    await seedThread(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ wamid: string }>>`SELECT wamid FROM messages ORDER BY wamid`,
+    );
+
+    expect(rows.map((r) => r.wamid)).toEqual(["beta-wamid"]);
+  });
+
+  it("does not show one company's contacts or conversations to another", async () => {
+    await seedThread(alpha, "alpha");
+    await seedThread(beta, "beta");
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ wa_id: string; n: bigint }>>`
+        SELECT c.wa_id, count(v.id) AS n
+          FROM contacts c LEFT JOIN conversations v ON v.contact_id = c.id
+         GROUP BY c.wa_id ORDER BY c.wa_id`,
+    );
+
+    /* A join is the shape that leaks a whole installation while looking
+       plausible - one row per contact, and every count still correct. */
+    expect(rows.map((r) => r.wa_id)).toEqual(["alpha-wa"]);
+    expect(Number(rows[0]!.n)).toBe(1);
+  });
+
+  it("refuses to write a message into another company", async () => {
+    const { conversationId } = await seedThread(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO messages
+            (id, company_id, conversation_id, direction, status, type, occurred_at, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${conversationId}, 'OUTBOUND', 'PENDING', 'text', now(), now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides a seeded thread from the table's own owner", async () => {
+    await seedThread(alpha, "alpha");
+
+    const contacts = await owner.query("SELECT * FROM contacts");
+    const conversations = await owner.query("SELECT * FROM conversations");
+    const messages = await owner.query("SELECT * FROM messages");
+
+    expect(
+      [contacts.rows, conversations.rows, messages.rows],
+      "FORCE ROW LEVEL SECURITY is not in effect",
+    ).toEqual([[], [], []]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

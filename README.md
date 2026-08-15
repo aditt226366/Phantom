@@ -99,6 +99,7 @@ Run from the repo root:
 | `npm run typecheck` | `tsc --noEmit` across every workspace |
 | `npm run lint` | ESLint on the web app |
 | `npm test` | Vitest, five projects |
+| `npm run test:gate` | The same run, refusing a short test count |
 | `npm run test:visual` | Screenshots of every page, 1440 and 390 |
 | `npm run test:visual:update` | Re-record the baselines — then look at them |
 | `npm run db:migrate` | `prisma migrate dev` |

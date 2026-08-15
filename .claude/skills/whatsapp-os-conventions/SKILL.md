@@ -189,6 +189,34 @@ test of a module that uses it. Scripts that import such a module run with
 - `migrate-test.mjs` takes an advisory lock; two projects run the same
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
+**A worker fork dies occasionally in full runs, and it is not a false green.**
+Four occurrences during Phase 4a, all identical: `Error: [vitest-pool]: Worker
+forks emitted error / Caused by: Error: Worker exited unexpectedly`, always the
+**db** project, always `auth-schema.test.ts`, always in a full `vitest run`.
+
+What the investigation ruled out, so the fifth occurrence starts from here:
+
+- **Not a false green.** Vitest reports the dead worker as a failed test file
+  and exits non-zero. Measured by killing a worker deliberately — exit 1,
+  `Test Files 1 failed`. The runs that *looked* green were runs whose exit code
+  was never read, because the output was piped to `tail`. Read `$?`, not the
+  summary line.
+- **Not reproducible in isolation.** `vitest run --project db` five times in a
+  row: clean, 140/140 each time. It only happens when db runs alongside the
+  other projects.
+- **Not the native module.** `@node-rs/argon2` belongs to `web-server`, and
+  every `web-server` file reported normally in each crashed run.
+- **Not obviously heap.** The file is small and passes alone; nothing suggests
+  memory pressure, so `--max-old-space-size` was not changed.
+
+The remaining suspect is contention between `db` and `web-server`, which share
+one test database and one `globalSetup`, and already have a documented deadlock
+hazard around that advisory lock (above). Unproven.
+
+Practical effect: a short test count with a non-zero exit is this, and a re-run
+is the right response. A short count with a **zero** exit is something else
+entirely — see `npm run test:gate`.
+
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own
 explanation at least once: `no-raw-prisma.test.ts` says so in its header about

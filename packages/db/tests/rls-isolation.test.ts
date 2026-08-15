@@ -372,6 +372,37 @@ describe("the credential vault", () => {
   });
 });
 
+describe("usage events", () => {
+  async function record(
+    company: SeededCompany,
+    costCents: number,
+  ): Promise<void> {
+    await withCompany(company.id, (db, companyId) =>
+      db.usageEvent.create({
+        data: { companyId, kind: "integration.verify", costCents },
+      }),
+    );
+  }
+
+  it("totals only the company's own spend", async () => {
+    await record(alpha, 7);
+    await record(beta, 500);
+
+    /*
+     * Raw and inside a valid context: a SUM is exactly the shape that would
+     * quietly return the whole installation's money if the policy were wrong,
+     * and it would look plausible rather than empty.
+     */
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ total: bigint | null }>
+      >`SELECT SUM(cost_cents)::bigint AS total FROM usage_events`,
+    );
+
+    expect(Number(rows[0]?.total ?? 0)).toBe(7);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

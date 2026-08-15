@@ -24,6 +24,7 @@ export type {
   Integration,
   IntegrationSecret,
   IntegrationVerification,
+  UsageEvent,
   LoginAttempt,
   AdminUser,
   AdminSession,

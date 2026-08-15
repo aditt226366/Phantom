@@ -63,6 +63,7 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "Integration",
   "IntegrationSecret",
   "IntegrationVerification",
+  "UsageEvent",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

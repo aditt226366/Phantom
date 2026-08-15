@@ -97,6 +97,7 @@ model Company {
   integrations           Integration[]
   integrationSecrets     IntegrationSecret[]
   integrationVerifications IntegrationVerification[]
+  usageEvents            UsageEvent[]
 
   @@map("companies")
 }
@@ -367,6 +368,38 @@ model IntegrationVerification {
 
   @@index([companyId, createdAt(sort: Desc)])
   @@map("integration_verifications")
+}
+
+/// One countable thing that happened, priced at the moment it happened.
+///
+/// cost_cents is stamped by the emitter rather than derived when the overview
+/// renders. Billing that recomputes historical cost from today's price list
+/// silently rewrites what a customer already owed the moment the list changes;
+/// this way repricing only ever affects the future, and the read path is a SUM.
+///
+/// `kind` is text, not an enum, because the price list in @whatsapp-os/core is
+/// the source of truth for what kinds exist - USAGE_PRICES is a
+/// Record<UsageKind, number>, so a kind that nothing has priced does not
+/// compile. A second list in the database could only disagree with it. Every
+/// write goes through recordUsage(), which takes the union.
+model UsageEvent {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  kind     String
+  quantity Int    @default(1)
+  /// Whole cents. Integer arithmetic, because money in a float is a bug with a
+  /// delay on it.
+  costCents Int   @default(0) @map("cost_cents")
+
+  /// When it happened, which is not always when it was written - a retried job
+  /// records the original moment.
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, occurredAt(sort: Desc)])
+  @@map("usage_events")
 }
 
 /// ---------------------------------------------------------------------------

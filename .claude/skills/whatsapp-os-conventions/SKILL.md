@@ -586,6 +586,25 @@ the accepted tradeoff, not an oversight.
 **Admin TOTP is deferred to Phase 12.** A password alone on a panel that reads
 across every tenant is a known gap.
 
+**Verse refuses off-topic questions and admits it is not human — and both are
+compliance, not manners.** Since **15 January 2026** general-purpose LLM chatbots
+are banned on the WhatsApp Business Platform; task-specific business assistants
+remain allowed. Verse is the second kind by design, which is why the policy
+changed nothing about the product and everything about the status of two
+behaviours:
+
+- it **genuinely refuses** off-topic questions, rather than answering them with a
+  disclaimer attached;
+- it **answers honestly** when asked whether it is a human.
+
+Neither is a tone choice, and neither may be softened to improve a demo. The
+realistic way this breaks is a prompt edit six months from now that makes the
+assistant "more helpful" on questions outside its task — which is the exact
+behaviour the ban describes. Relaxing either belongs in a diff somebody reviews,
+which is the reason they are written here rather than only in a system prompt.
+
+See `docs/plans/spec-amendments.md` A5.
+
 **The deferred breach check is advisory, by design.** When signup fails open,
 `hibpCheckedAt` stays null and the next *successful* sign-in retries the check —
 the only later moment the plaintext exists, since the stored value is an Argon2id

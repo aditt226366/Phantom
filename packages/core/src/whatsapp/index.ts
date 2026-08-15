@@ -21,3 +21,12 @@ export {
   statusesBelow,
 } from "./status.ts";
 export type { MessageStatusName } from "./status.ts";
+export {
+  CUSTOMER_SERVICE_WINDOW_MS,
+  describeWindow,
+  isWindowOpen,
+  windowExpiryFor,
+} from "./window.ts";
+export type { WindowState } from "./window.ts";
+export { sendPolicy } from "./send-policy.ts";
+export type { SendDecision, SendFacts, SendIntent, SendRefusal } from "./send-policy.ts";

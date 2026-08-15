@@ -34,7 +34,7 @@ tally="$git_dir/gate-retries.log"
 #
 run_gate() {
   status=0
-  npm run verify >"$1" 2>&1 || status=$?
+  npm run "$gate" >"$1" 2>&1 || status=$?
   return "$status"
 }
 
@@ -68,8 +68,36 @@ refuse() {
   exit 1
 }
 
-printf 'pre-commit: running the gate. This includes a build and the screenshot\n'
-printf '            suite, so it takes a few minutes. --no-verify skips it.\n'
+#
+# Screenshots can be switched off for a stretch of commits that render nothing,
+# by committing .githooks/SKIP_VISUAL. The marker is a file rather than an edit
+# to this script so that the state is visible in `git status`, appears in the
+# diff of the commit that sets it, and is restored by deleting something rather
+# than by remembering to re-edit a line. The banner below shouts on every run.
+#
+skip_visual="$(git rev-parse --show-toplevel)/.githooks/SKIP_VISUAL"
+gate="verify"
+[ -f "$skip_visual" ] && gate="verify:no-visual"
+
+printf 'pre-commit: running the gate (npm run %s). It includes a build, so it
+' "$gate"
+printf '            takes a few minutes. --no-verify skips it.
+'
+
+if [ "$gate" = "verify:no-visual" ]; then
+  printf '
+'
+  printf '  ##################################################################
+'
+  printf '  #  SCREENSHOTS ARE OFF. .githooks/SKIP_VISUAL says why and until  #
+'
+  printf '  #  when. Delete that file to restore the full gate.               #
+'
+  printf '  ##################################################################
+'
+  printf '
+'
+fi
 
 if run_gate "$log"; then
   printf 'pre-commit: gate passed.\n'

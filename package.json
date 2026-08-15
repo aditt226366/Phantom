@@ -25,6 +25,7 @@
     "test:visual": "npm run test:visual --workspace=web",
     "test:visual:update": "npm run test:visual:update --workspace=web",
     "verify": "npm run typecheck && npm run lint && npm run build && npm run test:gate && npm run test:visual",
+    "verify:no-visual": "npm run typecheck && npm run lint && npm run build && npm run test:gate",
     "db:test:setup": "npm run test:setup --workspace=@whatsapp-os/db",
     "db:setup": "npm run roles --workspace=@whatsapp-os/db && npm run migrate:deploy --workspace=@whatsapp-os/db && npm run generate --workspace=@whatsapp-os/db",
     "db:generate": "npm run generate --workspace=@whatsapp-os/db",

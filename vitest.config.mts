@@ -37,8 +37,29 @@ const SILENT_EXIT_GUARD = fileURLToPath(
   new URL("./tests/no-silent-exit.ts", import.meta.url),
 );
 
+/**
+ * Once per run, not once per project.
+ *
+ * Two projects need a migrated test database - db and web-server - and both
+ * used to declare this themselves. That ran it twice against the one shared
+ * database, and the second execution issues ALTER ROLE and grant changes
+ * through db-roles.mjs while the first project's workers are already querying
+ * the database being reconfigured.
+ *
+ * The advisory lock inside migrate-test.mjs did not help: it serialises the two
+ * setups against each other, which was never the hazard. Setting up a shared
+ * database a second time while tests are running against it is wrong on its own
+ * terms, whatever it turns out to break.
+ *
+ * Hoisted here, it runs once before any project starts.
+ */
+const GLOBAL_SETUP = fileURLToPath(
+  new URL("./packages/db/tests/global-setup.ts", import.meta.url),
+);
+
 export default defineConfig({
   test: {
+    globalSetup: [GLOBAL_SETUP],
     projects: [
       {
         test: {
@@ -72,7 +93,6 @@ export default defineConfig({
           root: "./packages/db",
           environment: "node",
           include: ["tests/**/*.test.ts"],
-          globalSetup: ["./tests/global-setup.ts"],
           setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
 
@@ -119,7 +139,6 @@ export default defineConfig({
           environment: "node",
           include: ["tests/server/**/*.test.ts"],
           exclude: ["tests/server/setup.ts", "tests/server/server-only-stub.ts"],
-          globalSetup: ["../../packages/db/tests/global-setup.ts"],
           setupFiles: [SILENT_EXIT_GUARD, "./tests/server/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
           pool: "forks",

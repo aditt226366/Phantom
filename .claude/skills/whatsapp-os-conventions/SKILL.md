@@ -234,17 +234,27 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   named failure with a file and line instead of a vanished worker. Verified by
   probe: `process.exit(1)` in a test now fails that test by name.
 
-**The structural difference between a full run and `--project db`** is worth
-knowing, because it is the standing suspect and it is not obvious: `db` and
-`web-server` declare the *same* `globalSetup`. In a full run `migrate-test.mjs`
-executes twice against the one test database, and each execution runs
-`db-roles.mjs` — `ALTER ROLE` and grant changes against the database db's
-workers are already connected to. The advisory lock serialises the two setups
-against each other; it does not serialise them against tests already running.
-`globalSetup` mutates no environment variables, so that is not the difference.
+- **Not the double `globalSetup`, though that was real and is fixed.** `db`
+  and `web-server` used to declare the same `globalSetup`, so `migrate-test.mjs`
+  ran twice per run — the second execution issuing `ALTER ROLE` against a
+  database the first project's workers were already querying. It is now hoisted
+  to the root config and runs once, verified. The crash continued at 2 in 5.
 
-Unproven, but it is where to look next, and an unhandled rejection from a
-dropped `pg` connection would present exactly as the observed crash.
+- **Not anything at the JavaScript level — and this is the useful part.** With
+  the guard installed, two crashed runs produced *no* `SilentExitError`, no
+  `unhandledRejection`, no `uncaughtException`, and no Node fatal message
+  ("out of memory", "FATAL ERROR", an assertion). The guard's silence is
+  evidence: the worker is not exiting, not throwing, and not rejecting. It is
+  dying below JavaScript, which is why there has never been a stack to find.
+
+  There is no obvious native code to blame: Prisma 7 here uses the pure-JS
+  `@prisma/adapter-pg` over `pg`, and `find` turns up no `.node` or `.wasm`
+  under `node_modules/@prisma`.
+
+One side effect worth recognising: a run that crashes can leave the *next* run's
+`migrate-test.mjs` failing with "Could not prepare the test database" — seen
+once, transient, with no advisory lock still held afterwards. Re-run before
+believing Postgres is down.
 
 Practical effect: a short test count with a non-zero exit is this, and a re-run
 is the right response. A short count with a **zero** exit is something else

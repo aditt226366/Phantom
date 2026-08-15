@@ -24,12 +24,26 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 /**
  * Arbitrary constant identifying this operation cluster-wide.
  *
- * Vitest runs a globalSetup per project, and more than one project needs the
- * test database. Two concurrent invocations would issue overlapping ALTER ROLE
- * and ALTER DEFAULT PRIVILEGES statements, which take conflicting locks and can
- * deadlock — an intermittent "could not prepare the test database" that
- * reproduces roughly never and wastes an afternoon when it does. The lock makes
- * the second caller wait for the first and then find nothing left to do.
+ * Two concurrent invocations would issue overlapping ALTER ROLE and ALTER
+ * DEFAULT PRIVILEGES statements, which take conflicting locks and can deadlock
+ * — an intermittent "could not prepare the test database" that reproduces
+ * roughly never and wastes an afternoon when it does. The lock makes the second
+ * caller wait for the first and then find nothing left to do.
+ *
+ * Kept, though the case it was written for is gone. It was added when Vitest
+ * ran a globalSetup per project and two projects needed this database; that is
+ * now hoisted to the root config and runs once per run.
+ *
+ * It was also the wrong instrument for that problem. Serialising the two setups
+ * against each other was never the hazard — the hazard was the second one
+ * running at all, reconfiguring roles and grants on a database the first
+ * project's workers were already querying. A lock cannot fix that; not running
+ * twice can.
+ *
+ * What remains is what the lock is actually for: this is a public script.
+ * `npm run db:test:setup` can be run by hand while a suite is in flight, and a
+ * `vitest --watch` in one terminal can overlap a `npm test` in another. Those
+ * are genuinely concurrent invocations, and they still deadlock without it.
  */
 const SETUP_LOCK_ID = 725_140_921;
 

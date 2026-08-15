@@ -3,16 +3,30 @@
 import type { ReactNode } from "react";
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
+/*
+ * The subpath, not the barrel.
+ *
+ * "use client" puts this file in the browser graph, and @whatsapp-os/core's
+ * index re-exports password.ts — which reaches for @node-rs/argon2, a native
+ * module. Importing the barrel here pulls a .node binary into the client
+ * bundle and the build fails with an import trace rather than anything that
+ * names the real problem.
+ *
+ * It only surfaced when a page first rendered this component: until then the
+ * file existed but was reachable only from tests, so it never entered the
+ * client graph at all.
+ */
 import {
   INTEGRATION_LABELS,
   integrationFields,
   type IntegrationProviderName,
-} from "@whatsapp-os/core";
+} from "@whatsapp-os/core/integrations";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { FormStatus } from "@/components/ui/form-status";
 import {
   saveIntegrationAction,
+  testIntegrationAction,
   type IntegrationFormState,
 } from "../actions";
 
@@ -108,17 +122,92 @@ export function IntegrationForm({
         be re-entered to change them.
       </p>
 
-      <Submit />
+      <SaveButtons />
     </form>
   );
 }
 
-function Submit() {
+/**
+ * Save, and Save &amp; Verify.
+ *
+ * Both live in this form because both need the field values, and they are
+ * distinguished by an `intent` on the submit button rather than by two forms
+ * duplicating the inputs.
+ *
+ * The pending state is not decoration. Save &amp; Verify makes a real provider
+ * call with a ten-second timeout, and a still page invites a second click —
+ * which is two provider calls, two charged usage events (correctly, they are
+ * two real calls) and an operator unsure which result they are looking at.
+ *
+ * useFormStatus exposes the submitted FormData, so the label changes on the
+ * button that was actually pressed rather than on both.
+ */
+function SaveButtons() {
+  const { pending, data } = useFormStatus();
+  const verifying = data?.get("intent") === "verify";
+
+  return (
+    <div className="flex flex-wrap items-center gap-xs">
+      <Button type="submit" name="intent" value="save" disabled={pending}>
+        {pending && !verifying ? "Saving…" : "Save"}
+      </Button>
+
+      <Button
+        type="submit"
+        name="intent"
+        value="verify"
+        variant="outline"
+        disabled={pending}
+      >
+        {pending && verifying ? "Verifying…" : "Save & Verify"}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Test Connection.
+ *
+ * Its own form: it submits no field values, so putting it in the credentials
+ * form would post whatever the operator had half-typed. Same pending
+ * treatment, same reason — ten seconds is long enough to look broken.
+ */
+export function TestConnectionForm({
+  companyId,
+  provider,
+  csrf,
+}: {
+  companyId: string;
+  provider: IntegrationProviderName;
+  csrf: ReactNode;
+}) {
+  const [state, formAction] = useActionState<IntegrationFormState, FormData>(
+    testIntegrationAction,
+    {},
+  );
+
+  return (
+    <form action={formAction} className="flex flex-col gap-xs">
+      {csrf}
+      <input type="hidden" name="companyId" defaultValue={companyId} />
+      <input type="hidden" name="provider" defaultValue={provider} />
+
+      <FormStatus
+        message={state.success ?? state.message}
+        tone={state.success ? "success" : "error"}
+      />
+
+      <TestButton />
+    </form>
+  );
+}
+
+function TestButton() {
   const { pending } = useFormStatus();
 
   return (
-    <Button type="submit" variant="outline" disabled={pending}>
-      {pending ? "Saving…" : "Save"}
+    <Button type="submit" variant="ghost" size="sm" disabled={pending}>
+      {pending ? "Testing…" : "Test Connection"}
     </Button>
   );
 }

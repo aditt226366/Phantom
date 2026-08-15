@@ -776,19 +776,115 @@ export async function recordAdminUsage(
 }
 
 /**
- * Remove an integration and everything under it.
+ * Delete the stored credentials, keep the record that they existed.
  *
- * The explicit way to clear a credential. Secrets and verification history go
- * with it by cascade — there is no value in keeping ciphertext nothing can
- * describe.
+ * The secrets are actually removed. A disconnect that only flipped the badge
+ * would leave every ciphertext in place, and "disconnected" would describe a
+ * label rather than a state — the vault would still hold a live token for a
+ * provider the panel claims is not connected.
+ *
+ * The Integration row and its verification history stay. An operator asking
+ * "was this ever working, and what did it say when it stopped" is asking a
+ * reasonable question, and the history is the only thing that answers it. It
+ * holds no secret: every stored error was scrubbed before it was written.
+ *
+ * Unrecoverable by design — re-connecting means re-entering every value, since
+ * nothing here can read them back. Hence the confirmation step.
  */
 export async function disconnectIntegration(
   companyId: string,
   provider: IntegrationProviderName,
-): Promise<boolean> {
-  const { count } = await adminPrisma.integration.deleteMany({
-    where: { companyId, provider },
+): Promise<{ secretsRemoved: number } | null> {
+  const integration = await adminPrisma.integration.findUnique({
+    where: { companyId_provider: { companyId, provider } },
+    select: { id: true },
   });
 
-  return count > 0;
+  if (!integration) return null;
+
+  return adminPrisma.$transaction(async (tx) => {
+    const { count } = await tx.integrationSecret.deleteMany({
+      where: { companyId, integrationId: integration.id },
+    });
+
+    await tx.integration.update({
+      where: { id: integration.id },
+      data: {
+        status: "NOT_CONNECTED",
+        lastVerifiedAt: null,
+        lastError: null,
+      },
+    });
+
+    return { secretsRemoved: count };
+  });
+}
+
+export interface VerificationEntry {
+  id: string;
+  provider: IntegrationProviderName;
+  ok: boolean;
+  statusCode: number | null;
+  failureKind: string | null;
+  /** Scrubbed by the adapter before it was ever stored. */
+  error: string | null;
+  /*
+   * Opaque on purpose. Typing this Prisma.JsonValue would put a second Prisma
+   * type in this file, and the narrowness check allows exactly one — the
+   * consumer stringifies it for display and needs no more than this.
+   */
+  details: unknown;
+  createdAt: Date;
+}
+
+export interface VerificationPage {
+  entries: VerificationEntry[];
+  nextCursor: string | null;
+}
+
+/**
+ * Verification history for a company.
+ *
+ * Bounded: this table gets one row per check per integration and nothing ever
+ * prunes it, so an unpaged read would grow without limit against the busiest
+ * table in the workspace.
+ */
+export async function listVerifications(
+  companyId: string,
+  options: { cursor?: string | undefined; limit?: number } = {},
+): Promise<VerificationPage> {
+  const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
+
+  const rows = await adminPrisma.integrationVerification.findMany({
+    where: { companyId },
+    orderBy: { createdAt: "desc" },
+    take: limit + 1,
+    ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    select: {
+      id: true,
+      ok: true,
+      statusCode: true,
+      failureKind: true,
+      error: true,
+      details: true,
+      createdAt: true,
+      integration: { select: { provider: true } },
+    },
+  });
+
+  const page = rows.slice(0, limit);
+
+  return {
+    entries: page.map((row) => ({
+      id: row.id,
+      provider: row.integration.provider,
+      ok: row.ok,
+      statusCode: row.statusCode,
+      failureKind: row.failureKind,
+      error: row.error,
+      details: row.details,
+      createdAt: row.createdAt,
+    })),
+    nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null,
+  };
 }

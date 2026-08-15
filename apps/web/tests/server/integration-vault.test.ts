@@ -205,14 +205,25 @@ describe("what the console can read back", () => {
 });
 
 describe("disconnecting", () => {
-  it("removes the integration and its secrets", async () => {
+  it("removes the secrets and keeps the record", async () => {
+    /*
+     * Changed deliberately in C14. Deleting the Integration row too would take
+     * the verification history with it, and "was this ever working, and what
+     * did it say when it stopped" is the question an operator actually asks.
+     * The ciphertext is what has to go.
+     */
     await saveIntegrationSecrets(companyId, "META_ADS", {
       META_ADS_ACCESS_TOKEN: TOKEN,
     });
 
-    expect(await disconnectIntegration(companyId, "META_ADS")).toBe(true);
-    expect(await listIntegrations(companyId)).toEqual([]);
+    expect(await disconnectIntegration(companyId, "META_ADS")).toEqual({
+      secretsRemoved: 1,
+    });
     expect(await storedCiphertext("META_ADS_ACCESS_TOKEN")).toBe("");
+
+    const [integration] = await listIntegrations(companyId);
+    expect(integration?.status).toBe("NOT_CONNECTED");
+    expect(integration?.secrets).toEqual([]);
   });
 });
 

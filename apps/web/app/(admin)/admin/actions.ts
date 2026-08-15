@@ -19,6 +19,7 @@ import {
   writeAdminAudit,
 } from "@/lib/admin-db";
 import { issueAdminPasswordReset } from "@/lib/auth/admin-reset";
+import { verifyIntegration } from "@/lib/integrations/verify";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import {
   adminSignIn,
@@ -105,14 +106,93 @@ export async function saveIntegrationAction(
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
 
-  return {
-    success:
-      result.saved.length === 0
-        ? "Nothing changed."
-        : `Saved ${result.saved.length} credential${result.saved.length === 1 ? "" : "s"}.`,
-  };
+  const saved =
+    result.saved.length === 0
+      ? "Nothing changed."
+      : `Saved ${result.saved.length} credential${result.saved.length === 1 ? "" : "s"}.`;
+
+  /*
+   * Save & Verify is the same save followed by a real provider call, so the
+   * outcome the operator reads is the verification's, not the save's.
+   */
+  if (formData.get("intent")?.toString() === "verify") {
+    const verified = await runVerification(
+      companyId,
+      provider,
+      session.adminUserId,
+    );
+
+    return verified.success
+      ? { success: `${saved} ${verified.success}` }
+      : { success: saved, ...(verified.message ? { message: verified.message } : {}) };
+  }
+
+  return { success: saved };
 }
 
+/**
+ * Check an integration against its provider.
+ *
+ * Shared by Save & Verify and by Test Connection, because they differ only in
+ * whether a save happened first.
+ */
+async function runVerification(
+  companyId: string,
+  provider: IntegrationProviderName,
+  adminUserId: string,
+): Promise<IntegrationFormState> {
+  const result = await verifyIntegration(companyId, provider);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId,
+    action: "admin.integration.verified",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* The outcome, never the credential. `error` is already scrubbed. */
+    metadata: {
+      companyId,
+      provider,
+      ok: result?.ok ?? false,
+      ...(result && !result.ok ? { kind: result.kind } : {}),
+    },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+
+  if (!result) {
+    return { message: "Nothing is stored for this provider yet." };
+  }
+
+  return result.ok
+    ? { success: "Connection verified." }
+    : { message: result.error };
+}
+
+export async function testIntegrationAction(
+  _previous: IntegrationFormState,
+  formData: FormData,
+): Promise<IntegrationFormState> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) {
+    return { message: "Unknown provider." };
+  }
+
+  return runVerification(companyId, provider, session.adminUserId);
+}
+
+/**
+ * Delete a provider's stored credentials.
+ *
+ * A POST with CSRF and a confirmation step, for the same reason Deactivate has
+ * one: it is destructive and unrecoverable. Nothing here can read a credential
+ * back, so re-connecting means re-typing every value from the provider's own
+ * console.
+ */
 export async function disconnectIntegrationAction(
   formData: FormData,
 ): Promise<void> {
@@ -131,10 +211,15 @@ export async function disconnectIntegrationAction(
     adminUserId: session.adminUserId,
     action: "admin.integration.disconnected",
     ...(context.ip ? { ip: context.ip } : {}),
-    metadata: { companyId, provider, removed },
+    metadata: {
+      companyId,
+      provider,
+      secretsRemoved: removed?.secretsRemoved ?? 0,
+    },
   });
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
+  redirect(`/admin/companies/${companyId}/integrations`);
 }
 
 function isIntegrationProvider(

@@ -242,6 +242,26 @@ ORM assertions into extension tests.
 - Native modules need `serverExternalPackages`; files read at runtime need
   `outputFileTracingIncludes`. Both compile fine and fail on first use.
 
+**`revalidatePath` arrived in Phase 2 and is now the convention.** Phase 1 had
+none: every mutation either `redirect()`ed, which re-renders the destination, or
+returned a state message and relied on the next navigation.
+
+The admin console broke that. Save, Test Connection, Disconnect and Deactivate
+all change data the operator is looking at *and* stay on the page, so without an
+explicit revalidate the badge keeps its old value until something else happens
+to re-render — which reads as "the save did not work" and gets clicked again.
+
+So: **a server action that mutates and does not redirect calls
+`revalidatePath()` for the route it changed**, as its last step before
+returning. Actions that redirect do not need it, though the deactivation
+actions call it anyway because the redirect target is the page whose data
+changed.
+
+The badge is never flipped optimistically on the client. It renders the stored
+status, after the action has written it — an integration that claims CONNECTED
+because the browser assumed so is worse than one that takes a moment to say
+NOT_CONNECTED, since the operator acts on the badge.
+
 ---
 
 ## Decisions already taken

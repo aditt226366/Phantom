@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The other half of the echo check: what actually reaches the DOM.
@@ -40,14 +40,29 @@ vi.mock("react", async () => {
   };
 });
 
+/**
+ * Mutable so a test can put the form in flight.
+ *
+ * Save & Verify makes a real provider call with a ten-second timeout, and a
+ * still page invites a second click — two provider calls, two charged usage
+ * events, and an operator unsure which result they are reading.
+ */
+let formStatus: { pending: boolean; data?: FormData } = { pending: false };
+
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
-  return { ...actual, useFormStatus: () => ({ pending: false }) };
+  return { ...actual, useFormStatus: () => formStatus };
 });
 
 const { IntegrationForm } = await import(
   "@/app/(admin)/admin/_components/integration-form"
 );
+
+function pendingWith(intent: string): void {
+  const data = new FormData();
+  data.set("intent", intent);
+  formStatus = { pending: true, data };
+}
 
 function renderForm() {
   return render(
@@ -62,6 +77,56 @@ function renderForm() {
     />,
   );
 }
+
+describe("while a submission is in flight", () => {
+  afterEach(() => {
+    formStatus = { pending: false };
+  });
+
+  it("disables both save buttons", () => {
+    pendingWith("verify");
+    renderForm();
+
+    expect(
+      (screen.getByRole("button", { name: /save$/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /verifying/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("changes the label on the button that was pressed, not both", () => {
+    pendingWith("verify");
+    renderForm();
+
+    expect(screen.getByRole("button", { name: "Verifying…" })).toBeDefined();
+    /* Save keeps its own label, so the operator can see which one is running. */
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+  });
+
+  it("does the same for a plain save", () => {
+    pendingWith("save");
+    renderForm();
+
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save & Verify" })).toBeDefined();
+  });
+
+  it("leaves both enabled when idle", () => {
+    renderForm();
+
+    expect(
+      (screen.getByRole("button", { name: "Save" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save & Verify" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+});
 
 describe("IntegrationForm", () => {
   it("puts no part of a secret into the markup", () => {

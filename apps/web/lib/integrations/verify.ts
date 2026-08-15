@@ -48,6 +48,38 @@ export async function verifyIntegration(
   const loaded = await loadSealedSecrets(companyId, provider);
   if (!loaded) return null;
 
+  if (loaded.secrets.length === 0) {
+    /*
+     * Refused before the provider is involved.
+     *
+     * Calling out with empty strings gets a generic auth error back — Meta
+     * says the access token is invalid — which reads as "your credentials are
+     * wrong" for credentials that were never entered. The operator then goes
+     * and re-enters values that do not exist, and the panel has actively sent
+     * them the wrong way.
+     *
+     * No usage event either: nothing was called, so nothing is charged.
+     */
+    const empty: VerifyResult = {
+      integrationId: loaded.integrationId,
+      ok: false,
+      kind: "config",
+      error:
+        "No credentials are stored for this integration yet. Save them before testing the connection.",
+    };
+
+    await recordVerification(companyId, empty.integrationId, {
+      ok: false,
+      statusCode: undefined,
+      error: empty.error,
+      failureKind: empty.kind,
+      details: undefined,
+      demote: false,
+    });
+
+    return empty;
+  }
+
   /* 2. Decrypt and call. Nothing is open. */
   const secrets: Record<string, string> = {};
   for (const row of loaded.secrets) {

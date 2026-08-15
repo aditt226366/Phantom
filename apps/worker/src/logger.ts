@@ -1,3 +1,4 @@
+import { redactKeys } from "@whatsapp-os/core";
 import { env } from "./env.ts";
 
 /**
@@ -17,12 +18,22 @@ const threshold = LEVELS[env.LOG_LEVEL];
 function emit(level: Level, message: string, fields?: Record<string, unknown>) {
   if (LEVELS[level] < threshold) return;
 
-  const line = JSON.stringify({
-    level,
-    time: new Date().toISOString(),
-    message,
-    ...fields,
-  });
+  /*
+   * Everything goes through the redactor, including the message.
+   *
+   * Not at the call sites: a redactor that has to be remembered is one that
+   * gets forgotten, and the call site that forgets is the one handling an
+   * error from a provider that just echoed our token back. Doing it here means
+   * there is no way to log through this module without it.
+   */
+  const line = JSON.stringify(
+    redactKeys({
+      level,
+      time: new Date().toISOString(),
+      message,
+      ...fields,
+    }),
+  );
 
   if (level === "error" || level === "warn") {
     console.error(line);

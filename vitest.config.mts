@@ -37,6 +37,22 @@ export default defineConfig({
         },
       },
       {
+        /*
+         * The worker's own code. No database and no Redis: what is worth
+         * testing here is the logger, and specifically that redaction is wired
+         * into it. setupFiles supplies just enough environment for
+         * src/env.ts's parseEnv not to process.exit(1) on import.
+         */
+        test: {
+          name: "worker",
+          root: "./apps/worker",
+          environment: "node",
+          include: ["tests/**/*.test.ts"],
+          setupFiles: ["./tests/setup.ts"],
+          server: { deps: { inline: [/@whatsapp-os\//] } },
+        },
+      },
+      {
         test: {
           name: "db",
           root: "./packages/db",

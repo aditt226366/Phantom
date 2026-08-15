@@ -293,6 +293,28 @@ model Integration {
   label    String
   status   IntegrationStatus   @default(NOT_CONNECTED)
 
+  /// The opaque path segment Meta posts to: /api/webhooks/whatsapp/{key}.
+  ///
+  /// Not a company id and not this row's id. Meta stores this URL somewhere we
+  /// do not control and renders it in a UI customers screenshot, so it must
+  /// carry no internal identifier - and it must rotate without touching a
+  /// credential, which anything derived from an id could not.
+  ///
+  /// Globally unique, because the lookup happens before any company context
+  /// exists. app_resolver holds a column-level SELECT on exactly this column
+  /// and company_id; see the resolver migration.
+  ///
+  /// The default is a database expression rather than application code so that
+  /// no row can exist without one, including rows written by a migration or by
+  /// a future code path that has not thought about webhooks. Rotation is an
+  /// explicit UPDATE from the app, in the same 32-hex shape.
+  /// The expression is spelled the way Postgres normalises it, not the way it
+  /// was written in the migration. pg_get_expr() re-prints a default with its
+  /// own parenthesisation and explicit casts, so the readable form drifts on
+  /// every check - the same trap as an index name that does not match its
+  /// @map'ed column.
+  webhookKey String @unique @default(dbgenerated("replace((gen_random_uuid())::text, '-'::text, ''::text)")) @map("webhook_key")
+
   lastVerifiedAt DateTime? @map("last_verified_at")
   /// The last failure, already scrubbed. Never contains a credential - see
   /// redactKeys/scrubValues in @whatsapp-os/core.

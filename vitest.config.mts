@@ -92,6 +92,13 @@ export default defineConfig({
             ),
           },
         },
+        /*
+         * The React plugin here too, so a server component can be imported and
+         * called directly. The GET-safety check renders the confirmation page
+         * and asserts the database is untouched — the only way to test that
+         * claim rather than assert a proxy for it.
+         */
+        plugins: [react()],
         test: {
           name: "web-server",
           root: "./apps/web",

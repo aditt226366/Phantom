@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { COMPANY_STATUS_FILTERS, type CompanyStatusFilter } from "@whatsapp-os/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,7 +74,7 @@ export function CompanyFilters({ q, status }: CompanyFiltersProps) {
 
         {isFiltered ? (
           <Button asChild variant="ghost">
-            <a href="/admin/companies">Clear</a>
+            <Link href="/admin/companies">Clear</Link>
           </Button>
         ) : null}
       </div>

@@ -14,7 +14,14 @@ import { adminResetPasswordAction, type AdminFormState } from "../actions";
  * Renders the outcome and nothing else — no token, no link, no confirmation of
  * whether the account exists.
  */
-export function AdminResetForm({ csrf }: { csrf: ReactNode }) {
+export function AdminResetForm({
+  csrf,
+  defaultUsername = "",
+}: {
+  csrf: ReactNode;
+  /** Prefilled from the company header, so the operator is not guessing. */
+  defaultUsername?: string;
+}) {
   const [state, formAction] = useActionState<AdminFormState, FormData>(
     adminResetPasswordAction,
     {},
@@ -28,6 +35,7 @@ export function AdminResetForm({ csrf }: { csrf: ReactNode }) {
         <Field
           label="Username"
           name="username"
+          defaultValue={defaultUsername}
           autoComplete="off"
           containerClassName="tablet:max-w-xs tablet:flex-1"
           required

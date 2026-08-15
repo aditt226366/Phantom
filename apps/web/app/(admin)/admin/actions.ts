@@ -15,6 +15,7 @@ import { createConsoleMailer, sendMailSafely } from "@whatsapp-os/core";
 import {
   disconnectIntegration,
   saveIntegrationSecrets,
+  setCompanyDeactivated,
   writeAdminAudit,
 } from "@/lib/admin-db";
 import { issueAdminPasswordReset } from "@/lib/auth/admin-reset";
@@ -142,6 +143,62 @@ function isIntegrationProvider(
   return (INTEGRATION_PROVIDERS as readonly string[]).includes(value);
 }
 
+/* ------------------------------------------------------------------ */
+/* Deactivation                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Suspend or restore a workspace.
+ *
+ * A POST with CSRF, never a link.
+ *
+ * The confirmation *page* is a GET — rendering it is safe and idempotent, and
+ * it is what ?confirm= addresses. The act itself cannot be: a URL that
+ * deactivates on GET is reachable by a browser preloading a hovered link, by a
+ * corporate mail scanner following it out of an alert, and by any prefetch.
+ * The consequence is a live customer losing access to their account because
+ * somebody's security appliance was thorough.
+ *
+ * Reactivation exists for a duller reason: without it, an operator's misclick
+ * is recoverable only by hand-written SQL against production.
+ */
+async function setDeactivation(
+  formData: FormData,
+  deactivated: boolean,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  if (!companyId) return;
+
+  const changed = await setCompanyDeactivated(companyId, deactivated);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: deactivated ? "admin.company.deactivated" : "admin.company.reactivated",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* `changed: false` means it was already in that state. */
+    metadata: { companyId, changed },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}`);
+  redirect(`/admin/companies/${companyId}`);
+}
+
+export async function deactivateCompanyAction(
+  formData: FormData,
+): Promise<void> {
+  await setDeactivation(formData, true);
+}
+
+export async function reactivateCompanyAction(
+  formData: FormData,
+): Promise<void> {
+  await setDeactivation(formData, false);
+}
+
 /** One message for every failure, exactly as on the tenant side. */
 const INVALID = "That username and password do not match.";
 
@@ -247,7 +304,24 @@ The link expires in one hour and can be used once.`,
     });
   }
 
-  /* One message for both outcomes, and never the link. */
+  if (result.refused === "company-deactivated") {
+    /*
+     * The one outcome worth distinguishing, and it is not an enumeration risk:
+     * the operator is already looking at the company's page, so this tells
+     * them nothing they cannot see.
+     *
+     * Saying "a link was sent" here would be a lie with a long tail —
+     * app_resolve_company() refuses the 'password_reset' kind for a
+     * deactivated company, so the link cannot work, and the person debugging
+     * it would start with the mail server.
+     */
+    return {
+      message:
+        "This company is deactivated, so a reset link could not be used. Reactivate it first.",
+    };
+  }
+
+  /* One message for both remaining outcomes, and never the link. */
   return {
     message: "If that user exists, a reset link has been sent to them.",
   };

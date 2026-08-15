@@ -174,11 +174,27 @@ export async function findUserForReset(username: string): Promise<{
   id: string;
   companyId: string;
   email: string;
+  /** Non-null when the company is suspended, so the caller can refuse. */
+  companyDeactivatedAt: Date | null;
 } | null> {
-  return adminPrisma.user.findUnique({
+  const user = await adminPrisma.user.findUnique({
     where: { username: username.trim().toLowerCase() },
-    select: { id: true, companyId: true, email: true },
+    select: {
+      id: true,
+      companyId: true,
+      email: true,
+      company: { select: { deactivatedAt: true } },
+    },
   });
+
+  if (!user) return null;
+
+  return {
+    id: user.id,
+    companyId: user.companyId,
+    email: user.email,
+    companyDeactivatedAt: user.company.deactivatedAt,
+  };
 }
 
 /**
@@ -309,6 +325,91 @@ export async function listCompanies(
     nextCursor: rows.length > filter.limit ? (page.at(-1)?.id ?? null) : null,
     filtered,
   };
+}
+
+/**
+ * One company, for its workspace.
+ *
+ * Wider than CompanySummary because the detail page renders more — and every
+ * field here is rendered. `deactivatedAt` is the instant, not a repeat of
+ * `status`: the overview says when it happened, which is the first thing an
+ * operator asks when they find a company suspended.
+ */
+export interface CompanyDetail {
+  id: string;
+  name: string;
+  slug: string;
+  plan: Plan;
+  status: "ACTIVE" | "DEACTIVATED";
+  deactivatedAt: Date | null;
+  ownerUsername: string | null;
+  ownerLastLoginAt: Date | null;
+  userCount: number;
+  createdAt: Date;
+}
+
+/** Null for an id that does not exist — the caller renders a 404. */
+export async function getCompanyDetail(
+  companyId: string,
+): Promise<CompanyDetail | null> {
+  const company = await adminPrisma.company.findUnique({
+    where: { id: companyId },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      plan: true,
+      deactivatedAt: true,
+      createdAt: true,
+      _count: { select: { users: true } },
+      users: {
+        where: { role: "OWNER" },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: { username: true, lastLoginAt: true },
+      },
+    },
+  });
+
+  if (!company) return null;
+
+  return {
+    id: company.id,
+    name: company.name,
+    slug: company.slug,
+    plan: company.plan,
+    status: company.deactivatedAt === null ? "ACTIVE" : "DEACTIVATED",
+    deactivatedAt: company.deactivatedAt,
+    ownerUsername: company.users[0]?.username ?? null,
+    ownerLastLoginAt: company.users[0]?.lastLoginAt ?? null,
+    userCount: company._count.users,
+    createdAt: company.createdAt,
+  };
+}
+
+/**
+ * Suspend or restore a workspace.
+ *
+ * One function for both directions, because they are the same write and
+ * pretending otherwise invites the reactivation path to drift — which is how
+ * an operator ends up with a company that can be suspended and not restored.
+ *
+ * Returns false when the company is already in the requested state, so the
+ * caller can avoid an audit row claiming something happened that did not.
+ */
+export async function setCompanyDeactivated(
+  companyId: string,
+  deactivated: boolean,
+): Promise<boolean> {
+  const { count } = await adminPrisma.company.updateMany({
+    where: {
+      id: companyId,
+      ...(deactivated ? { deactivatedAt: null } : { deactivatedAt: { not: null } }),
+    },
+    data: { deactivatedAt: deactivated ? new Date() : null },
+  });
+
+  return count > 0;
 }
 
 /* ------------------------------------------------------------------ */

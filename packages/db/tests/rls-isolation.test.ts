@@ -425,6 +425,93 @@ describe("usage events", () => {
   });
 });
 
+describe("whatsapp numbers", () => {
+  /**
+   * A number needs an integration to hang off, so this seeds both.
+   *
+   * Through the ORM and outside any `it`, deliberately: seeding is not the
+   * claim. no-orm-in-isolation.test.ts scans the bodies below, not this.
+   */
+  async function seedIntegration(company: SeededCompany): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+      });
+      return integration.id;
+    });
+  }
+
+  async function seedNumber(
+    company: SeededCompany,
+    phoneNumberId: string,
+  ): Promise<string> {
+    const integrationId = await seedIntegration(company);
+
+    return withCompany(company.id, async (db, companyId) => {
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId,
+          phoneNumberId,
+          displayNumber: "+91 98765 43210",
+          status: "CONNECTED",
+        },
+      });
+
+      return number.id;
+    });
+  }
+
+  it("does not show one company's numbers to another", async () => {
+    await seedNumber(alpha, "alpha-phone-1");
+    await seedNumber(beta, "beta-phone-1");
+
+    /*
+     * Raw, inside beta's context. Through the ORM the extension would add the
+     * company filter itself and this would pass with the policy dropped.
+     */
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<
+        Array<{ phone_number_id: string }>
+      >`SELECT phone_number_id FROM whatsapp_numbers ORDER BY phone_number_id`,
+    );
+
+    expect(rows.map((r) => r.phone_number_id)).toEqual(["beta-phone-1"]);
+  });
+
+  it("refuses to write a number into another company", async () => {
+    const integrationId = await seedIntegration(alpha);
+
+    /*
+     * The WITH CHECK half. A policy with only USING would let a caller holding
+     * alpha's context insert a row stamped beta, which reads back as beta's
+     * data and is invisible to alpha for ever after.
+     */
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_numbers
+            (id, company_id, integration_id, phone_number_id, display_number, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${integrationId}, 'beta-phone-2', '+91 90000 00000', now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides a seeded number from the table's own owner", async () => {
+    /*
+     * Seeded first, on purpose. whatsapp_numbers is empty in beforeEach, so an
+     * owner reading it would return zero rows whether FORCE were in effect or
+     * not — the same vacuous pass this suite exists to avoid. With a row in the
+     * table, an empty result is only explicable by FORCE.
+     */
+    await seedNumber(alpha, "alpha-phone-2");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_numbers");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

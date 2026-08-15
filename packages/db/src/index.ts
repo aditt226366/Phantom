@@ -29,6 +29,7 @@ export type {
   IntegrationSecret,
   IntegrationVerification,
   UsageEvent,
+  WhatsAppNumber,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -41,4 +42,6 @@ export {
   Plan,
   IntegrationProvider,
   IntegrationStatus,
+  WhatsAppNumberStatus,
+  WhatsAppQualityRating,
 } from "./generated/prisma/enums.ts";

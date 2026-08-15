@@ -98,6 +98,7 @@ model Company {
   integrationSecrets     IntegrationSecret[]
   integrationVerifications IntegrationVerification[]
   usageEvents            UsageEvent[]
+  whatsappNumbers        WhatsAppNumber[]
 
   @@map("companies")
 }
@@ -301,8 +302,9 @@ model Integration {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  secrets       IntegrationSecret[]
-  verifications IntegrationVerification[]
+  secrets         IntegrationSecret[]
+  verifications   IntegrationVerification[]
+  whatsappNumbers WhatsAppNumber[]
 
   /// One per provider per company, for now. This relaxes in Phase 4/6, when a
   /// company gets several numbers and several sheet bindings - which is why
@@ -409,6 +411,94 @@ model IntegrationVerification {
 
   @@index([companyId, createdAt(sort: Desc)])
   @@map("integration_verifications")
+}
+
+/// Meta's view of whether a number may send.
+///
+/// UNKNOWN is a real member, not a placeholder for "not fetched yet" - that is
+/// what metadata_refreshed_at being null means. It exists because Meta has
+/// added values to this set before, and a number whose status this build does
+/// not recognise must render as itself rather than fail the write that carried
+/// it.
+enum WhatsAppNumberStatus {
+  CONNECTED
+  PENDING
+  FLAGGED
+  RESTRICTED
+  UNKNOWN
+
+  @@map("whatsapp_number_status")
+}
+
+/// The quality rating Meta assigns from how recipients react.
+///
+/// Drops to RED before Meta restricts a number, so it is the earliest warning a
+/// customer gets that their messaging is about to stop working.
+enum WhatsAppQualityRating {
+  GREEN
+  YELLOW
+  RED
+  UNKNOWN
+
+  @@map("whatsapp_quality_rating")
+}
+
+/// One phone number under a company's WhatsApp Business Account.
+///
+/// Meta's model is one WABA to many numbers, and this mirrors it rather than
+/// relaxing Integration's unique on (company_id, provider). Relaxing that would
+/// move secrets between integration rows, and integration_id is an AAD
+/// component - so that is a decrypt-and-re-encrypt of every credential, not an
+/// UPDATE. See the note on IntegrationSecret above, which names this phase.
+///
+/// company_id is carried here and not reached through integration_id, for the
+/// same reason IntegrationSecret carries it: RLS evaluates per table, a policy
+/// that had to join integrations to find the company is a policy that can be
+/// got wrong, and schema-invariants would fail the table outright.
+///
+/// Everything Meta tells us about a number is a cache. The refresh job owns it;
+/// nothing here is typed by a person.
+model WhatsAppNumber {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// Meta's id for this number. Every Graph call and every webhook payload
+  /// names it by this, never by the display number.
+  phoneNumberId String @map("phone_number_id")
+
+  /// E.164 as Meta formats it, for display only. Never a lookup key: Meta has
+  /// changed its spacing, and matching on it would split one number in two.
+  displayNumber String  @map("display_number")
+  /// The business name shown to recipients, once Meta has approved it.
+  verifiedName  String? @map("verified_name")
+
+  qualityRating WhatsAppQualityRating @default(UNKNOWN) @map("quality_rating")
+  status        WhatsAppNumberStatus  @default(UNKNOWN)
+
+  /// Meta's own strings, e.g. TIER_1K. Text and not enums, deliberately: the
+  /// sets have changed twice already, and an unrecognised tier must render as
+  /// itself at 3am rather than reject the refresh that carried it.
+  messagingTier   String? @map("messaging_tier")
+  throughputLevel String? @map("throughput_level")
+
+  /// When this row last agreed with Meta. Everything above it is a cache, and a
+  /// cache with no age is a claim nobody can check. Null means never fetched.
+  metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// The natural key. Meta's phone_number_id is globally unique, but scoping it
+  /// per company keeps the uniqueness a tenant fact rather than a global one -
+  /// two companies must never collide, and neither must learn of the other by
+  /// failing to insert.
+  @@unique([companyId, phoneNumberId])
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("whatsapp_numbers")
 }
 
 /// One countable thing that happened, priced at the moment it happened.

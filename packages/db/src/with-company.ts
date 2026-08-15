@@ -64,6 +64,7 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "IntegrationSecret",
   "IntegrationVerification",
   "UsageEvent",
+  "WhatsAppNumber",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

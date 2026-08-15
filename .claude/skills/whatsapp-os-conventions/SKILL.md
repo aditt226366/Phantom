@@ -208,8 +208,19 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   been roughly one in five before.
 - **Not the native module.** `@node-rs/argon2` belongs to `web-server`, and
   every `web-server` file reported normally in each crashed run.
-- **Not obviously heap.** The file is small and passes alone; nothing suggests
-  memory pressure, so `--max-old-space-size` was not changed.
+- **Not heap. Measured, not assumed.** `--logHeapUsage --reporter=verbose`
+  over all 171 db tests: the post-GC floor does not climb. Every db-touching
+  file floors at 37–40 MB and the catalog-only files at 12–16 MB, so the
+  average per-file floor is *lower* in the second half of the run (29 MB) than
+  the first (39 MB). There is no accumulation inside the single fork, so
+  nothing to fix by disconnecting per file and nothing to paper over with
+  `--max-old-space-size`.
+
+  One outlier worth knowing before re-measuring: `media-store.test.ts` peaks at
+  358 MB, from multi-megabyte fixture buffers and the chunks the streaming test
+  reassembles. It is transient garbage — the floor after it is 39 MB like
+  everything else — but it is by far the largest moment in the suite, and it is
+  the first thing that will look suspicious to whoever reads this next.
 
 The remaining suspect is contention between `db` and `web-server`, which share
 one test database and one `globalSetup`, and already have a documented deadlock

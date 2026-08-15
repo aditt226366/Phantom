@@ -37,9 +37,19 @@ recreates schema `public`, which lands owned by the bootstrap superuser, so
 `permission denied for schema public` — then records a *failed* migration, so
 subsequent runs refuse with P3009 and the database is stuck.
 
-Recovering is `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` as the owner,
-then `npm run db:roles`, then `migrate deploy`. Run `db:roles` after any reset:
-it is what re-grants schema privileges and re-establishes ownership.
+Recovery is **`npm run db:nuke`** (add `-- --test` for `whatsapp_os_test`), which
+runs the four steps in the order that matters: drop schema, recreate it owned by
+`whatsapp_owner`, `db:roles`, `migrate deploy`. Roles must come after the schema
+exists and before migrations run — the authentication migration needs
+`app_resolver` to hold CREATE on `public` before it can transfer ownership of the
+SECURITY DEFINER functions.
+
+It reads `DATABASE_URL` from `.env` with `dotenv.parse`, never from
+`process.env`, and refuses any host that is not loopback. Both matter: the
+obvious guard — compare the target against `DATABASE_URL` — is circular, because
+the target *is* `DATABASE_URL`, so it passes by construction while an exported
+override quietly redirects the nuke. That version was written, tested against a
+made-up `production_db`, and sailed straight through.
 
 **P2002 carries no constraint name.** Through a driver adapter the message is
 literally `Unique constraint failed on the (not available)` and `meta.target` is

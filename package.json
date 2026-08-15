@@ -25,6 +25,7 @@
     "db:migrate": "npm run migrate --workspace=@whatsapp-os/db",
     "db:migrate:deploy": "npm run migrate:deploy --workspace=@whatsapp-os/db",
     "db:roles": "npm run roles --workspace=@whatsapp-os/db",
+    "db:nuke": "npm run nuke --workspace=@whatsapp-os/db",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",

@@ -17,6 +17,7 @@
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "roles": "node scripts/db-roles.mjs",
+    "nuke": "node scripts/db-nuke.mjs",
     "test:setup": "node scripts/migrate-test.mjs",
     "studio": "prisma studio",
     "typecheck": "tsc --noEmit"

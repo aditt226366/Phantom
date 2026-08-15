@@ -104,6 +104,7 @@ explicit `.ts` extensions.
 | `npm run dev` | Web on :3000 |
 | `npm run db:setup` | Roles, migrations, Prisma client |
 | `npm run db:roles` | Provision roles and ownership (idempotent) |
+| `npm run db:nuke` | Rebuild a dev database from nothing (`-- --test` for the test one) |
 | `npm test` | Every project |
 | `npm run typecheck` / `lint` / `build` | The usual |
 | `npm run admin:hash` / `admin:seed` | Platform admin credential |

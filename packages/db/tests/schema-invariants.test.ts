@@ -46,6 +46,38 @@ const GLOBAL_TABLES = new Set<string>([
 /** Global tables holding admin credentials. app_runtime gets nothing here. */
 const ADMIN_TABLES = ["admin_users", "admin_sessions", "admin_audit_log"];
 
+/**
+ * Tables where app_resolver still holds a *whole-table* SELECT grant.
+ *
+ * app_resolver answers one question — "which company does this opaque key
+ * belong to" — from outside every company context, running SECURITY DEFINER.
+ * The entire argument for giving it that reach is that it can see almost
+ * nothing, and a whole-table grant is how that stops being true without anyone
+ * deciding it: companies was granted whole-table so that app_available_slug()
+ * could read `slug`, and `deactivated_at` was consequently readable by the
+ * resolver before any migration granted it.
+ *
+ * companies has since been narrowed to three columns and is deliberately
+ * absent below. These four have the same shape of problem and are listed
+ * rather than fixed, because each needs its own reading of which columns the
+ * lookup functions touch and bundling four narrowings into one migration is
+ * how one of them goes wrong quietly.
+ *
+ * Listing them is the point. Narrowing one is a shrinking diff in a security
+ * test; granting a new one is a widening diff in the same place. Neither is
+ * a comment in a migration nobody reads again.
+ */
+const RESOLVER_TABLE_GRANTS = new Set<string>([
+  /* app_resolve_company: username and email lookups. */
+  "users",
+  /* app_resolve_company: the session token lookup. */
+  "sessions",
+  /* app_resolve_company: consuming an unauthenticated verification link. */
+  "email_verification_tokens",
+  /* app_resolve_company: consuming an unauthenticated reset link. */
+  "password_reset_tokens",
+]);
+
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
 
@@ -331,26 +363,26 @@ describe("schema invariants", () => {
       }
     });
 
-    it("keeps app_resolver's reach into companies to three columns", async () => {
-      const { rows: whole } = await db.query<{ privilege_type: string }>(
-        `SELECT privilege_type FROM information_schema.role_table_grants
-         WHERE grantee = 'app_resolver'
-           AND table_schema = 'public' AND table_name = 'companies'`,
+    it("holds a whole-table grant only where the allowlist says", async () => {
+      const { rows } = await db.query<{ table_name: string }>(
+        `SELECT DISTINCT table_name FROM information_schema.role_table_grants
+         WHERE grantee = 'app_resolver' AND table_schema = 'public'
+         ORDER BY table_name`,
       );
 
       /*
-       * The entire argument for giving app_resolver cross-company reach is
-       * that it can see almost nothing. A whole-table grant is how that stops
-       * being true silently: `deactivated_at` was readable by the resolver
-       * before anything granted it, purely because the original grant was
-       * wider than intended, and the next column added to companies would
-       * have been too.
+       * An allowlist rather than "no matches", so that narrowing one of these
+       * shows up as a shrinking diff here and granting a fifth shows up as a
+       * widening one — in a security test, rather than as a line in a
+       * migration that reads like every other GRANT.
        */
       expect(
-        whole.map((r) => r.privilege_type),
-        "app_resolver holds a whole-table grant on companies",
-      ).toEqual([]);
+        rows.map((r) => r.table_name),
+        "app_resolver's whole-table grants have changed",
+      ).toEqual([...RESOLVER_TABLE_GRANTS].sort());
+    });
 
+    it("keeps app_resolver's reach into companies to three columns", async () => {
       const { rows: columns } = await db.query<{ column_name: string }>(
         `SELECT column_name FROM information_schema.column_privileges
          WHERE grantee = 'app_resolver'

@@ -51,6 +51,14 @@ const GLOBAL_TABLES = new Set<string>([
    * progress is derived from integration_verifications instead.
    */
   "admin_repair_runs",
+  /*
+   * An unknown webhook key resolves to no company, so there is nothing to
+   * attribute the row to - which is the whole reason this is not part of
+   * whatsapp_webhook_events. Written by an unauthenticated endpoint, read only
+   * by the platform admin, and app_runtime's default grants are revoked in the
+   * migration.
+   */
+  "unroutable_webhooks",
 ]);
 
 /** Global tables holding admin credentials. app_runtime gets nothing here. */
@@ -124,6 +132,15 @@ const COLUMN_GRANTS = new Set<string>([
   "integrations.webhook_key:app_resolver:SELECT",
   "integrations.company_id:app_resolver:SELECT",
   "integrations.provider:app_resolver:SELECT",
+  /* The tenant runtime writes unroutable_webhooks but must not enumerate it.
+     These three are forced by the upsert - RETURNING needs id, ON CONFLICT
+     reads its arbiter column, and the increment reads what it writes. What is
+     absent is the point: company_id, reason, last_ip_hash and the timestamps
+     stay unreadable, so a tenant request cannot learn which companies are
+     failing verification. */
+  "unroutable_webhooks.id:app_runtime:SELECT",
+  "unroutable_webhooks.webhook_key_hash:app_runtime:SELECT",
+  "unroutable_webhooks.attempt_count:app_runtime:SELECT",
 ]);
 
 /**

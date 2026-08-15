@@ -190,7 +190,7 @@ test of a module that uses it. Scripts that import such a module run with
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
 **A worker fork dies occasionally in full runs, and it is not a false green.**
-Four occurrences during Phase 4a, all identical: `Error: [vitest-pool]: Worker
+Eight occurrences during Phase 4a, all identical: `Error: [vitest-pool]: Worker
 forks emitted error / Caused by: Error: Worker exited unexpectedly`, always the
 **db** project, always `auth-schema.test.ts`, always in a full `vitest run`.
 
@@ -201,9 +201,11 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   `Test Files 1 failed`. The runs that *looked* green were runs whose exit code
   was never read, because the output was piped to `tail`. Read `$?`, not the
   summary line.
-- **Not reproducible in isolation.** `vitest run --project db` five times in a
-  row: clean, 140/140 each time. It only happens when db runs alongside the
-  other projects.
+- **Not reproducible in isolation.** `vitest run --project db` five times at
+  140 tests and three times again at 171: clean every run. It only happens when
+  db runs alongside the other projects, and it became noticeably more frequent
+  as the db suite grew - two consecutive full runs crashed at 171 tests, having
+  been roughly one in five before.
 - **Not the native module.** `@node-rs/argon2` belongs to `web-server`, and
   every `web-server` file reported normally in each crashed run.
 - **Not obviously heap.** The file is small and passes alone; nothing suggests

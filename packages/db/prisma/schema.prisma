@@ -104,6 +104,7 @@ model Company {
   messages               Message[]
   whatsappMedia          WhatsAppMedia[]
   webhookEvents          WhatsAppWebhookEvent[]
+  unroutableWebhooks     UnroutableWebhook[]
 
   @@map("companies")
 }
@@ -985,6 +986,64 @@ model WhatsAppWebhookEvent {
   @@map("whatsapp_webhook_events")
 }
 
+/// Why a delivery could not be accepted. Ours to define, so an enum.
+enum UnroutableReason {
+  /// The path segment matches no WhatsApp integration. A rotated key, a stale
+  /// Meta config, or somebody probing.
+  UNKNOWN_KEY
+  /// The key resolves but X-Hub-Signature-256 did not verify. Usually a stale
+  /// app secret on a real tenant; sometimes a forgery.
+  BAD_SIGNATURE
+
+  @@map("unroutable_reason")
+}
+
+/// Deliveries that arrived and could not be accepted.
+///
+/// Global on purpose: an unknown key has no company to attribute the row to,
+/// which is the whole reason this table is separate from
+/// whatsapp_webhook_events. Listed in GLOBAL_TABLES with that reason.
+///
+/// Attacker-writable, and bounded accordingly - see the migration. One row per
+/// key hash with a counter, never one row per request, and the real bound is
+/// the per-IP throttle in front of it.
+model UnroutableWebhook {
+  id String @id @default(cuid())
+
+  /// sha256 of the path segment, not the segment itself.
+  ///
+  /// For BAD_SIGNATURE this is a real tenant's live webhook key, and this table
+  /// is readable by the platform admin rather than by the tenant. Storing the
+  /// hash means an operator can correlate reports without the table becoming a
+  /// list of working webhook URLs.
+  webhookKeyHash String @unique @map("webhook_key_hash")
+
+  reason UnroutableReason
+
+  /// Null for UNKNOWN_KEY, which by definition resolves to no company.
+  /// Populated for BAD_SIGNATURE, because "every delivery to this tenant is
+  /// failing verification" is only actionable if you can say whose.
+  companyId String? @map("company_id")
+
+  /// Hash of the most recent source address. Not a history - the throttle
+  /// bounds abuse, this only helps an operator tell one persistent source from
+  /// scattered noise.
+  lastIpHash String? @map("last_ip_hash")
+
+  attemptCount Int      @default(1) @map("attempt_count")
+  firstSeenAt  DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime @default(now()) @map("last_seen_at")
+
+  /// SetNull, not Cascade: deleting a company should not erase the evidence
+  /// that something was still posting to its old webhook.
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  /// The retention prune, and the operator's "what is failing now".
+  @@index([lastSeenAt(sort: Desc)])
+  @@index([companyId, lastSeenAt(sort: Desc)])
+  @@map("unroutable_webhooks")
+}
+
 /// One countable thing that happened, priced at the moment it happened.
 ///
 /// cost_cents is stamped by the emitter rather than derived when the overview
@@ -1114,6 +1173,14 @@ enum LoginScope {
   ADMIN
   /// Reset-link requests, throttled per email and per address.
   PASSWORD_RESET
+  /// Inbound webhook deliveries that did not resolve or did not verify.
+  ///
+  /// Keyed on the source address with a sentinel in `username`, the way
+  /// signup throttling already is - never on the webhook key. Throttling per
+  /// key would let anyone who learns a tenant's URL flood it until the key is
+  /// locked out, at which point genuine Meta deliveries are refused and Meta
+  /// disables the subscription. See the migration.
+  WEBHOOK
 
   @@map("login_scope")
 }

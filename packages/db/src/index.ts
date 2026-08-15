@@ -25,6 +25,11 @@ export type {
   WebhookDeliveryInput,
   WebhookOutcome,
 } from "./webhook-events.ts";
+export { recordUnroutableWebhook } from "./unroutable-webhooks.ts";
+export type {
+  UnroutableWebhookInput,
+  UnroutableReasonName,
+} from "./unroutable-webhooks.ts";
 export type {
   MediaStore,
   MediaStat,
@@ -53,6 +58,7 @@ export type {
   Message,
   WhatsAppMedia,
   WhatsAppWebhookEvent,
+  UnroutableWebhook,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -72,4 +78,5 @@ export {
   MessageFailureSource,
   ConversationSource,
   MediaState,
+  UnroutableReason,
 } from "./generated/prisma/enums.ts";

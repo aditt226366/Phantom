@@ -26,4 +26,9 @@ export type {
   AdminSession,
   AdminAuditLog,
 } from "./generated/prisma/client.ts";
-export { UserRole, AuditAction, LoginScope } from "./generated/prisma/enums.ts";
+export {
+  UserRole,
+  AuditAction,
+  LoginScope,
+  Plan,
+} from "./generated/prisma/enums.ts";

@@ -50,6 +50,16 @@ enum AuditAction {
   @@map("audit_action")
 }
 
+/// What a company pays for. Drives the plan distribution on the admin
+/// overview, and nothing else yet - entitlements are Phase 6.
+enum Plan {
+  FREE
+  PRO
+  SCALE
+
+  @@map("plan")
+}
+
 /// A customer workspace. The root of every tenant-scoped query.
 /// Not itself company-scoped - see COMPANY_SCOPED_MODELS in with-company.ts.
 model Company {
@@ -64,7 +74,18 @@ model Company {
   /// src/company.ts.
   slug String @unique
 
-  name      String
+  name String
+  plan Plan @default(FREE)
+
+  /// Set to suspend the workspace. Null means active.
+  ///
+  /// Enforced inside app_resolve_company(), not here and not in a middleware:
+  /// every entry point - sign-in, an already-issued session, a verification or
+  /// reset link - resolves a company through that function, so one clause
+  /// covers all of them and no later route can forget it. The app-level check
+  /// in requireSession() exists to render a message, not to be the boundary.
+  deactivatedAt DateTime? @map("deactivated_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

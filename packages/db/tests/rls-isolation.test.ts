@@ -604,6 +604,40 @@ describe("conversations and messages", () => {
     ).rejects.toThrow(/row-level security/i);
   });
 
+  it("does not let the raw window advance reach another company's thread", async () => {
+    const { conversationId } = await seedThread(alpha, "alpha");
+
+    /*
+     * advanceConversation is raw SQL, so the extension's where-merging does not
+     * apply to it: the RLS policy is the whole boundary, and the explicit
+     * company_id predicate is the second, visible half.
+     *
+     * Written out here rather than called through the function on purpose. This
+     * file's rule is raw SQL only - a call that went through a model in
+     * COMPANY_SCOPED_MODELS would have its filter injected and would pass with
+     * every policy dropped - and stating the statement makes it obvious that
+     * what is under test is the UPDATE reaching zero rows rather than an
+     * argument being checked somewhere.
+     */
+    const affected = await withCompany(beta.id, (db) =>
+      db.$executeRaw`
+        UPDATE conversations
+           SET window_expires_at = now() AT TIME ZONE 'UTC',
+               unread_count = unread_count + 1
+         WHERE id = ${conversationId}`,
+    );
+
+    expect(affected, "beta's scope advanced alpha's window").toBe(0);
+
+    const [row] = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ window_expires_at: Date | null; unread_count: number }>>`
+        SELECT window_expires_at, unread_count FROM conversations WHERE id = ${conversationId}`,
+    );
+
+    expect(row?.window_expires_at).toBeNull();
+    expect(Number(row?.unread_count)).toBe(0);
+  });
+
   it("hides a seeded thread from the table's own owner", async () => {
     await seedThread(alpha, "alpha");
 

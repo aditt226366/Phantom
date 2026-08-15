@@ -25,6 +25,17 @@ export type {
   WebhookDeliveryInput,
   WebhookOutcome,
 } from "./webhook-events.ts";
+export {
+  canSend,
+  advanceConversation,
+  applyStatusUpdate,
+} from "./conversations.ts";
+export type {
+  Sendability,
+  ConversationActivity,
+  StatusOutcome,
+  StatusUpdateInput,
+} from "./conversations.ts";
 export { recordUnroutableWebhook } from "./unroutable-webhooks.ts";
 export type {
   UnroutableWebhookInput,

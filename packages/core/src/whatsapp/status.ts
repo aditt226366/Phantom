@@ -9,6 +9,7 @@
 
 export const MESSAGE_STATUSES = [
   "PENDING",
+  "HELD",
   "SENT",
   "FAILED",
   "DELIVERED",
@@ -56,13 +57,32 @@ export type MessageStatusName = (typeof MESSAGE_STATUSES)[number];
  * Below DELIVERED, because nothing is ever delivered and then failed. A stale
  * `failed` arriving after a real delivery is the same kind of reordering as a
  * stale `sent`, and gets the same treatment.
+ *
+ * ---------------------------------------------------------------------------
+ * Why HELD sits between PENDING and SENT
+ * ---------------------------------------------------------------------------
+ *
+ * Meta answers a send with 200 and sometimes
+ * message_status: "held_for_quality_assessment" - accepted, wamid issued, not
+ * sent. See sendWhatsAppText, which has reported it as `held` since the Graph
+ * adapter landed.
+ *
+ * Above PENDING because a wamid exists: the message is Meta's problem now, and
+ * a retry would send a second copy.
+ *
+ * Below SENT because Meta has not sent it, and that is the direction with a
+ * cost. A message released from hold gets an ordinary `sent` callback
+ * afterwards; ranked above SENT, the guard would read that callback as a step
+ * backwards and drop it, leaving the thread showing "held" for ever while the
+ * customer replies. Identical in shape to the FAILED-below-SENT mistake above.
  */
 const MESSAGE_STATUS_RANK: Readonly<Record<MessageStatusName, number>> = {
   PENDING: 0,
-  SENT: 1,
-  FAILED: 2,
-  DELIVERED: 3,
-  READ: 4,
+  HELD: 1,
+  SENT: 2,
+  FAILED: 3,
+  DELIVERED: 4,
+  READ: 5,
 };
 
 export function statusRank(status: MessageStatusName): number {
@@ -80,6 +100,13 @@ export function isRankedStatus(value: string): value is MessageStatusName {
  * Null for anything unrecognised, and that is the contract the ingest path
  * depends on - see the note below. PENDING has no Meta equivalent: it means
  * accepted by us and not yet handed over.
+ *
+ * HELD is deliberately absent, and its absence looks enough like an omission to
+ * be worth stating. "held_for_quality_assessment" is a field on the send
+ * RESPONSE, not a status webhook - Meta has never delivered it through this
+ * channel. Mapping it would invent a translation for a string that does not
+ * arrive here, and the send worker writes HELD directly from what the POST
+ * returned.
  */
 const FROM_META: Readonly<Record<string, MessageStatusName>> = {
   sent: "SENT",

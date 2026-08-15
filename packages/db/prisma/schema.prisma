@@ -571,6 +571,10 @@ enum MessageDirection {
 /// failure and leave a message reading as on-its-way for ever.
 enum MessageStatus {
   PENDING
+  /// Meta answered 200 and gave us a wamid, then held the message for quality
+  /// assessment instead of sending it. Written from the send response, never
+  /// from a status callback - Meta reports it on the POST and nowhere else.
+  HELD
   SENT
   FAILED
   DELIVERED

@@ -41,10 +41,53 @@ const GLOBAL_TABLES = new Set<string>([
   "admin_users",
   "admin_sessions",
   "admin_audit_log",
+  /*
+   * A platform-wide maintenance run. It spans every company by definition, so
+   * a company_id would be meaningless, and the worker never writes here —
+   * progress is derived from integration_verifications instead.
+   */
+  "admin_repair_runs",
 ]);
 
 /** Global tables holding admin credentials. app_runtime gets nothing here. */
-const ADMIN_TABLES = ["admin_users", "admin_sessions", "admin_audit_log"];
+const ADMIN_TABLES = [
+  "admin_users",
+  "admin_sessions",
+  "admin_audit_log",
+  "admin_repair_runs",
+];
+
+/**
+ * Tables where app_resolver still holds a *whole-table* SELECT grant.
+ *
+ * app_resolver answers one question — "which company does this opaque key
+ * belong to" — from outside every company context, running SECURITY DEFINER.
+ * The entire argument for giving it that reach is that it can see almost
+ * nothing, and a whole-table grant is how that stops being true without anyone
+ * deciding it: companies was granted whole-table so that app_available_slug()
+ * could read `slug`, and `deactivated_at` was consequently readable by the
+ * resolver before any migration granted it.
+ *
+ * companies has since been narrowed to three columns and is deliberately
+ * absent below. These four have the same shape of problem and are listed
+ * rather than fixed, because each needs its own reading of which columns the
+ * lookup functions touch and bundling four narrowings into one migration is
+ * how one of them goes wrong quietly.
+ *
+ * Listing them is the point. Narrowing one is a shrinking diff in a security
+ * test; granting a new one is a widening diff in the same place. Neither is
+ * a comment in a migration nobody reads again.
+ */
+const RESOLVER_TABLE_GRANTS = new Set<string>([
+  /* app_resolve_company: username and email lookups. */
+  "users",
+  /* app_resolve_company: the session token lookup. */
+  "sessions",
+  /* app_resolve_company: consuming an unauthenticated verification link. */
+  "email_verification_tokens",
+  /* app_resolve_company: consuming an unauthenticated reset link. */
+  "password_reset_tokens",
+]);
 
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
@@ -242,10 +285,48 @@ describe("schema invariants", () => {
       }
     });
 
-    it("has an access policy for app_admin", async () => {
+    it("scopes app_runtime writes, not only reads", async () => {
       for (const table of protectedTables()) {
-        const { rows } = await db.query(
-          `SELECT policyname FROM pg_policies
+        const { rows } = await db.query<{
+          policyname: string;
+          with_check: string | null;
+        }>(
+          `SELECT policyname, with_check FROM pg_policies
+           WHERE schemaname = 'public' AND tablename = $1
+             AND 'app_runtime' = ANY(roles)`,
+          [table],
+        );
+
+        /*
+         * USING decides which rows are visible; WITH CHECK decides which rows
+         * may be written.
+         *
+         * An absent WITH CHECK is safe: Postgres falls back to USING for
+         * writes, and the assertion above already proves USING consults the
+         * request context. A *present* one replaces that fallback entirely,
+         * and that is the hole worth catching — a policy reading
+         *
+         *     USING      (company_id = app_current_company())
+         *     WITH CHECK (true)
+         *
+         * looks right, satisfies every other assertion in this file, and lets
+         * a write land under any company_id at all.
+         */
+        for (const row of rows) {
+          if (row.with_check === null) continue;
+
+          expect(
+            row.with_check.includes("app_current_company"),
+            `${table}: policy ${row.policyname} has a WITH CHECK that does not consult app_current_company()`,
+          ).toBe(true);
+        }
+      }
+    });
+
+    it("has an access policy for app_admin, covering writes", async () => {
+      for (const table of protectedTables()) {
+        const { rows } = await db.query<{ policyname: string; cmd: string }>(
+          `SELECT policyname, cmd FROM pg_policies
            WHERE schemaname = 'public' AND tablename = $1
              AND 'app_admin' = ANY(roles)`,
           [table],
@@ -257,6 +338,19 @@ describe("schema invariants", () => {
          * blank rather than the tenant boundary going away — but still a bug.
          */
         expect(rows.length, `${table}: no app_admin policy`).toBeGreaterThan(0);
+
+        /*
+         * And the command matters, not just the policy's existence. FOR SELECT
+         * passes the check above and then fails at the first write the panel
+         * attempts — which, from Phase 2 on, means Save, Disconnect and
+         * Deactivate. Same fail-closed shape, discovered much later.
+         */
+        expect(
+          rows.some((r) => r.cmd === "ALL"),
+          `${table}: app_admin has a policy but none FOR ALL (found ${rows
+            .map((r) => `${r.policyname} FOR ${r.cmd}`)
+            .join(", ")})`,
+        ).toBe(true);
       }
     });
 
@@ -278,6 +372,42 @@ describe("schema invariants", () => {
           `${table}: app_runtime holds grants on an admin table`,
         ).toEqual([]);
       }
+    });
+
+    it("holds a whole-table grant only where the allowlist says", async () => {
+      const { rows } = await db.query<{ table_name: string }>(
+        `SELECT DISTINCT table_name FROM information_schema.role_table_grants
+         WHERE grantee = 'app_resolver' AND table_schema = 'public'
+         ORDER BY table_name`,
+      );
+
+      /*
+       * An allowlist rather than "no matches", so that narrowing one of these
+       * shows up as a shrinking diff here and granting a fifth shows up as a
+       * widening one — in a security test, rather than as a line in a
+       * migration that reads like every other GRANT.
+       */
+      expect(
+        rows.map((r) => r.table_name),
+        "app_resolver's whole-table grants have changed",
+      ).toEqual([...RESOLVER_TABLE_GRANTS].sort());
+    });
+
+    it("keeps app_resolver's reach into companies to three columns", async () => {
+      const { rows: columns } = await db.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.column_privileges
+         WHERE grantee = 'app_resolver'
+           AND table_schema = 'public' AND table_name = 'companies'
+         ORDER BY column_name`,
+      );
+
+      /* id and deactivated_at for app_resolve_company, slug for
+         app_available_slug. Widening this is a migration and a diff here. */
+      expect(columns.map((r) => r.column_name)).toEqual([
+        "deactivated_at",
+        "id",
+        "slug",
+      ]);
     });
 
     it("keeps the lookup functions owned by app_resolver", async () => {

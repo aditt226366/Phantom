@@ -121,6 +121,90 @@ describe("app_resolve_company", () => {
   });
 });
 
+describe("a deactivated company", () => {
+  /** Suspend `alpha`. Written through the real path, like every other fixture. */
+  async function deactivate(): Promise<void> {
+    await withCompany(alpha.id, (db) =>
+      db.company.update({
+        where: { id: alpha.id },
+        data: { deactivatedAt: new Date() },
+      }),
+    );
+  }
+
+  it("stops resolving a username, so sign-in cannot proceed", async () => {
+    /*
+     * Asserted live first. A username that never resolved would make the
+     * second half pass for the wrong reason, which is the whole failure mode
+     * these two-step assertions exist to rule out.
+     */
+    expect(await resolveCompany("username", alpha.usernames[0]!)).toBe(alpha.id);
+
+    await deactivate();
+
+    expect(await resolveCompany("username", alpha.usernames[0]!)).toBeNull();
+  });
+
+  it("stops resolving a session that was valid a moment ago", async () => {
+    const tokenHash = "session-token-hash-deactivated";
+
+    await withCompany(alpha.id, async (db, companyId) => {
+      await db.session.create({
+        data: {
+          companyId,
+          userId: alpha.userIds[0]!,
+          tokenHash,
+          csrfSecret: "csrf",
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+    });
+
+    /*
+     * Unrevoked and unexpired throughout — so the null below is deactivation
+     * and cannot be the session lifecycle assertions above wearing a hat.
+     */
+    expect(await resolveCompany("session", tokenHash)).toBe(alpha.id);
+
+    await deactivate();
+
+    expect(await resolveCompany("session", tokenHash)).toBeNull();
+  });
+
+  it("stops resolving a pending reset link", async () => {
+    /*
+     * A reset link outliving suspension would be the useful one to an
+     * attacker: suspending a compromised workspace would leave the way back in
+     * sitting in an inbox.
+     */
+    const tokenHash = "reset-token-hash-deactivated";
+
+    await withCompany(alpha.id, async (db, companyId) => {
+      await db.passwordResetToken.create({
+        data: {
+          companyId,
+          userId: alpha.userIds[0]!,
+          tokenHash,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+    });
+
+    expect(await resolveCompany("password_reset", tokenHash)).toBe(alpha.id);
+
+    await deactivate();
+
+    expect(await resolveCompany("password_reset", tokenHash)).toBeNull();
+  });
+
+  it("leaves every other company alone", async () => {
+    await deactivate();
+
+    /* A clause on the wrong side of the join would take out the installation. */
+    expect(await resolveCompany("username", beta.usernames[0]!)).toBe(beta.id);
+  });
+});
+
 describe("slug allocation", () => {
   it("slugifies a name", () => {
     expect(slugify("Acme Widgets Ltd")).toBe("acme-widgets-ltd");

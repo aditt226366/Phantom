@@ -1,5 +1,9 @@
 import pg from "pg";
-import { testAppDatabaseUrl, testDatabaseUrl } from "../scripts/db-urls.mjs";
+import {
+  testAppDatabaseUrl,
+  testDatabaseUrl,
+  testSuperuserDatabaseUrl,
+} from "../scripts/db-urls.mjs";
 import { createCompany, newCompanyId, withCompany } from "../src/index.ts";
 
 /**
@@ -70,6 +74,23 @@ export function rawRuntimeClient(): pg.Pool {
  */
 export function ownerClient(): pg.Pool {
   return new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
+}
+
+/**
+ * A superuser client, for looking at rows an assertion needs to see.
+ *
+ * Test scaffolding only. The owner is useless for this — FORCE ROW LEVEL
+ * SECURITY subjects whatsapp_owner to policies scoped TO app_runtime, so
+ * `SELECT * FROM users` as the owner returns nothing, which is the property
+ * ownerClient() exists to prove. Superusers bypass RLS unconditionally, so
+ * this is the only connection that can confirm what is actually stored.
+ *
+ * Use it to check that a rejected cross-company write left no trace. Never use
+ * it to seed: fixtures go through withCompany, the real path, or they stop
+ * being honest about what the system allows.
+ */
+export function superuserClient(): pg.Pool {
+  return new pg.Pool({ connectionString: testSuperuserDatabaseUrl(), max: 1 });
 }
 
 /**

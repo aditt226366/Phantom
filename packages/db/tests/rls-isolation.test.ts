@@ -1,10 +1,11 @@
 import type pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { prisma, withCompany } from "../src/index.ts";
+import { prisma, withCompany, type CompanyClient } from "../src/index.ts";
 import {
   ownerClient,
   rawRuntimeClient,
   seedCompany,
+  superuserClient,
   truncateAll,
   type SeededCompany,
 } from "./helpers.ts";
@@ -92,19 +93,25 @@ describe("reads without a company context", () => {
 
 describe("reads with a company context", () => {
   it("returns only that company's users", async () => {
-    const users = await withCompany(alpha.id, (db) => db.user.findMany());
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ company_id: string }>>`SELECT company_id FROM users`,
+    );
 
-    expect(users).toHaveLength(2);
-    expect(users.every((u) => u.companyId === alpha.id)).toBe(true);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.company_id === alpha.id)).toBe(true);
   });
 
   it("returns only that company's own row from companies", async () => {
-    const companies = await withCompany(alpha.id, (db) =>
-      db.company.findMany(),
+    /*
+     * Raw even though Company is absent from COMPANY_SCOPED_MODELS and gets no
+     * injected filter today. Adding it there later would silently convert this
+     * into a test of the extension, and nothing would say so.
+     */
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ id: string }>>`SELECT id FROM companies`,
     );
 
-    expect(companies).toHaveLength(1);
-    expect(companies[0]?.id).toBe(alpha.id);
+    expect(rows).toEqual([{ id: alpha.id }]);
   });
 
   it("cannot reach another company by raw SQL from inside a valid context", async () => {
@@ -123,12 +130,13 @@ describe("reads with a company context", () => {
   });
 
   it("cannot reach another company's row by primary key", async () => {
-    const stolen = await withCompany(alpha.id, (db) =>
-      db.user.findUnique({ where: { id: beta.userIds[0]! } }),
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM users WHERE id = ${beta.userIds[0]!}`,
     );
 
-    /* null, not a 403 — the row does not exist as far as this caller knows. */
-    expect(stolen).toBeNull();
+    /* Empty, not a 403 — the row does not exist as far as this caller knows. */
+    expect(rows).toEqual([]);
   });
 });
 
@@ -141,9 +149,9 @@ describe("writes across companies", () => {
     expect(affected).toBe(0);
 
     const names = await withCompany(beta.id, (db) =>
-      db.user.findMany({ select: { fullName: true } }),
+      db.$queryRaw<Array<{ full_name: string }>>`SELECT full_name FROM users`,
     );
-    expect(names.every((u) => u.fullName !== "pwned")).toBe(true);
+    expect(names.every((r) => r.full_name !== "pwned")).toBe(true);
   });
 
   it("deletes nothing", async () => {
@@ -153,7 +161,9 @@ describe("writes across companies", () => {
 
     expect(affected).toBe(0);
 
-    const survivors = await withCompany(beta.id, (db) => db.user.findMany());
+    const survivors = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ id: string }>>`SELECT id FROM users`,
+    );
     expect(survivors).toHaveLength(2);
   });
 
@@ -186,61 +196,232 @@ describe("writes across companies", () => {
     ).rejects.toThrow(/row-level security/i);
   });
 
-  it("rejects an insert into another company via the ORM", async () => {
-    /*
-     * The extension would otherwise overwrite the caller's companyId with the
-     * scope's, landing the row in alpha. Safe, but silent — and a call site
-     * that thinks it is writing to beta is a bug, not something to quietly
-     * correct into working code.
-     */
-    await expect(
-      withCompany(alpha.id, (db) =>
-        db.user.create({
-          data: {
-            companyId: beta.id,
-            fullName: "Smuggled",
-            email: "x@beta.test",
-            username: "smuggled_orm",
-            passwordHash: "$argon2id$placeholder",
-            phoneE164: "+919876500001",
-          },
-        }),
-      ),
-    ).rejects.toThrow(/cannot create a row for company/i);
-  });
-
   it("leaves the other company untouched after a rejected write", async () => {
-    await withCompany(alpha.id, (db) =>
-      db.user
-        .create({
-          data: {
-            companyId: beta.id,
-            fullName: "Smuggled",
-            email: "x@beta.test",
-            username: "smuggled_untouched",
-            passwordHash: "$argon2id$placeholder",
-            phoneE164: "+919876500002",
-          },
-        })
-        .catch(() => undefined),
+    /*
+     * Raw, so that the extension's own guard is not what does the rejecting.
+     * Written through the ORM this passed with every policy dropped, because
+     * the create was refused before it reached the database and both reads had
+     * their company filter injected — the test never touched a policy at all.
+     *
+     * An UPDATE rather than an INSERT, because the two fail differently and
+     * the loud one is already covered above. WITH CHECK raises on an insert;
+     * USING simply does not match, so a cross-company UPDATE reports success
+     * having changed nothing. Zero rows is the assertion, and it is the
+     * direction that would otherwise pass unnoticed.
+     */
+    const affected = await withCompany(
+      alpha.id,
+      (db) =>
+        db.$executeRaw`
+          UPDATE users SET full_name = 'Overwritten' WHERE company_id = ${beta.id}
+        `,
     );
 
-    const betaUsers = await withCompany(beta.id, (db) => db.user.findMany());
-    expect(betaUsers).toHaveLength(2);
-    expect(betaUsers.every((u) => u.email !== "x@beta.test")).toBe(true);
+    expect(affected).toBe(0);
 
-    const alphaUsers = await withCompany(alpha.id, (db) => db.user.findMany());
-    expect(alphaUsers).toHaveLength(2);
+    /*
+     * Read back as the superuser. The owner cannot see it — FORCE subjects it
+     * to policies scoped TO app_runtime — and reading through withCompany(beta)
+     * would put the injected filter back in the path of the assertion.
+     */
+    const superuser = superuserClient();
+    try {
+      const { rows } = await superuser.query<{ full_name: string }>(
+        "SELECT full_name FROM users WHERE company_id = $1",
+        [beta.id],
+      );
+
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.full_name !== "Overwritten")).toBe(true);
+    } finally {
+      await superuser.end();
+    }
   });
 
   it("rejects creating a company whose id is not the current context", async () => {
+    /*
+     * companies is self-keyed, so its WITH CHECK compares `id` rather than
+     * `company_id`. Raw, so what raises is the policy and not the extension.
+     */
     await expect(
-      withCompany(alpha.id, (db) =>
-        db.company.create({
-          data: { id: "some-other-id", slug: "sneaky", name: "Sneaky" },
-        }),
+      withCompany(
+        alpha.id,
+        (db) =>
+          db.$executeRaw`
+            INSERT INTO companies (id, slug, name, created_at, updated_at)
+            VALUES ('some-other-id', 'sneaky', 'Sneaky', now(), now())
+          `,
       ),
     ).rejects.toThrow(/row-level security/i);
+  });
+});
+
+describe("the credential vault", () => {
+  /**
+   * Seed one integration with one secret in each company.
+   *
+   * Through withCompany, like every other fixture — seeding as the owner would
+   * pass locally and fail anywhere the owner is not a superuser.
+   */
+  async function seedVault(
+    company: SeededCompany,
+    ciphertext: string,
+  ): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "META_ADS", label: "Ads" },
+      });
+
+      await db.integrationSecret.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          key: "META_ADS_ACCESS_TOKEN",
+          ciphertext,
+          keyId: "k1",
+          last4: "9999",
+        },
+      });
+
+      return integration.id;
+    });
+  }
+
+  /** Seeding, so the ORM is right here — see helpers.ts. */
+  async function recordVerification(
+    company: SeededCompany,
+    integrationId: string,
+    result: { ok: boolean; statusCode?: number; error?: string },
+  ): Promise<void> {
+    await withCompany(company.id, (db, companyId) =>
+      db.integrationVerification.create({
+        data: { companyId, integrationId, ...result },
+      }),
+    );
+  }
+
+  it("returns no ciphertext without a company context", async () => {
+    await seedVault(alpha, "v2.k1.iv.tag.alpha-ciphertext");
+
+    /*
+     * Raw SQL, deliberately: this is the "someone bypassed the application
+     * layer" client, so it proves the database refuses rather than proving the
+     * extension remembered to add a filter.
+     */
+    const { rows } = await raw.query("SELECT * FROM integration_secrets");
+    expect(rows).toEqual([]);
+  });
+
+  it("shows a company only its own secrets, in raw SQL", async () => {
+    await seedVault(alpha, "v2.k1.iv.tag.alpha-ciphertext");
+    await seedVault(beta, "v2.k1.iv.tag.beta-ciphertext");
+
+    /*
+     * Raw, and inside a legitimate context. findMany() here would pass with
+     * every policy on the table dropped, because COMPANY_SCOPED_MODELS makes
+     * the extension add the filter itself — proving the convention holds, not
+     * the boundary. Confirmed the hard way: this test passed with RLS disabled
+     * until it was rewritten.
+     */
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ ciphertext: string }>
+      >`SELECT ciphertext FROM integration_secrets`,
+    );
+
+    expect(rows).toEqual([{ ciphertext: "v2.k1.iv.tag.alpha-ciphertext" }]);
+  });
+
+  it("cannot reach another company's ciphertext by primary key", async () => {
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.beta-secret");
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT id FROM integrations WHERE id = ${betaIntegration}`,
+    );
+
+    /* Empty, not an error — the row does not exist as far as alpha knows. */
+    expect(rows).toEqual([]);
+  });
+
+  it("rejects writing a secret into another company", async () => {
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.beta-secret");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO integration_secrets (
+            id, company_id, integration_id, key, ciphertext, key_id, last4,
+            created_at, updated_at
+          )
+          VALUES (
+            'smuggled-secret', ${beta.id}, ${betaIntegration},
+            'META_ADS_ACCESS_TOKEN', 'v2.k1.iv.tag.smuggled', 'k1', '0000',
+            now(), now()
+          )
+        `,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("keeps verification logs apart", async () => {
+    const alphaIntegration = await seedVault(alpha, "v2.k1.iv.tag.a");
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.b");
+
+    await recordVerification(alpha, alphaIntegration, { ok: true });
+    await recordVerification(beta, betaIntegration, {
+      ok: false,
+      statusCode: 401,
+      error: "invalid token",
+    });
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ ok: boolean; error: string | null }>
+      >`SELECT ok, error FROM integration_verifications`,
+    );
+
+    /* beta's failure carries a provider message; alpha must not see it. */
+    expect(rows).toEqual([{ ok: true, error: null }]);
+  });
+});
+
+describe("usage events", () => {
+  async function record(
+    company: SeededCompany,
+    costMicros: number,
+  ): Promise<void> {
+    await withCompany(company.id, (db, companyId) =>
+      db.usageEvent.create({
+        data: {
+          companyId,
+          kind: "integration.verify",
+          costMicros: BigInt(costMicros),
+          currency: "INR",
+          priceVersion: 1,
+          dedupeKey: `seed:${company.id}:${costMicros}`,
+        },
+      }),
+    );
+  }
+
+  it("totals only the company's own spend", async () => {
+    await record(alpha, 7);
+    await record(beta, 500);
+
+    /*
+     * Raw and inside a valid context: a SUM is exactly the shape that would
+     * quietly return the whole installation's money if the policy were wrong,
+     * and it would look plausible rather than empty.
+     */
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ total: bigint | null }>
+      >`SELECT SUM(cost_micros)::bigint AS total FROM usage_events WHERE currency = 'INR'`,
+    );
+
+    expect(Number(rows[0]?.total ?? 0)).toBe(7);
   });
 });
 
@@ -324,7 +505,8 @@ describe("the company context does not leak", () => {
      *
      * raw is a pool of exactly 1, so this is the same physical connection.
      */
-    await withCompany(alpha.id, (db) => db.user.findMany());
+    /* Any statement will do; it is the scope ending that is under test. */
+    await withCompany(alpha.id, (db) => db.$queryRaw`SELECT 1`);
 
     const { rows } = await raw.query(
       "SELECT current_setting('app.company_id', true) AS company",
@@ -336,16 +518,48 @@ describe("the company context does not leak", () => {
   });
 
   it("keeps concurrent scopes apart", async () => {
+    /*
+     * Two assertions per scope, because they fail in different ways.
+     *
+     * app_current_company() catches a leak directly: the wrong id means one
+     * transaction overwrote another's setting on a shared connection. The
+     * count catches the subtler case where the setting survived but visibility
+     * did not — a policy consulting something other than the GUC, or a
+     * connection whose context was reset between the two statements.
+     *
+     * Both are raw. This test previously used findMany() and passed with every
+     * policy in the database dropped, which made it a test of the extension's
+     * injected filter — precisely the thing that cannot detect a GUC leak.
+     */
+    const scopeView = async (db: CompanyClient, otherCompanyId: string) => {
+      const [context] = await db.$queryRaw<Array<{ company: string | null }>>`
+        SELECT app_current_company() AS company`;
+
+      const [own] = await db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) AS count FROM users`;
+
+      const [other] = await db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) AS count FROM users WHERE company_id = ${otherCompanyId}`;
+
+      return {
+        context: context?.company ?? null,
+        ownRows: Number(own?.count ?? -1),
+        otherCompanyRows: Number(other?.count ?? -1),
+      };
+    };
+
     for (let round = 0; round < 10; round++) {
-      const [alphaUsers, betaUsers] = await Promise.all([
-        withCompany(alpha.id, (db) => db.user.findMany()),
-        withCompany(beta.id, (db) => db.user.findMany()),
+      const [alphaView, betaView] = await Promise.all([
+        withCompany(alpha.id, (db) => scopeView(db, beta.id)),
+        withCompany(beta.id, (db) => scopeView(db, alpha.id)),
       ]);
 
-      expect(alphaUsers.every((u) => u.companyId === alpha.id)).toBe(true);
-      expect(betaUsers.every((u) => u.companyId === beta.id)).toBe(true);
-      expect(alphaUsers).toHaveLength(2);
-      expect(betaUsers).toHaveLength(2);
+      expect(alphaView.context).toBe(alpha.id);
+      expect(betaView.context).toBe(beta.id);
+      expect(alphaView.otherCompanyRows).toBe(0);
+      expect(betaView.otherCompanyRows).toBe(0);
+      expect(alphaView.ownRows).toBe(2);
+      expect(betaView.ownRows).toBe(2);
     }
   });
 });

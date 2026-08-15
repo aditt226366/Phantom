@@ -298,19 +298,63 @@ diff in a security-relevant place.
 ## Encryption
 
 `packages/core/src/encryption.ts` — AES-256-GCM, 96-bit random IV per message,
-authenticated. Wire format is versioned so the key or algorithm can be rotated
-without a destructive migration:
+authenticated, with a keyring so a key can be rotated without a destructive
+migration. The key id is on the wire, so a stored value says which key opens it
+rather than being discovered by trying each one:
 
 ```
-v1.<iv>.<tag>.<ciphertext>
+v2.<key-id>.<iv>.<tag>.<ciphertext>
 ```
 
 ```ts
-import { encrypt, decrypt } from "@whatsapp-os/core";
+import { createKeyring, encrypt, decrypt } from "@whatsapp-os/core";
 
-const sealed = encrypt("secret", process.env.ENCRYPTION_KEY);
-const plain  = decrypt(sealed,  process.env.ENCRYPTION_KEY);
+const keyring = createKeyring(env.ENCRYPTION_KEYS, env.ENCRYPTION_KEY_ACTIVE);
+
+const sealed = encrypt("secret", keyring);
+const plain  = decrypt(sealed, keyring);
 ```
+
+**Bind a value to where it lives.** GCM authenticates additional data, and the
+credential vault passes the row's own coordinates, so a ciphertext copied out of
+one company's row into another's fails to open instead of quietly working:
+
+```ts
+const aad = `${companyId}:${integrationId}:${key}`;
+
+const sealed = encrypt(token, keyring, aad);
+const plain  = decrypt(sealed, keyring, aad);   // wrong aad ⇒ EncryptionError
+```
+
+The AAD is derived at call time and never stored. The cost is that the values it
+is derived from become immutable in practice: changing a company id, an
+integration id or a credential's *name* means decrypt-and-re-encrypt, not an
+`UPDATE`.
+
+**Rotation.**
+
+```
+npm run vault:rotate -- --dry-run   # how many rows would move, nothing queued
+npm run vault:rotate                # one job per company
+npm run vault:status                # must exit 0 before dropping the old key
+```
+
+`vault:rotate` refuses to start if `ENCRYPTION_KEY_ACTIVE` names a key absent
+from `ENCRYPTION_KEYS`. `vault:status` opens every stored credential and exits
+non-zero if any fails — so the drop-the-old-key step is gated on an exit code
+rather than on somebody reading counts correctly at the end of a long
+afternoon. It never prints a plaintext; the assertion is that decrypt
+succeeded.
+
+`reseal()` re-encrypts under the active key and reads the result back before
+returning it, holding the row's lock throughout — an AAD built differently on
+the encrypt side than the decrypt side would otherwise write a value that
+nothing can ever open, and an unlocked reseal would silently revert a
+concurrent save.
+
+`ENCRYPTION_KEY` is a **separate** variable and not part of the keyring: it is
+the HMAC key behind `hashIp()`, so changing it invalidates stored `ip_hash`
+values rather than anything decryptable.
 
 Not for passwords — hash those with argon2/bcrypt. There is no legitimate
 reason to read a password back.
@@ -370,7 +414,9 @@ layers deep.
 | `NODE_ENV` | — | `development` \| `test` \| `production` |
 | `DATABASE_URL` | yes | Must be `postgres://` or `postgresql://` |
 | `REDIS_URL` | yes | Must be `redis://` or `rediss://` |
-| `ENCRYPTION_KEY` | yes | base64, must decode to exactly 32 bytes |
+| `ENCRYPTION_KEY` | yes | base64, exactly 32 bytes. HMAC key for `hashIp()`, not the vault |
+| `ENCRYPTION_KEYS` | yes | the vault keyring: `id:base64key,…`, each key 32 bytes |
+| `ENCRYPTION_KEY_ACTIVE` | yes | which id in `ENCRYPTION_KEYS` seals new writes |
 | `QUEUE_PREFIX` | — | Defaults to `whatsapp-os` |
 | `APP_URL` | — | Defaults to `http://localhost:3000` |
 | `WORKER_CONCURRENCY` | — | Defaults to `5` |

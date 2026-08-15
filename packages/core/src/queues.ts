@@ -28,6 +28,8 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
 export const JOB_NAMES = {
   PING: "system.ping",
+  INTEGRATION_VERIFY: "integration.verify",
+  VAULT_RESEAL: "vault.reseal",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -43,12 +45,41 @@ export const pingJobSchema = z.object({
 export type PingJob = z.infer<typeof pingJobSchema>;
 
 /**
+ * Verify one company's integrations against the real providers.
+ *
+ * One company per job, because the worker cannot enumerate them: it connects
+ * as app_runtime with no company context, so a cross-company SELECT returns
+ * zero rows, succeeds, and looks exactly like "nothing to do". The fan-out
+ * happens on the web side, which has the admin client.
+ */
+export const integrationVerifyJobSchema = z.object({
+  companyId: z.string().min(1),
+  /** Omitted to verify every integration the company has. */
+  integrationId: z.string().min(1).optional(),
+});
+
+export type IntegrationVerifyJob = z.infer<typeof integrationVerifyJobSchema>;
+
+/**
+ * Re-encrypt one company's secrets under the active key.
+ *
+ * Filters on key_id, so re-running is a no-op and a crash resumes naturally.
+ */
+export const vaultResealJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type VaultResealJob = z.infer<typeof vaultResealJobSchema>;
+
+/**
  * Registry mapping each job name to the schema that validates its payload.
  * The worker looks the schema up by job name, so adding a job means adding one
  * entry here and one handler - the wiring is not duplicated.
  */
 export const JOB_SCHEMAS = {
   [JOB_NAMES.PING]: pingJobSchema,
+  [JOB_NAMES.INTEGRATION_VERIFY]: integrationVerifyJobSchema,
+  [JOB_NAMES.VAULT_RESEAL]: vaultResealJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

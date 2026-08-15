@@ -50,6 +50,16 @@ enum AuditAction {
   @@map("audit_action")
 }
 
+/// What a company pays for. Drives the plan distribution on the admin
+/// overview, and nothing else yet - entitlements are Phase 6.
+enum Plan {
+  STARTER
+  PRO
+  ENTERPRISE
+
+  @@map("plan")
+}
+
 /// A customer workspace. The root of every tenant-scoped query.
 /// Not itself company-scoped - see COMPANY_SCOPED_MODELS in with-company.ts.
 model Company {
@@ -64,7 +74,18 @@ model Company {
   /// src/company.ts.
   slug String @unique
 
-  name      String
+  name String
+  plan Plan @default(STARTER)
+
+  /// Set to suspend the workspace. Null means active.
+  ///
+  /// Enforced inside app_resolve_company(), not here and not in a middleware:
+  /// every entry point - sign-in, an already-issued session, a verification or
+  /// reset link - resolves a company through that function, so one clause
+  /// covers all of them and no later route can forget it. The app-level check
+  /// in requireSession() exists to render a message, not to be the boundary.
+  deactivatedAt DateTime? @map("deactivated_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -73,6 +94,10 @@ model Company {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens    PasswordResetToken[]
   auditLogs              AuditLog[]
+  integrations           Integration[]
+  integrationSecrets     IntegrationSecret[]
+  integrationVerifications IntegrationVerification[]
+  usageEvents            UsageEvent[]
 
   @@map("companies")
 }
@@ -229,6 +254,245 @@ model AuditLog {
   @@map("audit_log")
 }
 
+/// The third-party systems a company connects. See INTEGRATION_KEYS in
+/// @whatsapp-os/core for the credential each one requires.
+enum IntegrationProvider {
+  GOOGLE_SHEETS
+  WHATSAPP_CLOUD
+  META_ADS
+
+  @@map("integration_provider")
+}
+
+/// Whether the credentials last verified against the provider.
+///
+/// Two states, not three. "Verifying" is a property of a request in flight,
+/// not of a row, and storing it means every crashed job leaves a company stuck
+/// in it forever.
+enum IntegrationStatus {
+  CONNECTED
+  NOT_CONNECTED
+
+  @@map("integration_status")
+}
+
+/// A company's connection to one provider.
+///
+/// The parent row: what the connection is and whether it currently works. The
+/// credentials themselves live in IntegrationSecret, one row per key, so that
+/// re-encrypting under a new key touches one narrow table and so that no query
+/// selecting an integration drags ciphertext along with it by accident.
+model Integration {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  provider IntegrationProvider
+  /// Operator-facing name. Distinguishes several of the same provider once the
+  /// unique constraint below is relaxed.
+  label    String
+  status   IntegrationStatus   @default(NOT_CONNECTED)
+
+  lastVerifiedAt DateTime? @map("last_verified_at")
+  /// The last failure, already scrubbed. Never contains a credential - see
+  /// redactKeys/scrubValues in @whatsapp-os/core.
+  lastError      String?   @map("last_error")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  secrets       IntegrationSecret[]
+  verifications IntegrationVerification[]
+
+  /// One per provider per company, for now. This relaxes in Phase 4/6, when a
+  /// company gets several numbers and several sheet bindings - which is why
+  /// `label` already exists and nothing keys off the provider alone.
+  @@unique([companyId, provider])
+  @@map("integrations")
+}
+
+/// One credential value, encrypted at rest.
+///
+/// company_id is carried here as well as on the parent, rather than being
+/// reached through it. RLS evaluates per table: a policy that had to join
+/// integrations to find the company would be a policy that can be got wrong,
+/// and the composite index this requires is the one the vault reads by anyway.
+///
+/// ---------------------------------------------------------------------------
+/// Three columns are load-bearing beyond their values
+/// ---------------------------------------------------------------------------
+///
+/// Each ciphertext is bound to where it lives. AES-GCM takes additional
+/// authenticated data, and the vault passes
+/// `${company_id}:${integration_id}:${key}` - derived from the row at call
+/// time, never stored. A ciphertext lifted out of one company's row and written
+/// into another's fails to decrypt instead of quietly working, which is the
+/// same guarantee RLS gives one table lower down.
+///
+/// The cost is that those three values are effectively immutable:
+///
+///   company_id      a secret cannot be moved between companies. Correct, and
+///                   nothing should ever want to.
+///   integration_id  re-pointing a secret at a different integration row is a
+///                   decrypt-and-re-encrypt, not an UPDATE. This matters when
+///                   the unique on (company_id, provider) relaxes in Phase 4/6
+///                   and secrets start moving between integration rows.
+///   key             renaming a credential in INTEGRATION_KEYS is a
+///                   decrypt-and-re-encrypt too, not a string change in
+///                   packages/core/src/integrations.ts. Meta has renamed
+///                   credentials before, so this is the one likely to be
+///                   discovered by breaking it.
+///
+/// In all three cases the symptom is EncryptionError on every read of the
+/// affected rows, not silent wrong data.
+model IntegrationSecret {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// The provider's own name for it, e.g. WHATSAPP_ACCESS_TOKEN.
+  key        String
+  /// v2.<keyid>.<iv>.<tag>.<ciphertext> - see @whatsapp-os/core/encryption.
+  ciphertext String
+  /// Which keyring key sealed this row. What makes rotation resumable: the
+  /// re-encrypt job selects on key_id <> active, so re-running it is a no-op.
+  keyId      String @map("key_id")
+  /// Last four characters of the plaintext, stored in the clear so the panel
+  /// has something to render. The only part of a secret that ever leaves here.
+  ///
+  /// Null for anything shorter than MIN_LENGTH_FOR_LAST4: showing the last
+  /// four characters of a six-character value discloses most of it, and the
+  /// hint exists to confirm which credential is loaded, not to rebuild it.
+  last4      String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, key])
+  @@index([companyId, integrationId])
+  @@map("integration_secrets")
+}
+
+/// One verification attempt against a provider.
+///
+/// An operational log, deliberately not admin_audit_log. That records what an
+/// operator did; this records what a third party answered, is written by the
+/// worker with no admin in the request at all, and is a company's own data.
+model IntegrationVerification {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  ok         Boolean
+  /// The provider's HTTP status, when there was a response to have one.
+  statusCode Int?    @map("status_code")
+  /// Scrubbed before it is written. Meta echoes request parameters back in
+  /// some error bodies, so this passes through scrubValues on the way in.
+  error      String?
+
+  /// How the failure was classified: auth and config demote the badge,
+  /// transient does not. Null on success.
+  failureKind String? @map("failure_kind")
+
+  /// Provider identifiers worth keeping - for Meta, code, error_subcode and
+  /// fbtrace_id. Support asks for fbtrace_id first, it exists only in the
+  /// response that failed, and it is worth nothing if it was never stored.
+  details Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("integration_verifications")
+}
+
+/// One countable thing that happened, priced at the moment it happened.
+///
+/// cost_cents is stamped by the emitter rather than derived when the overview
+/// renders. Billing that recomputes historical cost from today's price list
+/// silently rewrites what a customer already owed the moment the list changes;
+/// this way repricing only ever affects the future, and the read path is a SUM.
+///
+/// `kind` is text, not an enum, because the price list in @whatsapp-os/core is
+/// the source of truth for what kinds exist - USAGE_PRICES is keyed by
+/// (kind, currency, version), so a kind that nothing has priced does not
+/// compile. A second list in the database could only disagree with it. Every
+/// write goes through recordUsage(), which takes the union.
+model UsageEvent {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  kind     String
+  quantity Int    @default(1)
+
+  /// Cost in millionths of one unit of `currency`. 1_000_000 micros = ₹1.
+  ///
+  /// Micros, not minor units. Phase 7 prices AI calls below a cent each, and a
+  /// paise- or cent-denominated column rounds a $0.0003 reply to zero - so a
+  /// thousand conversations sum to nothing and the invoice is silently short.
+  /// Micros keep every arithmetic step an integer, with rounding deferred to
+  /// the one place it belongs, which is display.
+  ///
+  /// BigInt because Int32 tops out around 2,147 units of currency per row. A
+  /// single verification costs nothing like that, but Phase 5 records ad spend,
+  /// and a day of it does.
+  ///
+  /// NULLABLE, and unpriced events write null rather than zero. Zero is a
+  /// claim that something was free; null is the absence of a claim. Summed,
+  /// the two are indistinguishable, and the total renders with the same
+  /// authority either way. SUM ignores nulls, so an unpriced event lowers no
+  /// total - it just has to be counted separately, which the Overview does.
+  costMicros BigInt? @map("cost_micros")
+
+  /// ISO 4217, e.g. INR or USD. Comes from the matched price entry and never
+  /// from the caller. Null exactly when the event is unpriced: with no entry
+  /// there is no currency to claim.
+  currency String?
+
+  /// Which revision of USAGE_PRICES was in force. Stamped even when nothing
+  /// matched, because "priced under version 1 and found nothing" is the fact
+  /// worth keeping - it says which list to look in.
+  priceVersion Int @map("price_version")
+
+  /// Why this row has no cost. Null when it does.
+  unpricedReason String? @map("unpriced_reason")
+
+  /// Idempotency, because DEFAULT_JOB_OPTIONS sets attempts: 5.
+  ///
+  /// A job that emits its usage event and then fails emits again on every
+  /// retry - five rows for one provider call, in the table that becomes an
+  /// invoice. Derived deterministically from the work being priced, so the
+  /// retry produces the same key and the insert is a no-op.
+  dedupeKey String @map("dedupe_key")
+
+  /// When it happened, which is not always when it was written - a retried job
+  /// records the original moment.
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The idempotency constraint. Scoped to the company so two tenants cannot
+  /// collide on a key derived from a job id.
+  @@unique([companyId, dedupeKey])
+  @@index([companyId, occurredAt(sort: Desc)])
+  /// The admin overview counts across every company since midnight, which the
+  /// composite above cannot serve - it leads with company_id, so a query with
+  /// no company predicate seq-scans the table that grows fastest.
+  ///
+  /// occurred_at alone, deliberately. A (kind, occurred_at) index looks more
+  /// useful and is worse for this query: with kind as the leading column a
+  /// range on occurred_at cannot seek, so the planner is left with a full
+  /// index scan. Confirmed with EXPLAIN, which is the only reason this is not
+  /// still the wrong index. A per-kind card can have its own when it exists.
+  @@index([occurredAt(sort: Desc)])
+  @@map("usage_events")
+}
+
 /// ---------------------------------------------------------------------------
 /// Global tables below this line. Each is outside tenancy for a stated reason.
 /// ---------------------------------------------------------------------------
@@ -295,6 +559,7 @@ model AdminUser {
 
   sessions AdminSession[]
   auditLogs AdminAuditLog[]
+  repairRuns AdminRepairRun[]
 
   @@map("admin_users")
 }
@@ -320,6 +585,31 @@ model AdminSession {
   @@index([adminUserId])
   @@index([expiresAt])
   @@map("admin_sessions")
+}
+
+/// A platform-wide maintenance run, so the panel can answer "did it finish".
+///
+/// Global, like the rest of the admin space: it belongs to the installation
+/// rather than to any company, and the whole point is that it spans all of
+/// them.
+///
+/// There is no progress counter. The worker cannot write here - app_runtime
+/// holds no grants on the admin tables, deliberately - so completion is
+/// derived instead: count the companies with a verification newer than
+/// started_at. That needs no cross-role write, no new grant, and it cannot
+/// drift from reality the way a counter can.
+model AdminRepairRun {
+  id          String  @id @default(cuid())
+  adminUserId String? @map("admin_user_id")
+
+  /// How many companies were enqueued when the run started.
+  totalCompanies Int      @map("total_companies")
+  startedAt      DateTime @default(now()) @map("started_at")
+
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([startedAt(sort: Desc)])
+  @@map("admin_repair_runs")
 }
 
 /// Every admin action, including reads. The admin panel can see across every

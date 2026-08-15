@@ -27,6 +27,41 @@ have moved, and the failure is a confusing usage dump rather than a clear error.
   ```
   Run it after every hand-written migration. Exit 0 means no drift.
 - The datasource URL is in `prisma.config.ts`, not `schema.prisma`.
+- `migrate reset` takes only `--config`, `--schema` and `--force`. There is no
+  `--skip-seed`, and passing it makes the CLI print a usage dump rather than
+  name the bad flag.
+
+**`prisma migrate reset` leaves the owner unable to migrate.** It drops and
+recreates schema `public`, which lands owned by the bootstrap superuser, so
+`whatsapp_owner` loses `CREATE` and the very next `migrate deploy` fails with
+`permission denied for schema public` — then records a *failed* migration, so
+subsequent runs refuse with P3009 and the database is stuck.
+
+Recovery is **`npm run db:nuke -- dev`** (or `-- test`), which runs the four
+steps in the order that matters: drop schema, recreate it owned by
+`whatsapp_owner`, `db:roles`, `migrate deploy`. Roles must come after the schema
+exists and before migrations run — the authentication migration needs
+`app_resolver` to hold CREATE on `public` before it can transfer ownership of the
+SECURITY DEFINER functions.
+
+**`npm run <script> -- --flag` does not reach the script.** npm reads a leading
+`--flag` as one of its own config options, warns `Unknown cli config`, and drops
+it. `db:nuke -- --test` therefore arrived as no arguments at all and rebuilt the
+*development* database. Pass positional words, and forward them from a
+delegating root script with a trailing `--`
+(`npm run nuke --workspace=@whatsapp-os/db --`).
+
+Three guards, each for a specific bad reason the obvious version fails:
+
+- The URL is read from `.env` with `dotenv.parse`, never `process.env`.
+  Comparing the target against `DATABASE_URL` is circular — the target *is*
+  `DATABASE_URL` — so it passes by construction while an exported override
+  redirects the nuke. That version printed "Rebuilding production_db".
+- Host must be loopback **and** the name must be `whatsapp_os` or
+  `whatsapp_os_test`. Loopback alone is not enough: `kubectl port-forward` and
+  SSH tunnels put production on localhost routinely.
+- The target argument is mandatory. A swallowed flag then refuses rather than
+  silently picking a database.
 
 **P2002 carries no constraint name.** Through a driver adapter the message is
 literally `Unique constraint failed on the (not available)` and `meta.target` is
@@ -154,6 +189,19 @@ test of a module that uses it. Scripts that import such a module run with
 - `migrate-test.mjs` takes an advisory lock; two projects run the same
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
+**A source-level assertion must parse, not grep.** Several checks in this
+repository read a file and match a string, and each one has flagged its own
+explanation at least once: `no-raw-prisma.test.ts` says so in its header about
+import specifiers, and the admin-db narrowness check hit the identical problem
+when a comment explained why a Prisma argument type is *not* used. Strip
+comments, or match a parsed structure.
+
+The stronger version of the same rule: assert a value, not a substring. A test
+that `company-header.tsx` contains "Reactivate" stayed green when the control
+was deleted, because the word survived in a neighbouring heading. Extracting
+the decision into a small exported function and asserting both branches is
+usually two lines more and actually fails.
+
 **Break every new assertion once before committing it.** Several tests in this
 repository initially passed for the wrong reason — matching a word inside a
 comment, asserting on `textContent` for an element whose name comes from
@@ -161,7 +209,63 @@ comment, asserting on `textContent` for an element whose name comes from
 rejected it before the policy under test could. A test that has never failed has
 not been tested.
 
+**Isolation tests use raw SQL, never the ORM.** Any query through a model in
+`COMPANY_SCOPED_MODELS` has its `companyId` filter injected by the extension, so
+it passes with every policy dropped. An ORM test proves the convention holds;
+only raw SQL proves the boundary does. Verify by dropping the policies and
+confirming the test fails.
+
+Three of the five vault isolation tests in Phase 2 passed with RLS switched off
+before being rewritten. `packages/db/tests/no-orm-in-isolation.test.ts` now
+enforces the rule at source level, with an allowlist of the five tests that are
+legitimately not about a policy — role attributes, catalog facts, fixture
+sanity, and the TRUNCATE grant.
+
+**The destructive audit.** The source-level check catches ORM calls; only this
+catches an assertion that is green for some other wrong reason. Disable RLS on
+every tenant table, run the db suite, and confirm that everything outside the
+allowlist fails:
+
+```sql
+ALTER TABLE "<each tenant table>" DISABLE ROW LEVEL SECURITY;
+-- npx vitest run --project db packages/db/tests/rls-isolation.test.ts --reporter=verbose
+ALTER TABLE "<each tenant table>" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "<each tenant table>" FORCE ROW LEVEL SECURITY;
+```
+
+A test still passing is proving something other than the boundary. As of Phase 2
+exactly five survive, and they are the five in the allowlist — so any sixth is
+the finding.
+
+Run it again at the end of a phase, not only when the tests are written. The
+tests that drifted were all correct when committed; what changed underneath them
+was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
+ORM assertions into extension tests.
+
 ## Next.js 16
+
+**The core barrel pulls native modules into a client bundle.**
+`packages/core/src/index.ts` re-exports `password.ts`, which reaches for
+`@node-rs/argon2`. A `"use client"` component importing `@whatsapp-os/core`
+therefore drags a `.node` binary into the browser graph and the build fails with
+an import trace that names every file except the problem.
+
+Import the subpath instead — `@whatsapp-os/core/integrations`, `/redact`,
+`/time`. Client-safe modules are exported individually for exactly this.
+
+It hides well: `integration-form.tsx` had the barrel import for six commits and
+built fine, because until a page rendered it the component was reachable only
+from tests and never entered the client graph at all.
+
+**Scripts must import a side-effect env module first.** ESM hoists imports, so
+calling `dotenv.config()` at the top of a script still runs *after* every module
+it imports has been evaluated — `lib/env.ts` has already parsed an empty
+environment and called `process.exit(1)`. `apps/web/scripts/_load-env.mjs` is
+that module; import it before anything else, the way
+`apps/worker/src/index.ts` imports its env module first and says why.
+
+Scripts using the `@/` alias must run from `apps/web`, or tsx does not find the
+tsconfig that defines it.
 
 - `middleware.ts` is deprecated and renamed to **`proxy.ts`**, exporting
   `proxy`. It defaults to the Node runtime now.
@@ -173,6 +277,26 @@ not been tested.
   cannot compile before its pages exist.
 - Native modules need `serverExternalPackages`; files read at runtime need
   `outputFileTracingIncludes`. Both compile fine and fail on first use.
+
+**`revalidatePath` arrived in Phase 2 and is now the convention.** Phase 1 had
+none: every mutation either `redirect()`ed, which re-renders the destination, or
+returned a state message and relied on the next navigation.
+
+The admin console broke that. Save, Test Connection, Disconnect and Deactivate
+all change data the operator is looking at *and* stay on the page, so without an
+explicit revalidate the badge keeps its old value until something else happens
+to re-render — which reads as "the save did not work" and gets clicked again.
+
+So: **a server action that mutates and does not redirect calls
+`revalidatePath()` for the route it changed**, as its last step before
+returning. Actions that redirect do not need it, though the deactivation
+actions call it anyway because the redirect target is the page whose data
+changed.
+
+The badge is never flipped optimistically on the client. It renders the stored
+status, after the action has written it — an integration that claims CONNECTED
+because the browser assumed so is worse than one that takes a moment to say
+NOT_CONNECTED, since the operator acts on the badge.
 
 ---
 

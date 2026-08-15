@@ -25,12 +25,15 @@
     "db:migrate": "npm run migrate --workspace=@whatsapp-os/db",
     "db:migrate:deploy": "npm run migrate:deploy --workspace=@whatsapp-os/db",
     "db:roles": "npm run roles --workspace=@whatsapp-os/db",
+    "db:nuke": "npm run nuke --workspace=@whatsapp-os/db --",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",
     "services:up": "docker compose up -d",
     "services:down": "docker compose down",
-    "services:logs": "docker compose logs -f"
+    "services:logs": "docker compose logs -f",
+    "vault:status": "npm run vault:status --workspace=web --",
+    "vault:rotate": "npm run vault:rotate --workspace=web --"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

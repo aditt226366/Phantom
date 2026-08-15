@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -179,13 +179,13 @@ describe("listCompanies", () => {
     );
     if (!first.ok || !second.ok) throw new Error("signup failed");
 
-    const companies = await listCompanies();
+    const { companies } = await listCompanies();
     expect(companies).toHaveLength(2);
     expect(companies.map((c) => c.name).sort()).toEqual([
       "Analytical Engines",
       "Beta Works",
     ]);
-    expect(companies.every((c) => c.userCount === 1)).toBe(true);
+    expect(companies.every((c) => c.ownerUsername !== null)).toBe(true);
 
     /*
      * The same read through the tenant role, with no company context, returns
@@ -200,15 +200,25 @@ describe("listCompanies", () => {
     const signup = await signUp(tenantForm(), {});
     if (!signup.ok) throw new Error("signup failed");
 
-    const [company] = await listCompanies();
+    const { companies } = await listCompanies();
 
-    /* Widening this is a change to lib/admin-db.ts, in review. */
-    expect(Object.keys(company!).sort()).toEqual([
-      "createdAt",
+    /*
+     * Widening this is a change to lib/admin-db.ts, in review — which is the
+     * point of asserting the whole shape rather than the fields in use.
+     *
+     * It got smaller in Phase 2, not larger. slug, createdAt and userCount
+     * came out because the company card renders none of them, and a field
+     * fetched across the tenant boundary that nobody can point at in the
+     * markup is one that should not have been fetched. Search still matches
+     * on slug; matching does not require returning.
+     */
+    expect(Object.keys(companies[0]!).sort()).toEqual([
       "id",
       "name",
-      "slug",
-      "userCount",
+      "ownerLastLoginAt",
+      "ownerUsername",
+      "plan",
+      "status",
     ]);
   });
 });
@@ -361,15 +371,77 @@ describe("the admin client has exactly one import site", () => {
 });
 
 describe("every admin route guards itself", () => {
-  it("calls requireAdminSession, never requireSession", () => {
-    const page = readFileSync(
-      join(webRoot, "app", "(admin)", "admin", "page.tsx"),
-      "utf8",
-    );
+  /**
+   * Discovered, not listed.
+   *
+   * This test named one file until the console grew a second page, at which
+   * point it broke — usefully, but only because the file had also moved. A
+   * hardcoded path stops covering the next route somebody adds, and says
+   * nothing when it does.
+   *
+   * Pages only. The layout guards too, but CLAUDE.md rule 4 is that a layout
+   * is UX: it is cached per segment and not guaranteed to re-run on navigation
+   * within it, so the page is where the guarantee has to live.
+   */
+  function adminPages(): string[] {
+    const root = join(webRoot, "app", "(admin)");
+    const found: string[] = [];
 
-    expect(page).toContain("requireAdminSession");
-    /* The tenant guard here would let a tenant session into the panel. */
-    expect(page).not.toMatch(/\brequireSession\b/);
+    function walk(dir: string): void {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name === "page.tsx") found.push(full);
+      }
+    }
+
+    walk(root);
+    return found;
+  }
+
+  /** The one page that must NOT require a session: it is the redirect target. */
+  const PUBLIC_PAGES = ["app/(admin)/admin/sign-in/page.tsx"];
+
+  it("found the console's pages", () => {
+    /* A walk that matched nothing would make the check below vacuous. */
+    expect(adminPages().length).toBeGreaterThan(1);
+  });
+
+  it("calls requireAdminSession on every page but the sign-in", () => {
+    const unguarded = adminPages()
+      .filter((file) => !readFileSync(file, "utf8").includes("requireAdminSession"))
+      .map((file) => relative(webRoot, file).replace(/\\/g, "/"));
+
+    expect(unguarded.sort()).toEqual([...PUBLIC_PAGES].sort());
+  });
+
+  it("never uses the tenant guard", () => {
+    /* requireSession here would let a tenant session into the panel. */
+    for (const file of adminPages()) {
+      expect(
+        readFileSync(file, "utf8"),
+        relative(webRoot, file),
+      ).not.toMatch(/\brequireSession\b/);
+    }
+  });
+
+  it("keeps the sign-in page outside the guarded layout", () => {
+    /*
+     * requireAdminSession() redirects to /admin/sign-in. If that page rendered
+     * inside a layout that also guards, the redirect would render the layout,
+     * which would redirect again — a loop that locks every operator out and
+     * looks like a broken deployment. The (console) route group is what keeps
+     * them apart, and route groups do not appear in the URL.
+     */
+    const signIn = join(webRoot, "app", "(admin)", "admin", "sign-in", "page.tsx");
+    const layout = join(webRoot, "app", "(admin)", "admin", "(console)", "layout.tsx");
+
+    expect(existsSync(signIn)).toBe(true);
+    expect(existsSync(layout)).toBe(true);
+    expect(
+      existsSync(join(webRoot, "app", "(admin)", "admin", "layout.tsx")),
+      "a layout at admin/ would wrap the sign-in page and loop",
+    ).toBe(false);
   });
 
   it("redirects to the admin sign-in, not the tenant one", () => {

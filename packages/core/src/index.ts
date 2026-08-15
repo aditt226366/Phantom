@@ -5,8 +5,13 @@
  */
 export * from "./encryption.ts";
 export * from "./env.ts";
+export * from "./integrations.ts";
+export * from "./providers/index.ts";
 export * from "./load-env.ts";
+export * from "./redact.ts";
+export * from "./time.ts";
 export * from "./queues.ts";
+export * from "./usage.ts";
 export * from "./schemas.ts";
 export * from "./types.ts";
 

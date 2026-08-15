@@ -10,7 +10,10 @@
     ".": "./src/index.ts",
     "./encryption": "./src/encryption.ts",
     "./env": "./src/env.ts",
-    "./queues": "./src/queues.ts"
+    "./queues": "./src/queues.ts",
+    "./integrations": "./src/integrations.ts",
+    "./redact": "./src/redact.ts",
+    "./time": "./src/time.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

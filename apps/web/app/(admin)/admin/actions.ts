@@ -1,10 +1,30 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { safeParseInput, signInSchema } from "@whatsapp-os/core";
+import {
+  INTEGRATION_PROVIDERS,
+  JOB_NAMES,
+  echoableValues,
+  integrationFields,
+  integrationSaveSchema,
+  safeParseInput,
+  signInSchema,
+  type IntegrationProviderName,
+} from "@whatsapp-os/core";
 import { createConsoleMailer, sendMailSafely } from "@whatsapp-os/core";
-import { writeAdminAudit } from "@/lib/admin-db";
+import {
+  disconnectIntegration,
+  latestRepairRun,
+  listCompanyIdsWithIntegrations,
+  saveIntegrationSecrets,
+  setCompanyDeactivated,
+  startRepairRun,
+  writeAdminAudit,
+} from "@/lib/admin-db";
+import { systemQueue } from "@/lib/queue";
 import { issueAdminPasswordReset } from "@/lib/auth/admin-reset";
+import { verifyIntegration } from "@/lib/integrations/verify";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import {
   adminSignIn,
@@ -17,6 +37,322 @@ import { safeNextPath } from "@/lib/auth/safe-next";
 
 export interface AdminFormState {
   message?: string;
+}
+
+/**
+ * The state a failed credential save hands back to the browser.
+ *
+ * `values` is the load-bearing field, and it carries non-secret entries only —
+ * see echoableValues(). React serialises this object into the HTML of the
+ * response, so anything in it has been disclosed to the page, its cache, and
+ * anything logging response bodies.
+ */
+export interface IntegrationFormState {
+  message?: string;
+  success?: string;
+  fieldErrors?: Record<string, string>;
+  /** Non-secret submitted values, so the form can repopulate them. */
+  values?: Record<string, string>;
+}
+
+export async function saveIntegrationAction(
+  _previous: IntegrationFormState,
+  formData: FormData,
+): Promise<IntegrationFormState> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) {
+    return { message: "Unknown provider." };
+  }
+
+  const submitted: Record<string, string> = {};
+  for (const field of integrationFields(provider)) {
+    submitted[field.key] = formData.get(field.key)?.toString() ?? "";
+  }
+
+  const parsed = safeParseInput(integrationSaveSchema(provider), submitted);
+
+  if (!parsed.ok) {
+    /* safeParseInput labels an object-level refinement "(root)", not "". */
+    const ROOT = "(root)";
+
+    const fieldErrors: Record<string, string> = {};
+    for (const issue of parsed.errors) {
+      if (issue.path !== ROOT) fieldErrors[issue.path] ??= issue.message;
+    }
+
+    return {
+      fieldErrors,
+      /*
+       * Never the raw submission. A token echoed here is a token in the page
+       * source — the one place this panel is otherwise careful never to put it.
+       */
+      values: echoableValues(submitted),
+      message:
+        parsed.errors.find((issue) => issue.path === ROOT)?.message ??
+        "Check the highlighted fields. Secret values must be re-entered.",
+    };
+  }
+
+  const result = await saveIntegrationSecrets(companyId, provider, parsed.data);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integration.saved",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* Key names, never values. */
+    metadata: { companyId, provider, keys: result.saved },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+
+  const saved =
+    result.saved.length === 0
+      ? "Nothing changed."
+      : `Saved ${result.saved.length} credential${result.saved.length === 1 ? "" : "s"}.`;
+
+  /*
+   * Save & Verify is the same save followed by a real provider call, so the
+   * outcome the operator reads is the verification's, not the save's.
+   */
+  if (formData.get("intent")?.toString() === "verify") {
+    const verified = await runVerification(
+      companyId,
+      provider,
+      session.adminUserId,
+    );
+
+    return verified.success
+      ? { success: `${saved} ${verified.success}` }
+      : { success: saved, ...(verified.message ? { message: verified.message } : {}) };
+  }
+
+  return { success: saved };
+}
+
+/**
+ * Check an integration against its provider.
+ *
+ * Shared by Save & Verify and by Test Connection, because they differ only in
+ * whether a save happened first.
+ */
+async function runVerification(
+  companyId: string,
+  provider: IntegrationProviderName,
+  adminUserId: string,
+): Promise<IntegrationFormState> {
+  const result = await verifyIntegration(companyId, provider);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId,
+    action: "admin.integration.verified",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* The outcome, never the credential. `error` is already scrubbed. */
+    metadata: {
+      companyId,
+      provider,
+      ok: result?.ok ?? false,
+      ...(result && !result.ok ? { kind: result.kind } : {}),
+    },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+
+  if (!result) {
+    return { message: "Nothing is stored for this provider yet." };
+  }
+
+  return result.ok
+    ? { success: "Connection verified." }
+    : { message: result.error };
+}
+
+export async function testIntegrationAction(
+  _previous: IntegrationFormState,
+  formData: FormData,
+): Promise<IntegrationFormState> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) {
+    return { message: "Unknown provider." };
+  }
+
+  return runVerification(companyId, provider, session.adminUserId);
+}
+
+/**
+ * Delete a provider's stored credentials.
+ *
+ * A POST with CSRF and a confirmation step, for the same reason Deactivate has
+ * one: it is destructive and unrecoverable. Nothing here can read a credential
+ * back, so re-connecting means re-typing every value from the provider's own
+ * console.
+ */
+export async function disconnectIntegrationAction(
+  formData: FormData,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) return;
+
+  const removed = await disconnectIntegration(companyId, provider);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integration.disconnected",
+    ...(context.ip ? { ip: context.ip } : {}),
+    metadata: {
+      companyId,
+      provider,
+      secretsRemoved: removed?.secretsRemoved ?? 0,
+    },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+  redirect(`/admin/companies/${companyId}/integrations`);
+}
+
+function isIntegrationProvider(
+  value: string,
+): value is IntegrationProviderName {
+  return (INTEGRATION_PROVIDERS as readonly string[]).includes(value);
+}
+
+/* ------------------------------------------------------------------ */
+/* Platform maintenance                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Re-verify every integration on the installation.
+ *
+ * Enumerates here and enqueues one job per company, because the worker cannot
+ * enumerate — it holds no company context, so a cross-company SELECT returns
+ * zero rows and succeeds.
+ *
+ * Two things stop a double-click becoming two rounds of provider calls at
+ * Meta. A run started in the last few minutes blocks a new one outright, and
+ * each job carries a deterministic id built from the run and the company, so
+ * even within one run the queue collapses duplicates rather than fanning out
+ * twice.
+ *
+ * The run row exists so the panel can answer the question that was actually
+ * asked. "Repair every integration" is a question about the platform, and
+ * per-integration timestamps cannot say whether the run finished — only that
+ * some rows are newer than others.
+ */
+const REPAIR_COOLDOWN_MS = 5 * 60_000;
+
+export async function repairIntegrationsAction(
+  formData: FormData,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const existing = await latestRepairRun();
+  const running =
+    existing !== null &&
+    Date.now() - existing.startedAt.getTime() < REPAIR_COOLDOWN_MS &&
+    existing.completedCompanies < existing.totalCompanies;
+
+  if (running) {
+    /* Already in flight. Silently doing it again would double the load on
+       every provider for no benefit. */
+    revalidatePath("/admin");
+    redirect("/admin");
+  }
+
+  const companyIds = await listCompanyIdsWithIntegrations();
+  const runId = await startRepairRun(session.adminUserId, companyIds.length);
+
+  for (const companyId of companyIds) {
+    await systemQueue.add(
+      JOB_NAMES.INTEGRATION_VERIFY,
+      { companyId },
+      { jobId: `repair:${runId}:${companyId}` },
+    );
+  }
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integrations.repair",
+    ...(context.ip ? { ip: context.ip } : {}),
+    metadata: { runId, companies: companyIds.length },
+  });
+
+  revalidatePath("/admin");
+  redirect("/admin");
+}
+
+/* ------------------------------------------------------------------ */
+/* Deactivation                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Suspend or restore a workspace.
+ *
+ * A POST with CSRF, never a link.
+ *
+ * The confirmation *page* is a GET — rendering it is safe and idempotent, and
+ * it is what ?confirm= addresses. The act itself cannot be: a URL that
+ * deactivates on GET is reachable by a browser preloading a hovered link, by a
+ * corporate mail scanner following it out of an alert, and by any prefetch.
+ * The consequence is a live customer losing access to their account because
+ * somebody's security appliance was thorough.
+ *
+ * Reactivation exists for a duller reason: without it, an operator's misclick
+ * is recoverable only by hand-written SQL against production.
+ */
+async function setDeactivation(
+  formData: FormData,
+  deactivated: boolean,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  if (!companyId) return;
+
+  const changed = await setCompanyDeactivated(companyId, deactivated);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: deactivated ? "admin.company.deactivated" : "admin.company.reactivated",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* `changed: false` means it was already in that state. */
+    metadata: { companyId, changed },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}`);
+  redirect(`/admin/companies/${companyId}`);
+}
+
+export async function deactivateCompanyAction(
+  formData: FormData,
+): Promise<void> {
+  await setDeactivation(formData, true);
+}
+
+export async function reactivateCompanyAction(
+  formData: FormData,
+): Promise<void> {
+  await setDeactivation(formData, false);
 }
 
 /** One message for every failure, exactly as on the tenant side. */
@@ -124,7 +460,24 @@ The link expires in one hour and can be used once.`,
     });
   }
 
-  /* One message for both outcomes, and never the link. */
+  if (result.refused === "company-deactivated") {
+    /*
+     * The one outcome worth distinguishing, and it is not an enumeration risk:
+     * the operator is already looking at the company's page, so this tells
+     * them nothing they cannot see.
+     *
+     * Saying "a link was sent" here would be a lie with a long tail —
+     * app_resolve_company() refuses the 'password_reset' kind for a
+     * deactivated company, so the link cannot work, and the person debugging
+     * it would start with the mail server.
+     */
+    return {
+      message:
+        "This company is deactivated, so a reset link could not be used. Reactivate it first.",
+    };
+  }
+
+  /* One message for both remaining outcomes, and never the link. */
   return {
     message: "If that user exists, a reset link has been sent to them.",
   };

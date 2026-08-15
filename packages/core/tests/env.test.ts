@@ -12,6 +12,8 @@ const valid = {
   DATABASE_URL_APP: "postgresql://app_runtime:pw@localhost:5432/db",
   REDIS_URL: "redis://localhost:6379",
   ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
+  ENCRYPTION_KEYS: `k1:${Buffer.alloc(32).toString("base64")}`,
+  ENCRYPTION_KEY_ACTIVE: "k1",
 };
 
 describe("safeParseEnv", () => {
@@ -45,6 +47,45 @@ describe("safeParseEnv", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("32 bytes");
+    }
+  });
+
+  it("rejects a keyring entry that is not 32 bytes", () => {
+    const result = safeParseEnv(sharedEnvSchema, {
+      ...valid,
+      ENCRYPTION_KEYS: `k1:${Buffer.alloc(16).toString("base64")}`,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("ENCRYPTION_KEYS");
+    }
+  });
+
+  it("rejects a malformed active key id", () => {
+    const result = safeParseEnv(sharedEnvSchema, {
+      ...valid,
+      ENCRYPTION_KEY_ACTIVE: "Key One",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("ENCRYPTION_KEY_ACTIVE");
+    }
+  });
+
+  it("still requires ENCRYPTION_KEY alongside the keyring", () => {
+    /*
+     * The two are unrelated and both mandatory. ENCRYPTION_KEY is the HMAC key
+     * for hashIp(); dropping it because "the keyring replaced it" would
+     * invalidate every stored ip_hash and nothing would say so.
+     */
+    const { ENCRYPTION_KEY: _dropped, ...withoutIt } = valid;
+    const result = safeParseEnv(sharedEnvSchema, withoutIt);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("ENCRYPTION_KEY");
     }
   });
 

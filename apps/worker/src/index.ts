@@ -10,12 +10,18 @@ import { JOB_NAMES, QUEUE_NAMES, parseJobPayload } from "@whatsapp-os/core";
 import { connection } from "./redis.ts";
 import { log } from "./logger.ts";
 import { handlePing } from "./jobs/ping.ts";
+import { handleIntegrationVerify } from "./jobs/integration-verify.ts";
+import { handleVaultReseal } from "./jobs/vault-reseal.ts";
 
 /**
  * whatsapp-os background worker.
  *
- * Runs BullMQ consumers against Redis. No product jobs yet - only the system
- * ping, which proves the enqueue -> consume -> database path is wired.
+ * Runs BullMQ consumers against Redis: the system ping, integration
+ * verification, and vault key rotation. Both product jobs take a companyId,
+ * because this process cannot enumerate companies - it connects as app_runtime
+ * with no company context, so a cross-company SELECT returns zero rows,
+ * succeeds, and looks exactly like "nothing to do". The fan-out happens on the
+ * web side, which holds the admin client.
  */
 
 async function processJob(job: Job): Promise<unknown> {
@@ -27,6 +33,22 @@ async function processJob(job: Job): Promise<unknown> {
   switch (job.name) {
     case JOB_NAMES.PING:
       return handlePing(parseJobPayload(JOB_NAMES.PING, job.data));
+
+    case JOB_NAMES.INTEGRATION_VERIFY:
+      /*
+       * The job id is passed through as the usage idempotency key. Every one
+       * of the five attempts carries the same id, so one provider call is
+       * charged once however many attempts it took to record.
+       */
+      return handleIntegrationVerify(
+        parseJobPayload(JOB_NAMES.INTEGRATION_VERIFY, job.data),
+        job.id ?? `${job.name}:${job.timestamp}`,
+      );
+
+    case JOB_NAMES.VAULT_RESEAL:
+      return handleVaultReseal(
+        parseJobPayload(JOB_NAMES.VAULT_RESEAL, job.data),
+      );
 
     default:
       throw new Error(`No handler registered for job "${job.name}"`);

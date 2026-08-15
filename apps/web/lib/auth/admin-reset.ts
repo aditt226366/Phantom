@@ -30,6 +30,8 @@ export interface AdminResetResult {
   token?: string;
   email?: string;
   sessionsRevoked?: number;
+  /** Set when the reset was refused for a reason worth telling the operator. */
+  refused?: "company-deactivated";
 }
 
 export async function issueAdminPasswordReset(
@@ -47,6 +49,27 @@ export async function issueAdminPasswordReset(
       metadata: { username },
     });
     return { ok: false };
+  }
+
+  if (user.companyDeactivatedAt !== null) {
+    /*
+     * Refused here rather than in the panel, because the token would be
+     * useless in a way nothing downstream reports.
+     *
+     * app_resolve_company() returns NULL for the 'password_reset' kind once a
+     * company is deactivated, so the link would arrive in the user's inbox and
+     * fail to resolve — and the operator, having seen "a link was sent", would
+     * conclude that email is broken. An affordance that depends on the
+     * resolver should refuse wherever the resolver refuses.
+     */
+    await writeAdminAudit({
+      adminUserId,
+      action: "admin.password_reset.refused_deactivated",
+      ...(ip ? { ip } : {}),
+      metadata: { username, companyId: user.companyId },
+    });
+
+    return { ok: false, refused: "company-deactivated" };
   }
 
   const token = randomBytes(32).toString("base64url");

@@ -15,10 +15,10 @@
 # it is explicit, it appears in the command, and someone chose it. What this
 # removes is the accidental version.
 
-log="$(git rev-parse --git-dir)/verify.log"
-
-printf 'pre-commit: running the gate. This includes a build and the screenshot\n'
-printf '            suite, so it takes a few minutes. --no-verify skips it.\n'
+git_dir="$(git rev-parse --git-dir)"
+log="$git_dir/verify.log"
+retry_log="$git_dir/verify-retry.log"
+tally="$git_dir/gate-retries.log"
 
 #
 # Capture the status on the same line that produces it.
@@ -32,16 +32,82 @@ printf '            suite, so it takes a few minutes. --no-verify skips it.\n'
 # that reports a problem without enforcing it. Worth keeping in the file, since
 # the broken version reads perfectly well.
 #
-status=0
-npm run verify >"$log" 2>&1 || status=$?
+run_gate() {
+  status=0
+  npm run verify >"$1" 2>&1 || status=$?
+  return "$status"
+}
 
-if [ "$status" -eq 0 ]; then
+#
+# Is this the known worker crash, and nothing else?
+#
+# The db project's fork dies intermittently in full runs - eight occurrences
+# and counting, characterised in the conventions skill, still unexplained below
+# the JavaScript layer. It exits non-zero with a short test count and no test
+# actually failing.
+#
+# Two conditions, and the second is the one that matters. The worker-exit
+# signature must be present, AND no test may have reported a failure. A run
+# where a worker died *and* something genuinely broke is a genuine red and gets
+# no second chance - a real failure must never get another roll of the dice.
+#
+# Anything that fails before the test phase - typecheck, lint, build - never
+# produces the worker signature at all, because vitest did not run. Anything
+# after it, the screenshot suite, fails with Playwright output instead. So the
+# discriminator does not need to enumerate the other stages.
+#
+is_crash_shaped() {
+  grep -q "Worker exited unexpectedly" "$1" 2>/dev/null &&
+    ! grep -qE "Tests +[0-9]+ failed" "$1" 2>/dev/null
+}
+
+refuse() {
+  printf '\npre-commit: THE GATE FAILED. Last 40 lines of %s:\n\n' "$1"
+  tail -40 "$1"
+  printf '\npre-commit: commit refused. Full output is in %s\n' "$1"
+  exit 1
+}
+
+printf 'pre-commit: running the gate. This includes a build and the screenshot\n'
+printf '            suite, so it takes a few minutes. --no-verify skips it.\n'
+
+if run_gate "$log"; then
   printf 'pre-commit: gate passed.\n'
   exit 0
 fi
 
-printf '\npre-commit: THE GATE FAILED. Last 40 lines of %s:\n\n' "$log"
-tail -40 "$log"
-printf '\npre-commit: commit refused. Full output is in %s\n' "$log"
+if ! is_crash_shaped "$log"; then
+  refuse "$log"
+fi
 
-exit "$status"
+#
+# One retry, and only for this. Recorded rather than absorbed.
+#
+# Without it roughly two commits in five are refused for a reason that is not
+# real, and --no-verify becomes muscle memory - which would cost more than the
+# hook buys. But a retry that leaves no trace is how an intermittent fault
+# becomes permanent background noise, so every one is appended to a tally and
+# the running count is printed.
+#
+# If that count starts climbing on most commits, the crash has got worse and is
+# worth another look with the exit-code capture. The signal arrives by itself
+# instead of depending on somebody remembering what they saw last week.
+#
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse --short HEAD)" >>"$tally"
+retries="$(wc -l <"$tally" | tr -d ' ')"
+
+printf '\npre-commit: the first run hit the known db worker crash - non-zero exit,\n'
+printf '            short test count, nothing actually failing. Retrying once.\n'
+printf '            Retry %s recorded in %s\n\n' "$retries" "$tally"
+
+if run_gate "$retry_log"; then
+  printf 'pre-commit: gate passed on the retry.\n'
+  exit 0
+fi
+
+if is_crash_shaped "$retry_log"; then
+  printf '\npre-commit: the retry hit the same crash. Refusing rather than\n'
+  printf '            retrying again - twice in a row is no longer noise.\n'
+fi
+
+refuse "$retry_log"

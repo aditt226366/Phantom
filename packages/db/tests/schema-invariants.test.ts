@@ -242,10 +242,48 @@ describe("schema invariants", () => {
       }
     });
 
-    it("has an access policy for app_admin", async () => {
+    it("scopes app_runtime writes, not only reads", async () => {
       for (const table of protectedTables()) {
-        const { rows } = await db.query(
-          `SELECT policyname FROM pg_policies
+        const { rows } = await db.query<{
+          policyname: string;
+          with_check: string | null;
+        }>(
+          `SELECT policyname, with_check FROM pg_policies
+           WHERE schemaname = 'public' AND tablename = $1
+             AND 'app_runtime' = ANY(roles)`,
+          [table],
+        );
+
+        /*
+         * USING decides which rows are visible; WITH CHECK decides which rows
+         * may be written.
+         *
+         * An absent WITH CHECK is safe: Postgres falls back to USING for
+         * writes, and the assertion above already proves USING consults the
+         * request context. A *present* one replaces that fallback entirely,
+         * and that is the hole worth catching — a policy reading
+         *
+         *     USING      (company_id = app_current_company())
+         *     WITH CHECK (true)
+         *
+         * looks right, satisfies every other assertion in this file, and lets
+         * a write land under any company_id at all.
+         */
+        for (const row of rows) {
+          if (row.with_check === null) continue;
+
+          expect(
+            row.with_check.includes("app_current_company"),
+            `${table}: policy ${row.policyname} has a WITH CHECK that does not consult app_current_company()`,
+          ).toBe(true);
+        }
+      }
+    });
+
+    it("has an access policy for app_admin, covering writes", async () => {
+      for (const table of protectedTables()) {
+        const { rows } = await db.query<{ policyname: string; cmd: string }>(
+          `SELECT policyname, cmd FROM pg_policies
            WHERE schemaname = 'public' AND tablename = $1
              AND 'app_admin' = ANY(roles)`,
           [table],
@@ -257,6 +295,19 @@ describe("schema invariants", () => {
          * blank rather than the tenant boundary going away — but still a bug.
          */
         expect(rows.length, `${table}: no app_admin policy`).toBeGreaterThan(0);
+
+        /*
+         * And the command matters, not just the policy's existence. FOR SELECT
+         * passes the check above and then fails at the first write the panel
+         * attempts — which, from Phase 2 on, means Save, Disconnect and
+         * Deactivate. Same fail-closed shape, discovered much later.
+         */
+        expect(
+          rows.some((r) => r.cmd === "ALL"),
+          `${table}: app_admin has a policy but none FOR ALL (found ${rows
+            .map((r) => `${r.policyname} FOR ${r.cmd}`)
+            .join(", ")})`,
+        ).toBe(true);
       }
     });
 

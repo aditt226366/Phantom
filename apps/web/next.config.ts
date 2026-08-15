@@ -20,7 +20,36 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * the `transpilePackages` pipeline, so workspace TypeScript is not resolvable
  * here.
  */
+/*
+ * NODE_ENV is Next's to set, not the .env file's.
+ *
+ * `next build` decides NODE_ENV=production and `next dev` decides development.
+ * dotenv does not overwrite a variable that is already set, so on a machine
+ * where Next gets there first this is a no-op — but that ordering is an
+ * implementation detail of Next's startup, not a guarantee. When NODE_ENV is
+ * unset at the moment this file is evaluated, a root .env carrying
+ * NODE_ENV=development turns `next build` into a development build and earns
+ * the "non-standard NODE_ENV" warning.
+ *
+ * Verified rather than assumed: with NODE_ENV preset the load leaves it alone,
+ * with it unset the load sets it to development.
+ *
+ * So the value is snapshotted and put back. Every other variable in .env still
+ * loads normally, and real environment variables still win over the file.
+ */
+const nodeEnv = process.env.NODE_ENV;
+
 loadDotenv({ path: path.resolve(here, "..", "..", ".env"), quiet: true });
+
+/* Next types NODE_ENV readonly, which is right for app code and in the way
+   here. The cast is confined to these three lines. */
+const mutableEnv = process.env as Record<string, string | undefined>;
+
+if (nodeEnv === undefined) {
+  delete mutableEnv["NODE_ENV"];
+} else {
+  mutableEnv["NODE_ENV"] = nodeEnv;
+}
 
 const nextConfig: NextConfig = {
   /**

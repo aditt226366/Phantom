@@ -113,6 +113,28 @@ Same commit, same shape: `status.ts` claimed a test executed its rendered
 member by member, because a `CASE` missing one arm parses cleanly and returns
 NULL, so a status added on one side only would stop advancing in silence.
 
+### C5. The timestamp cast was documented, then deleted
+
+Commit 16's raw statement had to write
+`${date.toISOString()}::timestamptz AT TIME ZONE 'UTC'` on every bound value,
+because Prisma maps `DateTime` to `timestamp(3)` *without* time zone — a wall
+clock with no offset. Binding a `Date` and casting `::timestamp` keeps the
+digits and drops the offset, writing a value out by the **node process's** UTC
+offset, which here is four hours. The Postgres session is UTC, so bare `now()`
+happened to be correct, and only for as long as that stays true.
+
+Measured before acting: the digits Prisma writes and the digits the raw
+statement writes were identical, so nothing was wrong in the database and
+nothing needed correcting.
+
+`05440ac` removed the class of bug instead of documenting it — 64 columns
+across 22 tables to `timestamptz(3)`, drift clean, all at precision 3. Done
+then because `ALTER COLUMN ... TYPE` rewrites the table under an ACCESS
+EXCLUSIVE lock: instant on today's near-empty tables, a maintenance window on
+Phase 5's message volume. `timestamp-columns.test.ts` holds an **empty**
+allowlist, so the next `DateTime` field that omits `@db.Timestamptz(3)` fails a
+test rather than quietly reintroducing the trap.
+
 ---
 
 ## The public-endpoint contract
@@ -231,10 +253,10 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (25 commits on `phase-4a`)
+### Done — 4a (26 commits on `phase-4a`)
 
-Planned commits 1–19 of the original numbering, plus eight that emerged from
-the work and were not planned, plus the docs commit that wrote the rest down.
+Planned commits 1–19 of the original numbering, plus nine that emerged from the
+work and were not planned, plus the docs commit that wrote the rest down.
 
 | # | Hash | Subject |
 | --- | --- | --- |
@@ -262,6 +284,7 @@ the work and were not planned, plus the docs commit that wrote the rest down.
 | 14 | `0721ee4` | `feat(core): whether the 24-hour window is still open` |
 | 15 | `5299e4f` | `feat(core): parse what Meta sends, and post back to it` |
 | 16 | `809b41d` | `feat(db): whether a conversation can be sent to` |
+| — | `05440ac` | `refactor(db): store instants, not wall clocks` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).

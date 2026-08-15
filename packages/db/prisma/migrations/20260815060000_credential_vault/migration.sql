@@ -55,6 +55,8 @@ CREATE TABLE "integration_verifications" (
     "ok" BOOLEAN NOT NULL,
     "status_code" INTEGER,
     "error" TEXT,
+    "failure_kind" TEXT,
+    "details" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "integration_verifications_pkey" PRIMARY KEY ("id")

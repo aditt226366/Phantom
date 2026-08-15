@@ -393,6 +393,15 @@ model IntegrationVerification {
   /// some error bodies, so this passes through scrubValues on the way in.
   error      String?
 
+  /// How the failure was classified: auth and config demote the badge,
+  /// transient does not. Null on success.
+  failureKind String? @map("failure_kind")
+
+  /// Provider identifiers worth keeping - for Meta, code, error_subcode and
+  /// fbtrace_id. Support asks for fbtrace_id first, it exists only in the
+  /// response that failed, and it is worth nothing if it was never stored.
+  details Json?
+
   createdAt DateTime @default(now()) @map("created_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)

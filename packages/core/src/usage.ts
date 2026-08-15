@@ -104,6 +104,42 @@ export function findPrice(
   return undefined;
 }
 
+export interface PricedUsage {
+  /** Null when nothing priced this kind. Never 0 as a stand-in. */
+  costMicros: bigint | null;
+  currency: string | null;
+  priceVersion: number;
+  unpricedReason: string | null;
+}
+
+/**
+ * The pricing decision, separated from the write.
+ *
+ * Two callers store usage — the tenant path through withCompany and the admin
+ * panel through the admin client — and only the client differs. Duplicating
+ * the lookup is how the same event ends up charged two different amounts
+ * depending on who triggered it.
+ */
+export function priceUsage(kind: string, quantity: number): PricedUsage {
+  const price = findPrice(kind, ACTIVE_PRICE_VERSION);
+
+  if (!price) {
+    return {
+      costMicros: null,
+      currency: null,
+      priceVersion: ACTIVE_PRICE_VERSION,
+      unpricedReason: `no price for kind "${kind}" at version ${ACTIVE_PRICE_VERSION}`,
+    };
+  }
+
+  return {
+    costMicros: BigInt(price.micros) * BigInt(quantity),
+    currency: price.currency,
+    priceVersion: ACTIVE_PRICE_VERSION,
+    unpricedReason: null,
+  };
+}
+
 /**
  * A deterministic idempotency key.
  *

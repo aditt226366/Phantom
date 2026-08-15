@@ -2,7 +2,9 @@ import "server-only";
 import {
   INTEGRATION_LABELS,
   integrationFields,
+  priceUsage,
   type IntegrationProviderName,
+  type UsageKind,
 } from "@whatsapp-os/core";
 import type { Prisma } from "@whatsapp-os/db";
 import { adminPrisma } from "@whatsapp-os/db/admin";
@@ -365,6 +367,116 @@ export async function saveIntegrationSecrets(
     }
 
     return { integrationId: integration.id, saved, unchanged };
+  });
+}
+
+export interface SealedSecretRow {
+  key: string;
+  ciphertext: string;
+}
+
+/**
+ * Ciphertexts for one integration, for the provider-call path only.
+ *
+ * The one query in this file that returns a ciphertext, and it exists so that
+ * decryption can happen *outside* a transaction: this closes, then the caller
+ * opens the values and makes the network call. Nothing here decrypts.
+ */
+export async function loadSealedSecrets(
+  companyId: string,
+  provider: IntegrationProviderName,
+): Promise<{ integrationId: string; secrets: SealedSecretRow[] } | null> {
+  const integration = await adminPrisma.integration.findUnique({
+    where: { companyId_provider: { companyId, provider } },
+    select: {
+      id: true,
+      secrets: { select: { key: true, ciphertext: true } },
+    },
+  });
+
+  if (!integration) return null;
+
+  return {
+    integrationId: integration.id,
+    secrets: integration.secrets.map((row) => ({
+      key: row.key,
+      ciphertext: row.ciphertext,
+    })),
+  };
+}
+
+export interface VerificationRecord {
+  ok: boolean;
+  statusCode?: number | undefined;
+  /** Already scrubbed by the adapter. */
+  error?: string | undefined;
+  failureKind?: string | undefined;
+  details?: Prisma.InputJsonValue | undefined;
+  /** False for a transient failure, which must not move the badge. */
+  demote: boolean;
+}
+
+/**
+ * Write what a provider said, and move the badge only if it should move.
+ *
+ * A transient failure updates last_error and appends to the log while leaving
+ * `status` exactly as it was — so a Meta outage does not tell every operator
+ * their credentials are broken, and their credentials do not get re-entered
+ * in response.
+ */
+export async function recordVerification(
+  companyId: string,
+  integrationId: string,
+  result: VerificationRecord,
+): Promise<void> {
+  await adminPrisma.$transaction(async (tx) => {
+    await tx.integrationVerification.create({
+      data: {
+        companyId,
+        integrationId,
+        ok: result.ok,
+        ...(result.statusCode === undefined
+          ? {}
+          : { statusCode: result.statusCode }),
+        ...(result.error === undefined ? {} : { error: result.error }),
+        ...(result.failureKind === undefined
+          ? {}
+          : { failureKind: result.failureKind }),
+        ...(result.details === undefined ? {} : { details: result.details }),
+      },
+    });
+
+    await tx.integration.update({
+      where: { id: integrationId },
+      data: {
+        lastError: result.ok ? null : (result.error ?? null),
+        ...(result.ok
+          ? { status: "CONNECTED", lastVerifiedAt: new Date() }
+          : result.demote
+            ? { status: "NOT_CONNECTED" }
+            : {}),
+      },
+    });
+  });
+}
+
+/**
+ * Record usage for a company the admin panel is acting on.
+ *
+ * The pricing decision is priceUsage() in core, shared with the tenant-side
+ * emitter — only the client differs. Duplicating the price lookup here is how
+ * two paths end up charging different amounts for the same event.
+ */
+export async function recordAdminUsage(
+  companyId: string,
+  kind: UsageKind,
+  dedupeKey: string,
+): Promise<void> {
+  const priced = priceUsage(kind, 1);
+
+  await adminPrisma.usageEvent.createMany({
+    data: [{ companyId, kind, quantity: 1, dedupeKey, ...priced }],
+    skipDuplicates: true,
   });
 }
 

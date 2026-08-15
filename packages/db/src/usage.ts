@@ -1,8 +1,4 @@
-import {
-  ACTIVE_PRICE_VERSION,
-  findPrice,
-  type UsageKind,
-} from "@whatsapp-os/core";
+import { priceUsage, type UsageKind } from "@whatsapp-os/core";
 import type { CompanyClient } from "./with-company.ts";
 
 /**
@@ -60,20 +56,10 @@ export async function recordUsage(
   input: RecordUsageInput,
 ): Promise<RecordedUsage> {
   const quantity = input.quantity ?? 1;
-  const price = findPrice(input.kind, ACTIVE_PRICE_VERSION);
 
-  /* Currency comes from the entry, never from the caller. */
-  const priced = price
-    ? {
-        costMicros: BigInt(price.micros) * BigInt(quantity),
-        currency: price.currency,
-        unpricedReason: null,
-      }
-    : {
-        costMicros: null,
-        currency: null,
-        unpricedReason: `no price for kind "${input.kind}" at version ${ACTIVE_PRICE_VERSION}`,
-      };
+  /* Currency comes from the entry, never from the caller. Shared with the
+     admin-side emitter so the two cannot price the same event differently. */
+  const priced = priceUsage(input.kind, quantity);
 
   /*
    * createMany with skipDuplicates, which is ON CONFLICT DO NOTHING. A
@@ -86,7 +72,6 @@ export async function recordUsage(
         companyId,
         kind: input.kind,
         quantity,
-        priceVersion: ACTIVE_PRICE_VERSION,
         dedupeKey: input.dedupeKey,
         ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
         ...priced,
@@ -95,5 +80,10 @@ export async function recordUsage(
     skipDuplicates: true,
   });
 
-  return { recorded: count > 0, ...priced };
+  return {
+    recorded: count > 0,
+    costMicros: priced.costMicros,
+    currency: priced.currency,
+    unpricedReason: priced.unpricedReason,
+  };
 }

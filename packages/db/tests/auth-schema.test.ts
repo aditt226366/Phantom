@@ -119,6 +119,149 @@ describe("app_resolve_company", () => {
       resolveCompany("passwords", "x"),
     ).rejects.toThrow(/unknown lookup kind/i);
   });
+
+  it("answers every kind it declares, in one pass", async () => {
+    /*
+     * The regression guard for CREATE OR REPLACE.
+     *
+     * The function is rewritten whole every time a kind is added, so a typo in
+     * a branch a migration did not mean to touch is silently shipped — and the
+     * five older branches are load-bearing for sign-in, session resolution,
+     * email verification and password reset. That failure presents as "sign-in
+     * is broken", days later, with nothing pointing at the migration.
+     *
+     * Every kind in one test rather than one test each, deliberately: the
+     * claim is that the SET is intact after a rewrite, and a suite where five
+     * pass and one fails reads very differently from five separate files.
+     */
+    const tokenHash = "all-kinds-token-hash";
+    const resetHash = "all-kinds-reset-hash";
+    const verifyHash = "all-kinds-verify-hash";
+    const expiresAt = new Date(Date.now() + 60_000);
+
+    const webhookKey = await withCompany(
+      alpha.id,
+      async (db, companyId): Promise<string> => {
+        await db.session.create({
+          data: {
+            companyId,
+            userId: alpha.userIds[0]!,
+            tokenHash,
+            csrfSecret: "csrf",
+            expiresAt,
+          },
+        });
+        await db.passwordResetToken.create({
+          data: { companyId, userId: alpha.userIds[0]!, tokenHash: resetHash, expiresAt },
+        });
+        await db.emailVerificationToken.create({
+          data: { companyId, userId: alpha.userIds[0]!, tokenHash: verifyHash, expiresAt },
+        });
+
+        const integration = await db.integration.create({
+          data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+          select: { webhookKey: true },
+        });
+        return integration.webhookKey;
+      },
+    );
+
+    const answers = {
+      username: await resolveCompany("username", alpha.usernames[0]!),
+      email: await resolveCompany("email", "user0@alpha.test"),
+      session: await resolveCompany("session", tokenHash),
+      verification: await resolveCompany("verification", verifyHash),
+      password_reset: await resolveCompany("password_reset", resetHash),
+      webhook: await resolveCompany("webhook", webhookKey),
+    };
+
+    /*
+     * One object comparison rather than six assertions: a missing key is then
+     * as loud as a wrong value, and the diff names the branch that broke.
+     */
+    expect(answers).toEqual({
+      username: alpha.id,
+      email: alpha.id,
+      session: alpha.id,
+      verification: alpha.id,
+      password_reset: alpha.id,
+      webhook: alpha.id,
+    });
+  });
+});
+
+describe("resolving a webhook key", () => {
+  /** Seeds an integration and hands back the key Meta would post to. */
+  async function seedIntegration(
+    company: SeededCompany,
+    provider: "WHATSAPP_CLOUD" | "GOOGLE_SHEETS",
+  ): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider, label: provider },
+        select: { webhookKey: true },
+      });
+      return integration.webhookKey;
+    });
+  }
+
+  it("maps a key to the company that owns it", async () => {
+    const alphaKey = await seedIntegration(alpha, "WHATSAPP_CLOUD");
+    const betaKey = await seedIntegration(beta, "WHATSAPP_CLOUD");
+
+    expect(await resolveCompany("webhook", alphaKey)).toBe(alpha.id);
+    expect(await resolveCompany("webhook", betaKey)).toBe(beta.id);
+  });
+
+  it("returns null for a key nobody holds", async () => {
+    /*
+     * The endpoint answers 200 to this, not 404 — a rotated key or a stale Meta
+     * config would otherwise burn toward subscription disablement. That is the
+     * handler's decision; this only has to say "no company".
+     */
+    expect(await resolveCompany("webhook", "0".repeat(32))).toBeNull();
+  });
+
+  it("ignores a key belonging to a non-WhatsApp integration", async () => {
+    /*
+     * Every integration has a webhook_key, because 20260815110000 gave the
+     * column a NOT NULL default. Without the provider constraint a Sheets key
+     * would resolve, the handler would open the correct company, and then fail
+     * hunting for WhatsApp credentials that were never stored — a confusing
+     * failure at the least debuggable point in the system.
+     */
+    const sheetsKey = await seedIntegration(alpha, "GOOGLE_SHEETS");
+
+    expect(await resolveCompany("webhook", sheetsKey)).toBeNull();
+  });
+
+  it("still resolves for a deactivated company", async () => {
+    /*
+     * The deliberate asymmetry with all five other kinds, and the one most
+     * likely to be "fixed" by someone matching the pattern.
+     *
+     * Meta keeps delivering to a suspended workspace's number. Refusing here
+     * would 404 Meta, and about a week of failures disables the subscription
+     * outright — so reactivating would leave a dead webhook nobody is told
+     * about and every message from the suspension gone. The worker declines to
+     * act; the resolver still answers.
+     */
+    const key = await seedIntegration(alpha, "WHATSAPP_CLOUD");
+
+    expect(await resolveCompany("webhook", key)).toBe(alpha.id);
+
+    await withCompany(alpha.id, (db) =>
+      db.company.update({
+        where: { id: alpha.id },
+        data: { deactivatedAt: new Date() },
+      }),
+    );
+
+    expect(await resolveCompany("webhook", key)).toBe(alpha.id);
+
+    /* And the contrast, in the same test, so the asymmetry is the assertion. */
+    expect(await resolveCompany("username", alpha.usernames[0]!)).toBeNull();
+  });
 });
 
 describe("a deactivated company", () => {

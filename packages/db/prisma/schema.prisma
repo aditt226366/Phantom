@@ -306,8 +306,24 @@ model Integration {
   ///
   /// The default is a database expression rather than application code so that
   /// no row can exist without one, including rows written by a migration or by
-  /// a future code path that has not thought about webhooks. Rotation is an
-  /// explicit UPDATE from the app, in the same 32-hex shape.
+  /// a future code path that has not thought about webhooks.
+  ///
+  /// Rotation, stated because "it rotates without touching a credential" is
+  /// half the argument for having this column at all:
+  ///
+  ///   It is a plain UPDATE of this one value, in the same 32-hex shape, and
+  ///   nothing else moves - no credential is re-encrypted, because none of the
+  ///   AAD components change. That is the property the opaque key buys.
+  ///
+  ///   It is NOT free to the tenant. The old URL stops resolving the instant
+  ///   the UPDATE commits, and inbound messages are dropped until they paste
+  ///   the new one into Meta - during which Meta is accumulating failures
+  ///   toward disabling the subscription. So it is a deliberate act with a
+  ///   warning attached, not a background hygiene job.
+  ///
+  ///   The control therefore lives with the page that displays the URL -
+  ///   Configuration > Numbers - rather than anywhere it could be triggered
+  ///   without the person seeing what they have to do next.
   /// The expression is spelled the way Postgres normalises it, not the way it
   /// was written in the migration. pg_get_expr() re-prints a default with its
   /// own parenthesisation and explicit casts, so the readable form drifts on

@@ -410,9 +410,13 @@ describe("schema invariants", () => {
       ]);
     });
 
-    it("keeps the lookup functions owned by app_resolver", async () => {
-      const { rows } = await db.query<{ proname: string; owner: string }>(
-        `SELECT p.proname, p.proowner::regrole::text AS owner
+    it("keeps the lookup functions owned by app_resolver, and definer", async () => {
+      const { rows } = await db.query<{
+        proname: string;
+        owner: string;
+        prosecdef: boolean;
+      }>(
+        `SELECT p.proname, p.proowner::regrole::text AS owner, p.prosecdef
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public'
            AND p.proname IN ('app_resolve_company', 'app_available_slug')
@@ -431,6 +435,19 @@ describe("schema invariants", () => {
         expect(row.owner, `${row.proname} is owned by ${row.owner}`).toBe(
           "app_resolver",
         );
+
+        /*
+         * The other half of the same failure, and the one a CREATE OR REPLACE
+         * can drop by omission: SECURITY INVOKER is the default, so a rewrite
+         * that forgets the clause keeps the right owner and still runs as
+         * app_runtime. The symptom is identical — every lookup returns NULL,
+         * sign-in stops working, and nothing in the logs mentions the
+         * migration that did it.
+         */
+        expect(
+          row.prosecdef,
+          `${row.proname} is not SECURITY DEFINER`,
+        ).toBe(true);
       }
     });
 

@@ -45,6 +45,17 @@ CREATE UNIQUE INDEX "usage_events_company_id_dedupe_key_key" ON "usage_events"("
 -- CreateIndex
 CREATE INDEX "usage_events_company_id_occurred_at_idx" ON "usage_events"("company_id", "occurred_at" DESC);
 
+-- CreateIndex
+--
+-- The admin overview counts across every company since midnight. The composite
+-- above cannot serve that: it leads with company_id, so a query with no company
+-- predicate seq-scans the table that grows fastest.
+--
+-- occurred_at alone. A (kind, occurred_at) index reads as more useful and is
+-- worse here: with kind leading, a range on occurred_at cannot seek and the
+-- planner falls back to scanning the whole index. EXPLAIN is what caught that.
+CREATE INDEX "usage_events_occurred_at_idx" ON "usage_events"("occurred_at" DESC);
+
 -- AddForeignKey
 ALTER TABLE "usage_events" ADD CONSTRAINT "usage_events_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

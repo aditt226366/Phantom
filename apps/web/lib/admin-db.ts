@@ -3,10 +3,12 @@ import {
   INTEGRATION_LABELS,
   integrationFields,
   priceUsage,
+  startOfPlatformDay,
+  startOfPlatformMonth,
   type IntegrationProviderName,
   type UsageKind,
 } from "@whatsapp-os/core";
-import type { Prisma } from "@whatsapp-os/db";
+import type { Plan, Prisma } from "@whatsapp-os/db";
 import { adminPrisma } from "@whatsapp-os/db/admin";
 import { seal } from "@/lib/integrations/seal";
 
@@ -213,6 +215,104 @@ export async function listCompanies(): Promise<CompanySummary[]> {
     createdAt: company.createdAt,
     userCount: company._count.users,
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Platform overview                                                   */
+/* ------------------------------------------------------------------ */
+
+export interface SpendByCurrency {
+  currency: string;
+  micros: bigint;
+}
+
+export interface PlatformOverview {
+  totalCompanies: number;
+  activeCompanies: number;
+  deactivatedCompanies: number;
+  totalUsers: number;
+  /** Since midnight in PLATFORM_TIMEZONE, not the server's zone. */
+  apiCallsToday: number;
+  /**
+   * One entry per currency, never a single total.
+   *
+   * Meta bills in the ad account's currency and the AI providers bill USD, so
+   * adding these together produces a number with no unit. If that is ever
+   * wanted it is a conversion with a rate and a date, not a SUM.
+   */
+  spendThisMonth: SpendByCurrency[];
+  /**
+   * Events this month that no price entry matched.
+   *
+   * Surfaced beside the figure because a null cost is excluded from the SUM —
+   * so the total is honest but incomplete, and only this number says by how
+   * much.
+   */
+  unpricedThisMonth: number;
+  planDistribution: Array<{ plan: Plan; count: number }>;
+}
+
+/**
+ * Everything the overview shows, in four queries.
+ *
+ * Live, all of it. A dashboard with a plausible constant in it is worse than
+ * one with an empty state, because nobody discovers the constant until they
+ * act on it.
+ */
+export async function getPlatformOverview(
+  now: Date = new Date(),
+): Promise<PlatformOverview> {
+  const dayStart = startOfPlatformDay(now);
+  const monthStart = startOfPlatformMonth(now);
+
+  const [companies, users, callsToday, spend, plans] = await Promise.all([
+    adminPrisma.company.groupBy({
+      by: ["deactivatedAt"],
+      _count: { _all: true },
+    }),
+    adminPrisma.user.count(),
+    adminPrisma.usageEvent.count({ where: { occurredAt: { gte: dayStart } } }),
+    adminPrisma.usageEvent.groupBy({
+      by: ["currency"],
+      where: { occurredAt: { gte: monthStart } },
+      _sum: { costMicros: true },
+      _count: { _all: true },
+    }),
+    adminPrisma.company.groupBy({ by: ["plan"], _count: { _all: true } }),
+  ]);
+
+  const active = companies
+    .filter((row) => row.deactivatedAt === null)
+    .reduce((total, row) => total + row._count._all, 0);
+  const deactivated = companies
+    .filter((row) => row.deactivatedAt !== null)
+    .reduce((total, row) => total + row._count._all, 0);
+
+  /* currency is null exactly when the event was unpriced. */
+  const unpriced = spend
+    .filter((row) => row.currency === null)
+    .reduce((total, row) => total + row._count._all, 0);
+
+  return {
+    totalCompanies: active + deactivated,
+    activeCompanies: active,
+    deactivatedCompanies: deactivated,
+    totalUsers: users,
+    apiCallsToday: callsToday,
+    spendThisMonth: spend
+      .filter((row): row is typeof row & { currency: string } =>
+        Boolean(row.currency),
+      )
+      .map((row) => ({
+        currency: row.currency,
+        micros: row._sum.costMicros ?? 0n,
+      }))
+      .sort((a, b) => a.currency.localeCompare(b.currency)),
+    unpricedThisMonth: unpriced,
+    planDistribution: plans
+      .map((row) => ({ plan: row.plan, count: row._count._all }))
+      .sort((a, b) => a.plan.localeCompare(b.plan)),
+  };
 }
 
 /* ------------------------------------------------------------------ */

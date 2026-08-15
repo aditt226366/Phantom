@@ -480,6 +480,16 @@ model UsageEvent {
   /// collide on a key derived from a job id.
   @@unique([companyId, dedupeKey])
   @@index([companyId, occurredAt(sort: Desc)])
+  /// The admin overview counts across every company since midnight, which the
+  /// composite above cannot serve - it leads with company_id, so a query with
+  /// no company predicate seq-scans the table that grows fastest.
+  ///
+  /// occurred_at alone, deliberately. A (kind, occurred_at) index looks more
+  /// useful and is worse for this query: with kind as the leading column a
+  /// range on occurred_at cannot seek, so the planner is left with a full
+  /// index scan. Confirmed with EXPLAIN, which is the only reason this is not
+  /// still the wrong index. A per-kind card can have its own when it exists.
+  @@index([occurredAt(sort: Desc)])
   @@map("usage_events")
 }
 

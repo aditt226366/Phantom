@@ -9,6 +9,7 @@ export * from "./integrations.ts";
 export * from "./providers/index.ts";
 export * from "./load-env.ts";
 export * from "./redact.ts";
+export * from "./time.ts";
 export * from "./queues.ts";
 export * from "./usage.ts";
 export * from "./schemas.ts";

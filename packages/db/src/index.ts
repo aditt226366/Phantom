@@ -33,6 +33,7 @@ export type {
   Contact,
   Conversation,
   Message,
+  WhatsAppMedia,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -47,4 +48,9 @@ export {
   IntegrationStatus,
   WhatsAppNumberStatus,
   WhatsAppQualityRating,
+  MessageDirection,
+  MessageStatus,
+  MessageFailureSource,
+  ConversationSource,
+  MediaState,
 } from "./generated/prisma/enums.ts";

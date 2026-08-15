@@ -68,6 +68,7 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "Contact",
   "Conversation",
   "Message",
+  "WhatsAppMedia",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

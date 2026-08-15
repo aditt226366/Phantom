@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDatabaseUrl } from "../scripts/db-urls.mjs";
+import { COMPANY_SCOPED_MODELS } from "../src/with-company.ts";
 
 /**
  * Rule 1 of CLAUDE.md, enforced by the database rather than by memory.
@@ -157,6 +161,37 @@ const OUT_OF_BAND_DDL = new Set<string>([
      has to be decompressed from the start, so every slice would become a full
      read and the streaming would be a fiction. */
   "storage:whatsapp_media.bytes=e",
+]);
+
+/**
+ * Tenant-owned models deliberately absent from COMPANY_SCOPED_MODELS.
+ *
+ * Membership of that set is what injects company_id on create and merges it
+ * into every where. Absence is not a hole — RLS still refuses the cross-company
+ * read — but it is defence in depth switched off, so each exemption carries a
+ * reason rather than being an oversight nobody noticed.
+ */
+const UNSCOPED_MODELS = new Map<string, string>([
+  [
+    "Company",
+    "its tenant key is `id`, not `company_id`, so an injected filter would " +
+      "produce invalid queries. Its RLS policy covers it.",
+  ],
+  [
+    "Session",
+    "written before a company context exists — sign-in resolves the company " +
+      "from the session row, not the other way round.",
+  ],
+  [
+    "EmailVerificationToken",
+    "consumed from an unauthenticated link, through resolveCompany.",
+  ],
+  ["PasswordResetToken", "same as EmailVerificationToken."],
+  [
+    "AuditLog",
+    "written on paths that already hold an explicit companyId, including ones " +
+      "with no session at all.",
+  ],
 ]);
 
 /** Prisma's own bookkeeping. */
@@ -605,6 +640,91 @@ describe("schema invariants", () => {
         /* TRUNCATE ignores RLS entirely — a one-statement bypass. */
         expect(held, `${table}: TRUNCATE is granted`).not.toContain("TRUNCATE");
       }
+    });
+  });
+
+  describe("the withCompany extension", () => {
+    /**
+     * Model name for each mapped table, parsed from schema.prisma.
+     *
+     * Parsed rather than grepped, comments stripped first: a /// doc comment
+     * mentioning @@map would otherwise be read as one. There is no generated
+     * manifest to use instead — Prisma 7's client does not expose DMMF at
+     * runtime.
+     */
+    function modelsByTable(): Map<string, string> {
+      const source = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "..", "prisma", "schema.prisma"),
+        "utf8",
+      ).replace(/^\s*\/\/.*$/gm, "");
+
+      const byTable = new Map<string, string>();
+
+      for (const [, model, body] of source.matchAll(
+        /^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm,
+      )) {
+        const mapped = /@@map\("([^"]+)"\)/.exec(body ?? "");
+        if (mapped) byTable.set(mapped[1]!, model!);
+      }
+
+      return byTable;
+    }
+
+    it("scopes every tenant-owned model, or says why not", () => {
+      /*
+       * COMPANY_SCOPED_MODELS injects company_id on create and merges it into
+       * every where. A tenant table missing from it is not an immediate hole —
+       * RLS still refuses the cross-company read — but defence in depth is off,
+       * and a create without an explicit companyId then fails with an opaque
+       * "new row violates row-level security policy" from a background job
+       * rather than working.
+       *
+       * whatsapp_media shipped that way in 20260815140000 and nothing noticed,
+       * because its tests happened to pass companyId by hand. The existing
+       * backstop covers the policy; this covers the set.
+       */
+      const byTable = modelsByTable();
+
+      expect(byTable.size, "schema.prisma parsed to no models").toBeGreaterThan(10);
+
+      const unaccounted = protectedTables()
+        .map((table) => ({ table, model: byTable.get(table) }))
+        .filter(
+          (entry) =>
+            entry.model &&
+            !COMPANY_SCOPED_MODELS.has(entry.model) &&
+            !UNSCOPED_MODELS.has(entry.model),
+        )
+        .map((entry) => `${entry.table} (${entry.model})`);
+
+      expect(
+        unaccounted.sort(),
+        "tenant tables in neither COMPANY_SCOPED_MODELS nor UNSCOPED_MODELS",
+      ).toEqual([]);
+    });
+
+    it("names only models that exist", () => {
+      /*
+       * A renamed model leaves a stale entry that scopes nothing, and the set
+       * still looks complete.
+       */
+      const models = new Set(modelsByTable().values());
+
+      expect(
+        [...COMPANY_SCOPED_MODELS].filter((m) => !models.has(m)).sort(),
+        "COMPANY_SCOPED_MODELS names models that do not exist",
+      ).toEqual([]);
+      expect(
+        [...UNSCOPED_MODELS.keys()].filter((m) => !models.has(m)).sort(),
+        "UNSCOPED_MODELS names models that do not exist",
+      ).toEqual([]);
+    });
+
+    it("does not both scope and exempt the same model", () => {
+      /* Two answers to one question means the reason went unread. */
+      expect(
+        [...UNSCOPED_MODELS.keys()].filter((m) => COMPANY_SCOPED_MODELS.has(m)).sort(),
+      ).toEqual([]);
     });
   });
 

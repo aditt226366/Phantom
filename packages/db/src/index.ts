@@ -13,6 +13,13 @@ export { resolveCompany } from "./resolve-company.ts";
 export type { ResolveKind } from "./resolve-company.ts";
 export { createCompany, slugify } from "./company.ts";
 export { recordUsage } from "./usage.ts";
+export { mediaStore, MediaTruncatedError } from "./media-store.ts";
+export type {
+  MediaStore,
+  MediaStat,
+  MediaPut,
+  MediaStateName,
+} from "./media-store.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";

@@ -58,7 +58,12 @@ import { prisma } from "./client.ts";
  * schema-invariants test fails if a table has a company_id column and no
  * policy, which is the backstop for forgetting.
  */
-export const COMPANY_SCOPED_MODELS = new Set<string>(["User"]);
+export const COMPANY_SCOPED_MODELS = new Set<string>([
+  "User",
+  "Integration",
+  "IntegrationSecret",
+  "IntegrationVerification",
+]);
 
 /** Operations whose `where` clause should be narrowed to the company. */
 const WHERE_SCOPED_OPERATIONS = new Set<string>([

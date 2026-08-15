@@ -94,6 +94,9 @@ model Company {
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens    PasswordResetToken[]
   auditLogs              AuditLog[]
+  integrations           Integration[]
+  integrationSecrets     IntegrationSecret[]
+  integrationVerifications IntegrationVerification[]
 
   @@map("companies")
 }
@@ -248,6 +251,122 @@ model AuditLog {
 
   @@index([companyId, createdAt(sort: Desc)])
   @@map("audit_log")
+}
+
+/// The third-party systems a company connects. See INTEGRATION_KEYS in
+/// @whatsapp-os/core for the credential each one requires.
+enum IntegrationProvider {
+  GOOGLE_SHEETS
+  WHATSAPP_CLOUD
+  META_ADS
+
+  @@map("integration_provider")
+}
+
+/// Whether the credentials last verified against the provider.
+///
+/// Two states, not three. "Verifying" is a property of a request in flight,
+/// not of a row, and storing it means every crashed job leaves a company stuck
+/// in it forever.
+enum IntegrationStatus {
+  CONNECTED
+  NOT_CONNECTED
+
+  @@map("integration_status")
+}
+
+/// A company's connection to one provider.
+///
+/// The parent row: what the connection is and whether it currently works. The
+/// credentials themselves live in IntegrationSecret, one row per key, so that
+/// re-encrypting under a new key touches one narrow table and so that no query
+/// selecting an integration drags ciphertext along with it by accident.
+model Integration {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  provider IntegrationProvider
+  /// Operator-facing name. Distinguishes several of the same provider once the
+  /// unique constraint below is relaxed.
+  label    String
+  status   IntegrationStatus   @default(NOT_CONNECTED)
+
+  lastVerifiedAt DateTime? @map("last_verified_at")
+  /// The last failure, already scrubbed. Never contains a credential - see
+  /// redactKeys/scrubValues in @whatsapp-os/core.
+  lastError      String?   @map("last_error")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  secrets       IntegrationSecret[]
+  verifications IntegrationVerification[]
+
+  /// One per provider per company, for now. This relaxes in Phase 4/6, when a
+  /// company gets several numbers and several sheet bindings - which is why
+  /// `label` already exists and nothing keys off the provider alone.
+  @@unique([companyId, provider])
+  @@map("integrations")
+}
+
+/// One credential value, encrypted at rest.
+///
+/// company_id is carried here as well as on the parent, rather than being
+/// reached through it. RLS evaluates per table: a policy that had to join
+/// integrations to find the company would be a policy that can be got wrong,
+/// and the composite index this requires is the one the vault reads by anyway.
+model IntegrationSecret {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// The provider's own name for it, e.g. WHATSAPP_ACCESS_TOKEN.
+  key        String
+  /// v2.<keyid>.<iv>.<tag>.<ciphertext> - see @whatsapp-os/core/encryption.
+  ciphertext String
+  /// Which keyring key sealed this row. What makes rotation resumable: the
+  /// re-encrypt job selects on key_id <> active, so re-running it is a no-op.
+  keyId      String @map("key_id")
+  /// Last four characters of the plaintext, stored in the clear so the panel
+  /// has something to render. The only part of a secret that ever leaves here.
+  last4      String
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, key])
+  @@index([companyId, integrationId])
+  @@map("integration_secrets")
+}
+
+/// One verification attempt against a provider.
+///
+/// An operational log, deliberately not admin_audit_log. That records what an
+/// operator did; this records what a third party answered, is written by the
+/// worker with no admin in the request at all, and is a company's own data.
+model IntegrationVerification {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  ok         Boolean
+  /// The provider's HTTP status, when there was a response to have one.
+  statusCode Int?    @map("status_code")
+  /// Scrubbed before it is written. Meta echoes request parameters back in
+  /// some error bodies, so this passes through scrubValues on the way in.
+  error      String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("integration_verifications")
 }
 
 /// ---------------------------------------------------------------------------

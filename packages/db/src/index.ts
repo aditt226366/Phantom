@@ -21,6 +21,9 @@ export type {
   Session,
   EmailVerificationToken,
   AuditLog,
+  Integration,
+  IntegrationSecret,
+  IntegrationVerification,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -31,4 +34,6 @@ export {
   AuditAction,
   LoginScope,
   Plan,
+  IntegrationProvider,
+  IntegrationStatus,
 } from "./generated/prisma/enums.ts";

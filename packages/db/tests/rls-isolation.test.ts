@@ -244,6 +244,134 @@ describe("writes across companies", () => {
   });
 });
 
+describe("the credential vault", () => {
+  /**
+   * Seed one integration with one secret in each company.
+   *
+   * Through withCompany, like every other fixture — seeding as the owner would
+   * pass locally and fail anywhere the owner is not a superuser.
+   */
+  async function seedVault(
+    company: SeededCompany,
+    ciphertext: string,
+  ): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "META_ADS", label: "Ads" },
+      });
+
+      await db.integrationSecret.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          key: "META_ADS_ACCESS_TOKEN",
+          ciphertext,
+          keyId: "k1",
+          last4: "9999",
+        },
+      });
+
+      return integration.id;
+    });
+  }
+
+  it("returns no ciphertext without a company context", async () => {
+    await seedVault(alpha, "v2.k1.iv.tag.alpha-ciphertext");
+
+    /*
+     * Raw SQL, deliberately: this is the "someone bypassed the application
+     * layer" client, so it proves the database refuses rather than proving the
+     * extension remembered to add a filter.
+     */
+    const { rows } = await raw.query("SELECT * FROM integration_secrets");
+    expect(rows).toEqual([]);
+  });
+
+  it("shows a company only its own secrets, in raw SQL", async () => {
+    await seedVault(alpha, "v2.k1.iv.tag.alpha-ciphertext");
+    await seedVault(beta, "v2.k1.iv.tag.beta-ciphertext");
+
+    /*
+     * Raw, and inside a legitimate context. findMany() here would pass with
+     * every policy on the table dropped, because COMPANY_SCOPED_MODELS makes
+     * the extension add the filter itself — proving the convention holds, not
+     * the boundary. Confirmed the hard way: this test passed with RLS disabled
+     * until it was rewritten.
+     */
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ ciphertext: string }>
+      >`SELECT ciphertext FROM integration_secrets`,
+    );
+
+    expect(rows).toEqual([{ ciphertext: "v2.k1.iv.tag.alpha-ciphertext" }]);
+  });
+
+  it("cannot reach another company's ciphertext by primary key", async () => {
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.beta-secret");
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT id FROM integrations WHERE id = ${betaIntegration}`,
+    );
+
+    /* Empty, not an error — the row does not exist as far as alpha knows. */
+    expect(rows).toEqual([]);
+  });
+
+  it("rejects writing a secret into another company", async () => {
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.beta-secret");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO integration_secrets (
+            id, company_id, integration_id, key, ciphertext, key_id, last4,
+            created_at, updated_at
+          )
+          VALUES (
+            'smuggled-secret', ${beta.id}, ${betaIntegration},
+            'META_ADS_ACCESS_TOKEN', 'v2.k1.iv.tag.smuggled', 'k1', '0000',
+            now(), now()
+          )
+        `,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("keeps verification logs apart", async () => {
+    const alphaIntegration = await seedVault(alpha, "v2.k1.iv.tag.a");
+    const betaIntegration = await seedVault(beta, "v2.k1.iv.tag.b");
+
+    await withCompany(alpha.id, (db, companyId) =>
+      db.integrationVerification.create({
+        data: { companyId, integrationId: alphaIntegration, ok: true },
+      }),
+    );
+    await withCompany(beta.id, (db, companyId) =>
+      db.integrationVerification.create({
+        data: {
+          companyId,
+          integrationId: betaIntegration,
+          ok: false,
+          statusCode: 401,
+          error: "invalid token",
+        },
+      }),
+    );
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<
+        Array<{ ok: boolean; error: string | null }>
+      >`SELECT ok, error FROM integration_verifications`,
+    );
+
+    /* beta's failure carries a provider message; alpha must not see it. */
+    expect(rows).toEqual([{ ok: true, error: null }]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

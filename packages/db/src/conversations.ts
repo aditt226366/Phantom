@@ -188,45 +188,39 @@ export async function advanceConversation(
   activity: ConversationActivity,
 ): Promise<void> {
   /*
-   * Bound as UTC ISO strings and cast explicitly, rather than handed over as
-   * Date objects.
+   * Dates are bound directly and now() is used bare, both of which are only
+   * safe because every timestamp column in this schema is timestamptz(3).
    *
-   * These columns are timestamp(3) WITHOUT time zone and Prisma stores UTC wall
-   * clock in them. A Date parameter arrives as a string with an offset, and
-   * `::timestamp` would keep the wall-clock digits and discard the offset - so
-   * every value written here would be out by the server's UTC offset, on a
-   * machine set to anything but UTC. `now()` has the same trap: it is
-   * timestamptz, and assigning it to a timestamp column converts through the
-   * session's TimeZone.
+   * They were not, until 20260816090000. Prisma's default mapping is
+   * timestamp(3) WITHOUT time zone, which stores wall-clock digits with no
+   * offset - so binding a Date and casting ::timestamp kept the digits, dropped
+   * the offset, and wrote a value out by the node process's UTC offset. This
+   * statement carried an explicit `::timestamptz AT TIME ZONE 'UTC'` on every
+   * value to work around it. A timestamptz column stores an instant instead,
+   * and there is no wall clock left to misread.
    *
-   * `::timestamptz AT TIME ZONE 'UTC'` is unambiguous in both directions - the
-   * 'Z' fixes the instant, the AT TIME ZONE fixes the wall clock - and it does
-   * not depend on the session setting at all.
+   * If a `timestamp without time zone` column ever reappears, the casts have to
+   * come back with it - which is what timestamp-columns.test.ts is there to
+   * prevent, with an allowlist that is empty and meant to stay that way.
    */
-  const occurredAt = activity.occurredAt.toISOString();
-  const windowExpiresAt = activity.windowExpiresAt?.toISOString() ?? null;
-
   await db.$executeRaw`
     UPDATE conversations
-       SET last_message_at =
-             GREATEST(last_message_at, ${occurredAt}::timestamptz AT TIME ZONE 'UTC'),
+       SET last_message_at = GREATEST(last_message_at, ${activity.occurredAt}),
            last_inbound_at =
              CASE WHEN ${activity.inbound}
-                  THEN GREATEST(last_inbound_at,
-                                ${occurredAt}::timestamptz AT TIME ZONE 'UTC')
+                  THEN GREATEST(last_inbound_at, ${activity.occurredAt})
                   ELSE last_inbound_at
              END,
            window_expires_at =
-             GREATEST(window_expires_at,
-                      ${windowExpiresAt}::timestamptz AT TIME ZONE 'UTC'),
+             GREATEST(window_expires_at, ${activity.windowExpiresAt}),
            last_message_preview =
              CASE WHEN last_message_at IS NULL
-                    OR last_message_at <= ${occurredAt}::timestamptz AT TIME ZONE 'UTC'
+                    OR last_message_at <= ${activity.occurredAt}
                   THEN ${activity.preview}
                   ELSE last_message_preview
              END,
            unread_count = unread_count + ${activity.unread},
-           updated_at = now() AT TIME ZONE 'UTC'
+           updated_at = now()
      WHERE id = ${conversationId}
        AND company_id = ${companyId}
   `;

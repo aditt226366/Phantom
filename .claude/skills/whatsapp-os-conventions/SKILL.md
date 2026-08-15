@@ -121,6 +121,41 @@ sweep.** Without that exclusion the next run reassigns them to
 every username and session lookup silently returns NULL â€” sign-in fails with
 nothing in the logs.
 
+## Timestamps are `timestamptz(3)`, and a new one must say so
+
+**Every `DateTime` field carries `@db.Timestamptz(3)`, and there is a test that
+fails if one does not.** `20260816090000` converted all 64 columns; the
+allowlist in `packages/db/tests/timestamp-columns.test.ts` is empty and is
+meant to stay empty.
+
+Prisma's default is `timestamp(3)` *without* time zone â€” a wall clock with no
+offset. Adding a `DateTime` field without the attribute silently reintroduces
+one, and the generated migration looks like any other column addition.
+
+What that used to cost, which is the reason for the attribute rather than a
+style preference. The ORM is self-consistent about naive columns, so nothing is
+wrong until raw SQL touches one, and then:
+
+- **A bound `Date`** arrives as a string carrying the *node process's* offset,
+  and `::timestamp` keeps the digits and drops the offset. Measured here: the
+  server session is UTC but node is UTC+4, so the write lands four hours out.
+- **`now()`** is `timestamptz`, and assigning it to a naive column converts
+  through the session's `TimeZone` â€” correct only while that stays UTC.
+
+Both write rows that look entirely plausible and are wrong by hours, and every
+window, expiry and ordering built on them is wrong by the same amount.
+
+Against `timestamptz` there is no wall clock to misread: bind the `Date`, use
+`now()`, no casts. `advanceConversation` in `packages/db/src/conversations.ts`
+is the worked example and its comment records what it used to have to write.
+
+If a naive column ever comes back, so does the incantation â€”
+`${date.toISOString()}::timestamptz AT TIME ZONE 'UTC'` on every bound value
+and `now() AT TIME ZONE 'UTC'` instead of `now()`. Prefer converting the column.
+
+**Assert exact instants in tests, never tolerances.** A tolerant comparison
+passes on a UTC machine and hides every fault above on all the others.
+
 ## Roles, grants and RLS
 
 **A policy is not a privilege.** RLS narrows what a role sees *within* the rows
@@ -210,7 +245,7 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   every `web-server` file reported normally in each crashed run.
 - **Not heap. Measured, not assumed.** `--logHeapUsage --reporter=verbose`
   over all 171 db tests: the post-GC floor does not climb. Every db-touching
-  file floors at 37–40 MB and the catalog-only files at 12–16 MB, so the
+  file floors at 37ï¿½40 MB and the catalog-only files at 12ï¿½16 MB, so the
   average per-file floor is *lower* in the second half of the run (29 MB) than
   the first (39 MB). There is no accumulation inside the single fork, so
   nothing to fix by disconnecting per file and nothing to paper over with
@@ -218,17 +253,17 @@ What the investigation ruled out, so the fifth occurrence starts from here:
 
   One outlier worth knowing before re-measuring: `media-store.test.ts` peaks at
   358 MB, from multi-megabyte fixture buffers and the chunks the streaming test
-  reassembles. It is transient garbage — the floor after it is 39 MB like
-  everything else — but it is by far the largest moment in the suite, and it is
+  reassembles. It is transient garbage ï¿½ the floor after it is 39 MB like
+  everything else ï¿½ but it is by far the largest moment in the suite, and it is
   the first thing that will look suspicious to whoever reads this next.
 
 - **Not `parseEnv`.** `process.exit()` in a fork produces exactly this
-  signature, and `parseEnv` exits on bad configuration — but walking
+  signature, and `parseEnv` exits on bad configuration ï¿½ but walking
   `auth-schema.test.ts`'s import graph (41 files) finds no call to it anywhere.
   `migrate-test.mjs` does call `process.exit`, and cannot be the cause: it is
   spawned as a child and checked through `result.status`.
 
-  A guard is installed permanently anyway — `tests/no-silent-exit.ts`, first in
+  A guard is installed permanently anyway ï¿½ `tests/no-silent-exit.ts`, first in
   every project's `setupFiles`. It replaces `process.exit` with a throw and
   logs unhandled rejections to stderr, so the next silent death arrives as a
   named failure with a file and line instead of a vanished worker. Verified by
@@ -236,11 +271,11 @@ What the investigation ruled out, so the fifth occurrence starts from here:
 
 - **Not the double `globalSetup`, though that was real and is fixed.** `db`
   and `web-server` used to declare the same `globalSetup`, so `migrate-test.mjs`
-  ran twice per run — the second execution issuing `ALTER ROLE` against a
+  ran twice per run ï¿½ the second execution issuing `ALTER ROLE` against a
   database the first project's workers were already querying. It is now hoisted
   to the root config and runs once, verified. The crash continued at 2 in 5.
 
-- **Not anything at the JavaScript level — and this is the useful part.** With
+- **Not anything at the JavaScript level ï¿½ and this is the useful part.** With
   the guard installed, two crashed runs produced *no* `SilentExitError`, no
   `unhandledRejection`, no `uncaughtException`, and no Node fatal message
   ("out of memory", "FATAL ERROR", an assertion). The guard's silence is
@@ -252,7 +287,7 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   under `node_modules/@prisma`.
 
 One side effect worth recognising: a run that crashes can leave the *next* run's
-`migrate-test.mjs` failing with "Could not prepare the test database" — seen
+`migrate-test.mjs` failing with "Could not prepare the test database" ï¿½ seen
 once, transient, with no advisory lock still held afterwards. Re-run before
 believing Postgres is down.
 

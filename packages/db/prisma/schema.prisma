@@ -84,10 +84,10 @@ model Company {
   /// reset link - resolves a company through that function, so one clause
   /// covers all of them and no later route can forget it. The app-level check
   /// in requireSession() exists to render a message, not to be the boundary.
-  deactivatedAt DateTime? @map("deactivated_at")
+  deactivatedAt DateTime? @db.Timestamptz(3) @map("deactivated_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   users                  User[]
   sessions               Session[]
@@ -123,7 +123,7 @@ model User {
   /// there is no clean migration out of that once rows exist.
   email String @unique
 
-  emailVerifiedAt DateTime? @map("email_verified_at")
+  emailVerifiedAt DateTime? @db.Timestamptz(3) @map("email_verified_at")
 
   /// Globally unique, and the reason app_resolve_company() exists: sign-in is
   /// username + password with no company selector, so the username has to
@@ -135,8 +135,8 @@ model User {
   passwordHash      String   @map("password_hash")
   phoneE164         String   @map("phone_e164")
   role              UserRole @default(MEMBER)
-  passwordChangedAt DateTime @default(now()) @map("password_changed_at")
-  lastLoginAt       DateTime? @map("last_login_at")
+  passwordChangedAt DateTime @db.Timestamptz(3) @default(now()) @map("password_changed_at")
+  lastLoginAt       DateTime? @db.Timestamptz(3) @map("last_login_at")
 
   /// When the breach check last actually ran for this password.
   ///
@@ -144,17 +144,17 @@ model User {
   /// HaveIBeenPwned was unreachable, or the password has been changed since.
   /// The next successful sign-in retries it, which is the only moment the
   /// plaintext exists again.
-  hibpCheckedAt DateTime? @map("hibp_checked_at")
+  hibpCheckedAt DateTime? @db.Timestamptz(3) @map("hibp_checked_at")
 
   /// Set when the breach check found this password in a known breach.
   ///
   /// Advisory, not a block: the user can still sign in. Locking someone out of
   /// an account they can demonstrably authenticate to is worse than the risk,
   /// and leaves them no way to fix it.
-  passwordBreachedAt DateTime? @map("password_breached_at")
+  passwordBreachedAt DateTime? @db.Timestamptz(3) @map("password_breached_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sessions                Session[]
@@ -186,10 +186,10 @@ model Session {
   ipHash    String?  @map("ip_hash")
   userAgent String?  @map("user_agent")
 
-  createdAt  DateTime  @default(now()) @map("created_at")
-  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  lastSeenAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  revokedAt  DateTime? @db.Timestamptz(3) @map("revoked_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -208,9 +208,9 @@ model EmailVerificationToken {
 
   tokenHash String @unique @map("token_hash")
 
-  expiresAt  DateTime  @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  consumedAt DateTime? @db.Timestamptz(3) @map("consumed_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -231,9 +231,9 @@ model PasswordResetToken {
 
   tokenHash String @unique @map("token_hash")
 
-  expiresAt  DateTime  @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  consumedAt DateTime? @db.Timestamptz(3) @map("consumed_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -254,7 +254,7 @@ model AuditLog {
   ip        String?
   userAgent String?     @map("user_agent")
   metadata  Json?
-  createdAt DateTime    @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3)    @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -339,13 +339,13 @@ model Integration {
   /// @map'ed column.
   webhookKey String @unique @default(dbgenerated("replace((gen_random_uuid())::text, '-'::text, ''::text)")) @map("webhook_key")
 
-  lastVerifiedAt DateTime? @map("last_verified_at")
+  lastVerifiedAt DateTime? @db.Timestamptz(3) @map("last_verified_at")
   /// The last failure, already scrubbed. Never contains a credential - see
   /// redactKeys/scrubValues in @whatsapp-os/core.
   lastError      String?   @map("last_error")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   secrets         IntegrationSecret[]
@@ -414,8 +414,8 @@ model IntegrationSecret {
   /// hint exists to confirm which credential is loaded, not to rebuild it.
   last4      String?
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -451,7 +451,7 @@ model IntegrationVerification {
   /// response that failed, and it is worth nothing if it was never stored.
   details Json?
 
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -531,10 +531,10 @@ model WhatsAppNumber {
 
   /// When this row last agreed with Meta. Everything above it is a cache, and a
   /// cache with no age is a claim nobody can check. Null means never fetched.
-  metadataRefreshedAt DateTime? @map("metadata_refreshed_at")
+  metadataRefreshedAt DateTime? @db.Timestamptz(3) @map("metadata_refreshed_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration   Integration    @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -635,10 +635,10 @@ model Contact {
   /// Set when the contact opts out. STOP handling is Phase 12; the column is
   /// here now because Phase 5's send queue filters on it, and adding it later
   /// is a backfill on what will by then be the largest table in the schema.
-  optedOutAt DateTime? @map("opted_out_at")
+  optedOutAt DateTime? @db.Timestamptz(3) @map("opted_out_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversations Conversation[]
@@ -662,9 +662,9 @@ model Conversation {
   source ConversationSource @default(INBOUND)
 
   /// When the customer last wrote. The fact the window derives from.
-  lastInboundAt DateTime? @map("last_inbound_at")
+  lastInboundAt DateTime? @db.Timestamptz(3) @map("last_inbound_at")
   /// When anything last happened, either direction. What the list sorts on.
-  lastMessageAt DateTime? @map("last_message_at")
+  lastMessageAt DateTime? @db.Timestamptz(3) @map("last_message_at")
   /// Denormalised so the list renders without touching messages at all.
   lastMessagePreview String? @map("last_message_preview")
 
@@ -681,16 +681,16 @@ model Conversation {
   /// Advanced with GREATEST(), never assigned. Two inbound messages delivered
   /// out of order - which Meta does - would otherwise move it backwards and
   /// close the composer while the window is genuinely open.
-  windowExpiresAt DateTime? @map("window_expires_at")
+  windowExpiresAt DateTime? @db.Timestamptz(3) @map("window_expires_at")
 
   unreadCount Int @default(0) @map("unread_count")
 
   /// Null means nobody has picked it up.
   assignedUserId String?   @map("assigned_user_id")
-  assignedAt     DateTime? @map("assigned_at")
+  assignedAt     DateTime? @db.Timestamptz(3) @map("assigned_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   contact        Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -778,15 +778,15 @@ model Message {
   ///
   /// Meta's granularity is one second, so ties are real. Every ordered read
   /// breaks them on id, and the thread index below carries it for that reason.
-  occurredAt DateTime @map("occurred_at")
+  occurredAt DateTime @db.Timestamptz(3) @map("occurred_at")
 
-  deliveredAt DateTime? @map("delivered_at")
-  readAt      DateTime? @map("read_at")
-  failedAt    DateTime? @map("failed_at")
+  deliveredAt DateTime? @db.Timestamptz(3) @map("delivered_at")
+  readAt      DateTime? @db.Timestamptz(3) @map("read_at")
+  failedAt    DateTime? @db.Timestamptz(3) @map("failed_at")
 
   /// When we wrote the row. Diagnostics only - never an ordering.
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -901,8 +901,8 @@ model WhatsAppMedia {
   /// as validating a file type by magic bytes rather than by its extension.
   bytes Bytes?
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   messages Message[]
@@ -967,7 +967,7 @@ model WhatsAppWebhookEvent {
   /// a silent failure visible: events older than a few minutes with
   /// processed_at still null are work that vanished, which is a one-line
   /// health check and what Phase 9's dashboard will read.
-  processedAt DateTime? @map("processed_at")
+  processedAt DateTime? @db.Timestamptz(3) @map("processed_at")
 
   /// Why nothing was done with it. 'company_deactivated' is the one that is not
   /// an error - the resolver deliberately answers for a suspended company, and
@@ -976,8 +976,8 @@ model WhatsAppWebhookEvent {
   error         String?
 
   /// When Meta's delivery arrived. Also what the retention prune reads.
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -1035,8 +1035,8 @@ model UnroutableWebhook {
   lastIpHash String? @map("last_ip_hash")
 
   attemptCount Int      @default(1) @map("attempt_count")
-  firstSeenAt  DateTime @default(now()) @map("first_seen_at")
-  lastSeenAt   DateTime @default(now()) @map("last_seen_at")
+  firstSeenAt  DateTime @db.Timestamptz(3) @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime @db.Timestamptz(3) @default(now()) @map("last_seen_at")
 
   /// SetNull, not Cascade: deleting a company should not erase the evidence
   /// that something was still posting to its old webhook.
@@ -1109,7 +1109,7 @@ model UsageEvent {
 
   /// When it happened, which is not always when it was written - a retried job
   /// records the original moment.
-  occurredAt DateTime @default(now()) @map("occurred_at")
+  occurredAt DateTime @db.Timestamptz(3) @default(now()) @map("occurred_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1164,8 +1164,8 @@ model LoginAttempt {
   /// How many times this pair has been locked out. Drives exponential backoff,
   /// and is NOT reset by a successful sign-in - only failureCount is.
   lockoutCount  Int       @default(0) @map("lockout_count")
-  lockedUntil   DateTime? @map("locked_until")
-  lastFailureAt DateTime  @default(now()) @map("last_failure_at")
+  lockedUntil   DateTime? @db.Timestamptz(3) @map("locked_until")
+  lastFailureAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_failure_at")
 
   @@unique([scope, username, ip])
   @@index([lockedUntil])
@@ -1198,9 +1198,9 @@ model AdminUser {
   id           String    @id @default(cuid())
   username     String    @unique
   passwordHash String    @map("password_hash")
-  lastLoginAt  DateTime? @map("last_login_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastLoginAt  DateTime? @db.Timestamptz(3) @map("last_login_at")
+  createdAt    DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  updatedAt    DateTime @db.Timestamptz(3)  @updatedAt @map("updated_at")
 
   sessions AdminSession[]
   auditLogs AdminAuditLog[]
@@ -1220,10 +1220,10 @@ model AdminSession {
 
   ipHash     String?   @map("ip_hash")
   userAgent  String?   @map("user_agent")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  lastSeenAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  revokedAt  DateTime? @db.Timestamptz(3) @map("revoked_at")
 
   adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
 
@@ -1249,7 +1249,7 @@ model AdminRepairRun {
 
   /// How many companies were enqueued when the run started.
   totalCompanies Int      @map("total_companies")
-  startedAt      DateTime @default(now()) @map("started_at")
+  startedAt      DateTime @db.Timestamptz(3) @default(now()) @map("started_at")
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
 
@@ -1266,7 +1266,7 @@ model AdminAuditLog {
   action    String
   ip        String?
   metadata  Json?
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
 

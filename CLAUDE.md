@@ -53,8 +53,10 @@ value RLS trusts, so `withCompany(searchParams.companyId, …)` is a total
 bypass. Company ids originate in exactly two places: the session row, and
 `resolveCompany()`.
 
-The only sanctioned raw-SQL sites are `packages/db/src/resolve-company.ts` and
-`packages/db/src/company.ts`. The unscoped client is confined to
+The only sanctioned raw-SQL sites are `packages/db/src/resolve-company.ts`,
+`packages/db/src/company.ts` and `packages/db/src/vault.ts` — the last because
+`SELECT … FOR UPDATE` has no query-builder form, and re-encrypting a credential
+without holding its row loses a concurrent save irrecoverably. The unscoped client is confined to
 `lib/auth/lockout.ts` and the admin client to `lib/admin-db.ts`, enforced by
 both a lint rule and `apps/web/tests/server/no-raw-prisma.test.ts`.
 

@@ -13,6 +13,8 @@ export { resolveCompany } from "./resolve-company.ts";
 export type { ResolveKind } from "./resolve-company.ts";
 export { createCompany, slugify } from "./company.ts";
 export { recordUsage } from "./usage.ts";
+export { resealCompanySecrets } from "./vault.ts";
+export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";
 
 /** Model types and the Prisma namespace, re-exported so apps import one package. */

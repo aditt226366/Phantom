@@ -331,12 +331,26 @@ is derived from become immutable in practice: changing a company id, an
 integration id or a credential's *name* means decrypt-and-re-encrypt, not an
 `UPDATE`.
 
-**Rotation.** Add a key to `ENCRYPTION_KEYS`, point `ENCRYPTION_KEY_ACTIVE` at
-it, run `npm run vault:rotate`, and drop the old key only once
-`npm run vault:status` reports zero rows on it **and** zero rows that fail to
-decrypt. `reseal()` re-encrypts a value under the active key and reads the
-result back before returning it — an AAD built differently on the encrypt side
-than the decrypt side would otherwise write a value that nothing can ever open.
+**Rotation.**
+
+```
+npm run vault:rotate -- --dry-run   # how many rows would move, nothing queued
+npm run vault:rotate                # one job per company
+npm run vault:status                # must exit 0 before dropping the old key
+```
+
+`vault:rotate` refuses to start if `ENCRYPTION_KEY_ACTIVE` names a key absent
+from `ENCRYPTION_KEYS`. `vault:status` opens every stored credential and exits
+non-zero if any fails — so the drop-the-old-key step is gated on an exit code
+rather than on somebody reading counts correctly at the end of a long
+afternoon. It never prints a plaintext; the assertion is that decrypt
+succeeded.
+
+`reseal()` re-encrypts under the active key and reads the result back before
+returning it, holding the row's lock throughout — an AAD built differently on
+the encrypt side than the decrypt side would otherwise write a value that
+nothing can ever open, and an unlocked reseal would silently revert a
+concurrent save.
 
 `ENCRYPTION_KEY` is a **separate** variable and not part of the keyring: it is
 the HMAC key behind `hashIp()`, so changing it invalidates stored `ip_hash`

@@ -559,6 +559,7 @@ model AdminUser {
 
   sessions AdminSession[]
   auditLogs AdminAuditLog[]
+  repairRuns AdminRepairRun[]
 
   @@map("admin_users")
 }
@@ -584,6 +585,31 @@ model AdminSession {
   @@index([adminUserId])
   @@index([expiresAt])
   @@map("admin_sessions")
+}
+
+/// A platform-wide maintenance run, so the panel can answer "did it finish".
+///
+/// Global, like the rest of the admin space: it belongs to the installation
+/// rather than to any company, and the whole point is that it spans all of
+/// them.
+///
+/// There is no progress counter. The worker cannot write here - app_runtime
+/// holds no grants on the admin tables, deliberately - so completion is
+/// derived instead: count the companies with a verification newer than
+/// started_at. That needs no cross-role write, no new grant, and it cannot
+/// drift from reality the way a counter can.
+model AdminRepairRun {
+  id          String  @id @default(cuid())
+  adminUserId String? @map("admin_user_id")
+
+  /// How many companies were enqueued when the run started.
+  totalCompanies Int      @map("total_companies")
+  startedAt      DateTime @default(now()) @map("started_at")
+
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([startedAt(sort: Desc)])
+  @@map("admin_repair_runs")
 }
 
 /// Every admin action, including reads. The admin panel can see across every

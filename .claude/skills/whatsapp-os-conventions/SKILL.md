@@ -189,6 +189,19 @@ test of a module that uses it. Scripts that import such a module run with
 - `migrate-test.mjs` takes an advisory lock; two projects run the same
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
+**A source-level assertion must parse, not grep.** Several checks in this
+repository read a file and match a string, and each one has flagged its own
+explanation at least once: `no-raw-prisma.test.ts` says so in its header about
+import specifiers, and the admin-db narrowness check hit the identical problem
+when a comment explained why a Prisma argument type is *not* used. Strip
+comments, or match a parsed structure.
+
+The stronger version of the same rule: assert a value, not a substring. A test
+that `company-header.tsx` contains "Reactivate" stayed green when the control
+was deleted, because the word survived in a neighbouring heading. Extracting
+the decision into a small exported function and asserting both branches is
+usually two lines more and actually fails.
+
 **Break every new assertion once before committing it.** Several tests in this
 repository initially passed for the wrong reason — matching a word inside a
 comment, asserting on `textContent` for an element whose name comes from
@@ -230,6 +243,29 @@ was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
 ORM assertions into extension tests.
 
 ## Next.js 16
+
+**The core barrel pulls native modules into a client bundle.**
+`packages/core/src/index.ts` re-exports `password.ts`, which reaches for
+`@node-rs/argon2`. A `"use client"` component importing `@whatsapp-os/core`
+therefore drags a `.node` binary into the browser graph and the build fails with
+an import trace that names every file except the problem.
+
+Import the subpath instead — `@whatsapp-os/core/integrations`, `/redact`,
+`/time`. Client-safe modules are exported individually for exactly this.
+
+It hides well: `integration-form.tsx` had the barrel import for six commits and
+built fine, because until a page rendered it the component was reachable only
+from tests and never entered the client graph at all.
+
+**Scripts must import a side-effect env module first.** ESM hoists imports, so
+calling `dotenv.config()` at the top of a script still runs *after* every module
+it imports has been evaluated — `lib/env.ts` has already parsed an empty
+environment and called `process.exit(1)`. `apps/web/scripts/_load-env.mjs` is
+that module; import it before anything else, the way
+`apps/worker/src/index.ts` imports its env module first and says why.
+
+Scripts using the `@/` alias must run from `apps/web`, or tsx does not find the
+tsconfig that defines it.
 
 - `middleware.ts` is deprecated and renamed to **`proxy.ts`**, exporting
   `proxy`. It defaults to the Node runtime now.

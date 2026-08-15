@@ -41,10 +41,21 @@ const GLOBAL_TABLES = new Set<string>([
   "admin_users",
   "admin_sessions",
   "admin_audit_log",
+  /*
+   * A platform-wide maintenance run. It spans every company by definition, so
+   * a company_id would be meaningless, and the worker never writes here —
+   * progress is derived from integration_verifications instead.
+   */
+  "admin_repair_runs",
 ]);
 
 /** Global tables holding admin credentials. app_runtime gets nothing here. */
-const ADMIN_TABLES = ["admin_users", "admin_sessions", "admin_audit_log"];
+const ADMIN_TABLES = [
+  "admin_users",
+  "admin_sessions",
+  "admin_audit_log",
+  "admin_repair_runs",
+];
 
 /**
  * Tables where app_resolver still holds a *whole-table* SELECT grant.

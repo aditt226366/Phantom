@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "admin:hash": "tsx scripts/admin-hash.mjs",
-    "admin:seed": "tsx --conditions=react-server scripts/admin-seed.mjs"
+    "admin:seed": "tsx --conditions=react-server scripts/admin-seed.mjs",
+    "vault:status": "tsx --conditions=react-server scripts/vault-status.mjs",
+    "vault:rotate": "tsx --conditions=react-server scripts/vault-rotate.mjs"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",

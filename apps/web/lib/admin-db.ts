@@ -820,6 +820,116 @@ export async function disconnectIntegration(
   });
 }
 
+export interface SealedSecretRow2 {
+  companyId: string;
+  integrationId: string;
+  key: string;
+  keyId: string;
+  ciphertext: string;
+}
+
+/**
+ * Every stored credential on the installation, sealed.
+ *
+ * The widest read in this file, and it exists for exactly two callers: the
+ * rotation status check and the rotation itself. Both are operator tools that
+ * have to reason about ciphertext they cannot avoid touching — a status check
+ * that cannot open a row is the whole point of a status check.
+ *
+ * Returns the sealed value, never a plaintext. What the caller does with it is
+ * the caller's business, and both of them only ever assert that decrypt
+ * succeeded.
+ */
+export async function listAllSealedSecrets(): Promise<SealedSecretRow2[]> {
+  const rows = await adminPrisma.integrationSecret.findMany({
+    orderBy: [{ companyId: "asc" }, { key: "asc" }],
+    select: {
+      companyId: true,
+      integrationId: true,
+      key: true,
+      keyId: true,
+      ciphertext: true,
+    },
+  });
+
+  return rows;
+}
+
+/** Companies holding at least one credential, for the rotation fan-out. */
+export async function listCompanyIdsWithSecrets(): Promise<
+  Array<{ companyId: string; secrets: number }>
+> {
+  const rows = await adminPrisma.integrationSecret.groupBy({
+    by: ["companyId"],
+    _count: { _all: true },
+  });
+
+  return rows
+    .map((row) => ({ companyId: row.companyId, secrets: row._count._all }))
+    .sort((a, b) => a.companyId.localeCompare(b.companyId));
+}
+
+/** Companies with at least one integration, for the repair fan-out. */
+export async function listCompanyIdsWithIntegrations(): Promise<string[]> {
+  const rows = await adminPrisma.integration.findMany({
+    distinct: ["companyId"],
+    select: { companyId: true },
+    orderBy: { companyId: "asc" },
+  });
+
+  return rows.map((row) => row.companyId);
+}
+
+export interface RepairRun {
+  id: string;
+  startedAt: Date;
+  totalCompanies: number;
+  /** Derived, not counted — see the schema comment. */
+  completedCompanies: number;
+}
+
+export async function startRepairRun(
+  adminUserId: string,
+  totalCompanies: number,
+): Promise<string> {
+  const run = await adminPrisma.adminRepairRun.create({
+    data: { adminUserId, totalCompanies },
+    select: { id: true },
+  });
+
+  return run.id;
+}
+
+/**
+ * The most recent run and how far it has got.
+ *
+ * Progress is the number of distinct companies with a verification newer than
+ * the run started, rather than a counter the worker increments — app_runtime
+ * holds no grants on the admin tables, so it could not increment one, and a
+ * derived figure cannot drift from what actually happened.
+ */
+export async function latestRepairRun(): Promise<RepairRun | null> {
+  const run = await adminPrisma.adminRepairRun.findFirst({
+    orderBy: { startedAt: "desc" },
+    select: { id: true, startedAt: true, totalCompanies: true },
+  });
+
+  if (!run) return null;
+
+  const done = await adminPrisma.integrationVerification.findMany({
+    where: { createdAt: { gte: run.startedAt } },
+    distinct: ["companyId"],
+    select: { companyId: true },
+  });
+
+  return {
+    id: run.id,
+    startedAt: run.startedAt,
+    totalCompanies: run.totalCompanies,
+    completedCompanies: done.length,
+  };
+}
+
 export interface VerificationEntry {
   id: string;
   provider: IntegrationProviderName;

@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
 import { PLATFORM_TIMEZONE_LABEL } from "@whatsapp-os/core";
-import { getPlatformOverview, writeAdminAudit } from "@/lib/admin-db";
+import {
+  getPlatformOverview,
+  latestRepairRun,
+  writeAdminAudit,
+} from "@/lib/admin-db";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import { requestContext } from "@/lib/auth/request";
 import { formatCount, formatMicros } from "@/lib/format";
 import { PlanDistribution } from "../_components/plan-distribution";
+import { RepairPanel } from "../_components/repair-panel";
 import { StatCard } from "../_components/stat-card";
 import { StatusDonut } from "../_components/status-donut";
 
@@ -25,7 +30,10 @@ export default async function AdminOverviewPage() {
   const session = await requireAdminSession();
   const context = await requestContext();
 
-  const overview = await getPlatformOverview();
+  const [overview, repair] = await Promise.all([
+    getPlatformOverview(),
+    latestRepairRun(),
+  ]);
 
   await writeAdminAudit({
     adminUserId: session.adminUserId,
@@ -89,6 +97,8 @@ export default async function AdminOverviewPage() {
 
         <PlanDistribution distribution={overview.planDistribution} />
       </section>
+
+      <RepairPanel run={repair} />
     </div>
   );
 }

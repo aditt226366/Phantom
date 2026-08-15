@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
   INTEGRATION_PROVIDERS,
+  JOB_NAMES,
   echoableValues,
   integrationFields,
   integrationSaveSchema,
@@ -14,10 +15,14 @@ import {
 import { createConsoleMailer, sendMailSafely } from "@whatsapp-os/core";
 import {
   disconnectIntegration,
+  latestRepairRun,
+  listCompanyIdsWithIntegrations,
   saveIntegrationSecrets,
   setCompanyDeactivated,
+  startRepairRun,
   writeAdminAudit,
 } from "@/lib/admin-db";
+import { systemQueue } from "@/lib/queue";
 import { issueAdminPasswordReset } from "@/lib/auth/admin-reset";
 import { verifyIntegration } from "@/lib/integrations/verify";
 import { requireAdminSession } from "@/lib/auth/admin-session";
@@ -226,6 +231,72 @@ function isIntegrationProvider(
   value: string,
 ): value is IntegrationProviderName {
   return (INTEGRATION_PROVIDERS as readonly string[]).includes(value);
+}
+
+/* ------------------------------------------------------------------ */
+/* Platform maintenance                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Re-verify every integration on the installation.
+ *
+ * Enumerates here and enqueues one job per company, because the worker cannot
+ * enumerate — it holds no company context, so a cross-company SELECT returns
+ * zero rows and succeeds.
+ *
+ * Two things stop a double-click becoming two rounds of provider calls at
+ * Meta. A run started in the last few minutes blocks a new one outright, and
+ * each job carries a deterministic id built from the run and the company, so
+ * even within one run the queue collapses duplicates rather than fanning out
+ * twice.
+ *
+ * The run row exists so the panel can answer the question that was actually
+ * asked. "Repair every integration" is a question about the platform, and
+ * per-integration timestamps cannot say whether the run finished — only that
+ * some rows are newer than others.
+ */
+const REPAIR_COOLDOWN_MS = 5 * 60_000;
+
+export async function repairIntegrationsAction(
+  formData: FormData,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const existing = await latestRepairRun();
+  const running =
+    existing !== null &&
+    Date.now() - existing.startedAt.getTime() < REPAIR_COOLDOWN_MS &&
+    existing.completedCompanies < existing.totalCompanies;
+
+  if (running) {
+    /* Already in flight. Silently doing it again would double the load on
+       every provider for no benefit. */
+    revalidatePath("/admin");
+    redirect("/admin");
+  }
+
+  const companyIds = await listCompanyIdsWithIntegrations();
+  const runId = await startRepairRun(session.adminUserId, companyIds.length);
+
+  for (const companyId of companyIds) {
+    await systemQueue.add(
+      JOB_NAMES.INTEGRATION_VERIFY,
+      { companyId },
+      { jobId: `repair:${runId}:${companyId}` },
+    );
+  }
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integrations.repair",
+    ...(context.ip ? { ip: context.ip } : {}),
+    metadata: { runId, companies: companyIds.length },
+  });
+
+  revalidatePath("/admin");
+  redirect("/admin");
 }
 
 /* ------------------------------------------------------------------ */

@@ -14,6 +14,7 @@
     "./integrations": "./src/integrations.ts",
     "./redact": "./src/redact.ts",
     "./time": "./src/time.ts",
+    "./whatsapp": "./src/whatsapp/index.ts",
     "./whatsapp-server": "./src/whatsapp/signature.ts"
   },
   "scripts": {

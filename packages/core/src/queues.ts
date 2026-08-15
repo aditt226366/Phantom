@@ -30,6 +30,11 @@ export const JOB_NAMES = {
   PING: "system.ping",
   INTEGRATION_VERIFY: "integration.verify",
   VAULT_RESEAL: "vault.reseal",
+  WHATSAPP_WEBHOOK: "whatsapp.webhook",
+  WHATSAPP_MESSAGE_SEND: "whatsapp.message.send",
+  WHATSAPP_MARK_READ: "whatsapp.mark.read",
+  WHATSAPP_MEDIA_FETCH: "whatsapp.media.fetch",
+  WHATSAPP_NUMBERS_REFRESH: "whatsapp.numbers.refresh",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -72,6 +77,85 @@ export const vaultResealJobSchema = z.object({
 export type VaultResealJob = z.infer<typeof vaultResealJobSchema>;
 
 /**
+ * Process one recorded webhook delivery.
+ *
+ * Carries the event id rather than the payload: the body is already stored
+ * verbatim, and putting it in the job too would duplicate every inbound
+ * message into Redis - including the ones over the size cap.
+ */
+export const whatsappWebhookJobSchema = z.object({
+  companyId: z.string().min(1),
+  eventId: z.string().min(1),
+});
+
+export type WhatsAppWebhookJob = z.infer<typeof whatsappWebhookJobSchema>;
+
+/** Hand one already-persisted message to Meta. */
+export const whatsappMessageSendJobSchema = z.object({
+  companyId: z.string().min(1),
+  messageId: z.string().min(1),
+  /**
+   * Which attempt this is, mirroring messages.send_attempt.
+   *
+   * Part of the job id, because BullMQ keeps completed and failed ids for
+   * hours - a retry re-enqueued under the first attempt's id is silently
+   * dropped and the button appears to do nothing.
+   */
+  sendAttempt: z.number().int().min(0),
+});
+
+export type WhatsAppMessageSendJob = z.infer<typeof whatsappMessageSendJobSchema>;
+
+export const whatsappMarkReadJobSchema = z.object({
+  companyId: z.string().min(1),
+  conversationId: z.string().min(1),
+});
+
+export type WhatsAppMarkReadJob = z.infer<typeof whatsappMarkReadJobSchema>;
+
+export const whatsappMediaFetchJobSchema = z.object({
+  companyId: z.string().min(1),
+  messageId: z.string().min(1),
+  /** Meta's media id. Its download URL expires in minutes. */
+  metaMediaId: z.string().min(1),
+});
+
+export type WhatsAppMediaFetchJob = z.infer<typeof whatsappMediaFetchJobSchema>;
+
+export const whatsappNumbersRefreshJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type WhatsAppNumbersRefreshJob = z.infer<
+  typeof whatsappNumbersRefreshJobSchema
+>;
+
+/**
+ * The send job runs ONCE. Everything else keeps the default five attempts.
+ *
+ * Meta's /messages endpoint has no idempotency key and no "did this land"
+ * lookup. A timeout after Meta processed the request is indistinguishable from
+ * a timeout before it did, so an automatic retry sends a real customer the
+ * same message a second time - the worst failure this phase can produce, and
+ * one that cannot be un-sent.
+ *
+ * Read that as an oversight and "fixing" it back to five is a data-integrity
+ * regression, which is why it is written here rather than left to the call
+ * site.
+ *
+ * The narrower danger is worth stating, because it shapes the UI: only the
+ * AMBIGUOUS outcome is unsafe. A structured error from Meta proves the message
+ * was not sent, and those are surfaced in the failed bubble as explicitly
+ * retryable with Meta's own reason - see SendRefused in whatsapp/graph.ts. It
+ * is the timeouts that get no automatic second chance and a person deciding.
+ */
+export const SEND_JOB_OPTIONS = {
+  attempts: 1,
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 24 * 3_600 },
+} as const;
+
+/**
  * Registry mapping each job name to the schema that validates its payload.
  * The worker looks the schema up by job name, so adding a job means adding one
  * entry here and one handler - the wiring is not duplicated.
@@ -80,6 +164,11 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.PING]: pingJobSchema,
   [JOB_NAMES.INTEGRATION_VERIFY]: integrationVerifyJobSchema,
   [JOB_NAMES.VAULT_RESEAL]: vaultResealJobSchema,
+  [JOB_NAMES.WHATSAPP_WEBHOOK]: whatsappWebhookJobSchema,
+  [JOB_NAMES.WHATSAPP_MESSAGE_SEND]: whatsappMessageSendJobSchema,
+  [JOB_NAMES.WHATSAPP_MARK_READ]: whatsappMarkReadJobSchema,
+  [JOB_NAMES.WHATSAPP_MEDIA_FETCH]: whatsappMediaFetchJobSchema,
+  [JOB_NAMES.WHATSAPP_NUMBERS_REFRESH]: whatsappNumbersRefreshJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

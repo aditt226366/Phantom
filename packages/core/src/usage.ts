@@ -38,6 +38,23 @@
 export const USAGE_KINDS = [
   "integration.verify",
   "integration.test",
+  /*
+   * One outbound message we handed to Meta. Deduped on our own message id, not
+   * on the wamid: the wamid does not exist until Meta answers, so a send that
+   * times out and is retried produces a second wamid for the same message row
+   * - and this table becomes an invoice.
+   */
+  "whatsapp.message.sent",
+  /*
+   * One 24-hour conversation window Meta told us was billable, per category.
+   *
+   * The category is in the kind rather than a column because the price list is
+   * keyed on kind, and Meta charges these at genuinely different rates.
+   */
+  "whatsapp.conversation.marketing",
+  "whatsapp.conversation.utility",
+  "whatsapp.conversation.authentication",
+  "whatsapp.conversation.service",
 ] as const;
 
 export type UsageKind = (typeof USAGE_KINDS)[number];
@@ -64,10 +81,44 @@ export interface UsagePrice {
  * an absent entry is an oversight. The two are distinguishable here and would
  * not be in the table.
  */
+/*
+ * ---------------------------------------------------------------------------
+ * This table does not model Meta's pricing, and should not try
+ * ---------------------------------------------------------------------------
+ *
+ * The WhatsApp entries are zero, like the integration ones, and that is a
+ * deliberate refusal rather than a placeholder waiting to be filled in.
+ *
+ * Meta's per-message pricing has changed twice recently, varies by country and
+ * by category, and is reconciled against an invoice we do not have an API for
+ * yet. A table here with plausible numbers in it would be an approximation
+ * that silently disagrees with what the customer is actually charged - and a
+ * billing figure that is quietly wrong is worse than one that is openly an
+ * estimate, because nobody checks the first kind.
+ *
+ * So we record the facts we own: a message was sent, a conversation window
+ * opened, which category Meta said it was. Those are ours and they are
+ * correct. Turning them into money against Meta's real rate card is Phase 11,
+ * with their billing API, and it will price these same events retrospectively
+ * because every row carries the price version it was written under.
+ */
 const PRICES: readonly UsagePrice[] = [
   { kind: "integration.verify", currency: "INR", version: 1, micros: 0 },
   { kind: "integration.test", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.message.sent", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.conversation.marketing", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.conversation.utility", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.conversation.authentication", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.conversation.service", currency: "INR", version: 1, micros: 0 },
 ];
+
+/** The conversation kind for one of Meta's pricing categories, if we know it. */
+export function conversationUsageKind(category: string): UsageKind | null {
+  const kind = `whatsapp.conversation.${category.toLowerCase()}`;
+  return (USAGE_KINDS as readonly string[]).includes(kind)
+    ? (kind as UsageKind)
+    : null;
+}
 
 function priceKey(kind: string, currency: string, version: number): string {
   return `${kind}|${currency}|${version}`;

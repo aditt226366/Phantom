@@ -30,3 +30,10 @@ export {
 export type { WindowState } from "./window.ts";
 export { sendPolicy } from "./send-policy.ts";
 export type { SendDecision, SendFacts, SendIntent, SendRefusal } from "./send-policy.ts";
+export { parseWebhookPayload } from "./payload.ts";
+export type {
+  InboundMessage,
+  ParsedWebhook,
+  SkippedChange,
+  StatusUpdate,
+} from "./payload.ts";

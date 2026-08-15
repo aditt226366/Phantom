@@ -5,6 +5,7 @@ import {
   classifyStatus,
   type FailureKind,
   type FetchImpl,
+  type VerificationFailure,
   type VerificationOutcome,
 } from "./types.ts";
 
@@ -55,7 +56,7 @@ export function decodeGraphFailure(
   status: number,
   body: unknown,
   secretValues: readonly string[],
-): VerificationOutcome {
+): VerificationFailure {
   const error = ((body as { error?: GraphError } | null)?.error ??
     {}) as GraphError;
 
@@ -187,4 +188,74 @@ export async function verifyMetaAds(
     Object.values(secrets),
     fetchImpl,
   );
+}
+
+/* ==========================================================================
+   Writing to the Graph API
+   ========================================================================== */
+
+/**
+ * A Graph call that returns something, as opposed to one that only succeeds.
+ *
+ * The failure branch is VerificationFailure, reused rather than duplicated:
+ * one error decoder, one classification, two success shapes. A parallel
+ * GraphError type would mean two decoders within a release, which is exactly
+ * what the header of this file exists to prevent.
+ */
+export type GraphResult<T> =
+  | { ok: true; statusCode: number; data: T }
+  | VerificationFailure;
+
+/**
+ * POST to the Graph API, decoded the same way as a GET.
+ *
+ * Same timeout, same three-class failure kinds, same scrubbing of anything
+ * Meta echoes back. The only differences are the body and that success carries
+ * a payload.
+ */
+export async function graphPost<T = unknown>(
+  path: string,
+  body: unknown,
+  accessToken: string,
+  secretValues: readonly string[],
+  fetchImpl: FetchImpl = fetch,
+): Promise<GraphResult<T>> {
+  try {
+    const response = await fetchImpl(`${GRAPH_API_BASE}/${path}`, {
+      method: "POST",
+      headers: {
+        /* Header, never the query string - see graphGet. */
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+
+    let parsed: unknown = {};
+    try {
+      parsed = await response.json();
+    } catch {
+      /* A gateway HTML page is not a Graph envelope. */
+    }
+
+    if (response.ok) {
+      return { ok: true, statusCode: response.status, data: parsed as T };
+    }
+
+    return decodeGraphFailure(response.status, parsed, secretValues);
+  } catch (cause) {
+    const message =
+      cause instanceof Error && cause.name === "TimeoutError"
+        ? `Timed out after ${PROVIDER_TIMEOUT_MS}ms`
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
+
+    return {
+      ok: false,
+      kind: "transient",
+      error: scrubText(message, secretValues),
+    };
+  }
 }

@@ -36,6 +36,8 @@ export type {
   StatusOutcome,
   StatusUpdateInput,
 } from "./conversations.ts";
+export { ingestWebhookDelivery } from "./webhook-ingest.ts";
+export type { IngestSummary, MediaFetchRequest } from "./webhook-ingest.ts";
 export { recordUnroutableWebhook } from "./unroutable-webhooks.ts";
 export type {
   UnroutableWebhookInput,

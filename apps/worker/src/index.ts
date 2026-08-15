@@ -12,6 +12,8 @@ import { log } from "./logger.ts";
 import { handlePing } from "./jobs/ping.ts";
 import { handleIntegrationVerify } from "./jobs/integration-verify.ts";
 import { handleVaultReseal } from "./jobs/vault-reseal.ts";
+import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
+import { systemQueue } from "./queue.ts";
 
 /**
  * whatsapp-os background worker.
@@ -48,6 +50,11 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.VAULT_RESEAL:
       return handleVaultReseal(
         parseJobPayload(JOB_NAMES.VAULT_RESEAL, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_WEBHOOK:
+      return handleWhatsAppWebhook(
+        parseJobPayload(JOB_NAMES.WHATSAPP_WEBHOOK, job.data),
       );
 
     default:
@@ -102,6 +109,9 @@ async function shutdown(signal: string): Promise<void> {
 
   try {
     await worker.close();
+    /* The producer holds its own connection, so it needs its own close - a
+       missed one keeps the process alive after the worker has stopped. */
+    await systemQueue.close();
     await connection.quit();
     await prisma.$disconnect();
     log.info("shutdown complete");

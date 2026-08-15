@@ -103,6 +103,7 @@ model Company {
   conversations          Conversation[]
   messages               Message[]
   whatsappMedia          WhatsAppMedia[]
+  webhookEvents          WhatsAppWebhookEvent[]
 
   @@map("companies")
 }
@@ -349,6 +350,7 @@ model Integration {
   secrets         IntegrationSecret[]
   verifications   IntegrationVerification[]
   whatsappNumbers WhatsAppNumber[]
+  webhookEvents   WhatsAppWebhookEvent[]
 
   /// One per provider per company, for now. This relaxes in Phase 4/6, when a
   /// company gets several numbers and several sheet bindings - which is why
@@ -904,6 +906,83 @@ model WhatsAppMedia {
   @@index([companyId, createdAt(sort: Desc)])
   @@index([companyId, state])
   @@map("whatsapp_media")
+}
+
+/// One POST from Meta, as received.
+///
+/// Three jobs, and only the third makes it unavoidable:
+///
+///   1. Idempotency for the kinds of delivery that have no natural key. The
+///      wamid unique covers messages; a status callback has no id of its own
+///      and a template or quality update has nothing at all, so a redelivery
+///      would re-run the media download and re-record conversation usage.
+///   2. The only forensic record in the phase. "The customer says they replied
+///      and it is not in the inbox" is unanswerable without the raw delivery.
+///   3. It gives the route handler something to do that is ONE statement.
+///      Deriving a key by parsing the payload would put the parse inside the
+///      five seconds Meta allows before it retries.
+model WhatsAppWebhookEvent {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// sha256 of the raw body. Meta redelivers byte-identically, so this is an
+  /// exact "seen before" without parsing anything.
+  deliveryKey String @map("delivery_key")
+
+  /// The body as received, as text - not parsed jsonb.
+  ///
+  /// The signature was computed over these exact bytes, so this is the only
+  /// form that can be re-verified later, which is the whole point of keeping
+  /// it. jsonb would reorder keys and normalise numbers, and the record would
+  /// then prove nothing about what Meta actually sent. Parse on read when
+  /// debugging.
+  ///
+  /// Capped at 64 KiB, which is generous for Meta - a large batch of statuses
+  /// is a few KB. One strange delivery must not bloat the table.
+  payload String
+
+  /// Set when the payload was too large to keep whole. The prefix is still
+  /// stored and is still useful for debugging, but it can no longer be
+  /// signature-verified, which is worth knowing before trying.
+  payloadTruncated Boolean @default(false) @map("payload_truncated")
+
+  /// How many times Meta has delivered this exact body.
+  ///
+  /// Part of the processing job's id. BullMQ keeps failed job ids for a day,
+  /// so re-enqueueing a recovery with the id the first attempt used would be
+  /// silently dropped - the same trap as Message.sendAttempt.
+  deliveryCount Int @default(1) @map("delivery_count")
+
+  /// Null until the worker has finished with it.
+  ///
+  /// Load-bearing in two directions. It is what separates "already recorded"
+  /// from "already processed", so a redelivery of an event whose job was lost
+  /// is re-enqueued rather than discarded. And it is the only thing that makes
+  /// a silent failure visible: events older than a few minutes with
+  /// processed_at still null are work that vanished, which is a one-line
+  /// health check and what Phase 9's dashboard will read.
+  processedAt DateTime? @map("processed_at")
+
+  /// Why nothing was done with it. 'company_deactivated' is the one that is not
+  /// an error - the resolver deliberately answers for a suspended company, and
+  /// the refusal happens here instead.
+  skippedReason String? @map("skipped_reason")
+  error         String?
+
+  /// When Meta's delivery arrived. Also what the retention prune reads.
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, deliveryKey])
+  /// The retention prune, and the operator's "what arrived recently".
+  @@index([companyId, createdAt(sort: Desc)])
+  /// The unprocessed backlog, which is the health check.
+  @@index([companyId, processedAt])
+  @@map("whatsapp_webhook_events")
 }
 
 /// One countable thing that happened, priced at the moment it happened.

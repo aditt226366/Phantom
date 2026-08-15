@@ -161,6 +161,9 @@ const OUT_OF_BAND_DDL = new Set<string>([
      has to be decompressed from the start, so every slice would become a full
      read and the streaming would be a fiction. */
   "storage:whatsapp_media.bytes=e",
+  /* 64 KiB on a stored webhook body. The route truncates and flags; this is
+     the backstop that does not depend on it having done so. */
+  "check:whatsapp_webhook_events.whatsapp_webhook_events_payload_within_cap",
 ]);
 
 /**

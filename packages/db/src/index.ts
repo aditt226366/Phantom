@@ -14,6 +14,17 @@ export type { ResolveKind } from "./resolve-company.ts";
 export { createCompany, slugify } from "./company.ts";
 export { recordUsage } from "./usage.ts";
 export { mediaStore, MediaTruncatedError } from "./media-store.ts";
+export {
+  recordWebhookDelivery,
+  markWebhookProcessed,
+  countUnprocessedWebhooks,
+  MAX_WEBHOOK_PAYLOAD_BYTES,
+} from "./webhook-events.ts";
+export type {
+  WebhookDelivery,
+  WebhookDeliveryInput,
+  WebhookOutcome,
+} from "./webhook-events.ts";
 export type {
   MediaStore,
   MediaStat,
@@ -41,6 +52,7 @@ export type {
   Conversation,
   Message,
   WhatsAppMedia,
+  WhatsAppWebhookEvent,
   LoginAttempt,
   AdminUser,
   AdminSession,

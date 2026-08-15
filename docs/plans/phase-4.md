@@ -89,6 +89,30 @@ The wamid does not exist until Meta answers, so a send that times out and is
 retried produces a *second* wamid for the same message row — two billable
 events for one message, in the table that becomes an invoice.
 
+### C4. Rule 3's raw-SQL list was a sentence, and it was wrong
+
+Commit 16 needed a fourth sanctioned raw-SQL site — `GREATEST` has no
+query-builder form, and splitting the window advance into three conditional
+statements opens two gaps for concurrent webhook deliveries to interleave in.
+
+Widening the list turned up that it had already been widened without anyone
+saying so: `media-store.ts` has sliced `bytea` with `substring()` since
+`20260815140000` and was never named. Nothing was unsafe — the slice runs
+inside `withCompany` and has its own isolation tests — but a sentence claiming
+to enumerate every site had been false for eight commits, which is the failure
+mode a sentence has and a test does not.
+
+So the list now lives in `packages/db/tests/no-raw-sql.test.ts`, compared in
+both directions with a reason per entry, in the shape of `GLOBAL_TABLES` and
+`COLUMN_GRANTS`. An eighth site is a diff in a security test. It found the
+media-store omission before its first intended run.
+
+Same commit, same shape: `status.ts` claimed a test executed its rendered
+`CASE` against the database, and none did — the assertion inspected the string.
+`status-ladder.test.ts` now executes it and compares the ladder to `pg_enum`
+member by member, because a `CASE` missing one arm parses cleanly and returns
+NULL, so a status added on one side only would stop advancing in silence.
+
 ---
 
 ## The public-endpoint contract
@@ -207,10 +231,10 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (23 commits on `phase-4a`)
+### Done — 4a (25 commits on `phase-4a`)
 
-Planned commits 1–18 of the original numbering, plus eight that emerged from
-the work and were not planned.
+Planned commits 1–19 of the original numbering, plus eight that emerged from
+the work and were not planned, plus the docs commit that wrote the rest down.
 
 | # | Hash | Subject |
 | --- | --- | --- |
@@ -237,6 +261,7 @@ the work and were not planned.
 | 13 | `32d9558` | `feat(core): how a delivery status is allowed to move` |
 | 14 | `0721ee4` | `feat(core): whether the 24-hour window is still open` |
 | 15 | `5299e4f` | `feat(core): parse what Meta sends, and post back to it` |
+| 16 | `809b41d` | `feat(db): whether a conversation can be sent to` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -247,7 +272,6 @@ Both numberings appear below where it matters.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| 16 | 19 | `feat(db): whether a conversation can be sent to` — `canSend` loader, `GREATEST` window advance, monotonic status UPDATE, `MessageStatus.HELD` |
 | 17 | 20 | `feat(worker): turn a delivered webhook into a conversation` |
 | 18 | 21 | `feat(worker): fetch inbound media before Meta's link expires` |
 | 19 | 22 | `feat(worker): send a message and remember what Meta called it` |
@@ -319,6 +343,12 @@ discards the real value — the thing `messagingTier` was made text to avoid.
 
 Do this **before the numbers refresh job** (commit 21), which is the first code
 that writes the column.
+
+Commit 16 is the first code that *reads* it, and does not constrain the change:
+`canSend` passes `whatsapp_numbers.status` to `sendPolicy` as a string and
+compares it against a `Set`, so the column becoming text is invisible to it.
+The four-line `numberStatus` fixture in `conversation-send.test.ts` is the only
+thing that would need looking at.
 
 **The fork-crash investigation is stopped by agreement.** Nine-plus occurrences,
 always the db project, always `auth-schema.test.ts`, always full runs. It exits

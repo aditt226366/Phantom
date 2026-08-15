@@ -89,6 +89,39 @@ const RESOLVER_TABLE_GRANTS = new Set<string>([
   "password_reset_tokens",
 ]);
 
+/**
+ * Every column-level grant in the schema, to any role.
+ *
+ * Named for what it checks rather than for who currently appears in it. A
+ * stray column grant to app_runtime or app_admin is exactly as undecided as one
+ * to app_resolver, and the query that finds one finds all — so a narrower name
+ * would read, later, as permission to grant elsewhere.
+ *
+ * The entry is (table, column, grantee, privilege), not (table, column).
+ * SELECT on a column and UPDATE on the same column are different decisions, and
+ * an allowlist that recorded only the column would let a grant widen from read
+ * to write with no diff here at all.
+ *
+ * Column grants are invisible to information_schema.role_table_grants — it
+ * reads pg_class.relacl, while a column grant lives in pg_attribute.attacl —
+ * which is why RESOLVER_TABLE_GRANTS below cannot see these and why both lists
+ * exist. The joint assertion in the suite closes the gap between them.
+ */
+const COLUMN_GRANTS = new Set<string>([
+  /* app_resolve_company joins companies and checks suspension; the id and
+     deactivated_at are the whole of it. */
+  "companies.id:app_resolver:SELECT",
+  "companies.deactivated_at:app_resolver:SELECT",
+  /* app_available_slug: SELECT 1 ... WHERE slug = $1, and nothing else. */
+  "companies.slug:app_resolver:SELECT",
+  /* app_resolve_company's 'webhook' kind: the key it matches, the id it
+     returns, and the provider it constrains on so that a Sheets or Ads key
+     cannot resolve into a WhatsApp handler. */
+  "integrations.webhook_key:app_resolver:SELECT",
+  "integrations.company_id:app_resolver:SELECT",
+  "integrations.provider:app_resolver:SELECT",
+]);
+
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
 
@@ -393,21 +426,88 @@ describe("schema invariants", () => {
       ).toEqual([...RESOLVER_TABLE_GRANTS].sort());
     });
 
-    it("keeps app_resolver's reach into companies to three columns", async () => {
-      const { rows: columns } = await db.query<{ column_name: string }>(
-        `SELECT column_name FROM information_schema.column_privileges
-         WHERE grantee = 'app_resolver'
-           AND table_schema = 'public' AND table_name = 'companies'
-         ORDER BY column_name`,
+    it("holds a column grant only where the allowlist says", async () => {
+      /*
+       * Read from pg_attribute.attacl rather than
+       * information_schema.column_privileges, which expands every whole-table
+       * grant into one row per column and would bury six deliberate entries in
+       * several hundred inherited ones. attacl is null unless somebody granted
+       * a specific column, so this lists decisions and nothing else.
+       *
+       * Replaces a narrower check that asserted only companies' three columns.
+       * This subsumes it: companies is still pinned to exactly those three, and
+       * so is every other table, to every other role.
+       */
+      const { rows } = await db.query<{ entry: string }>(
+        `SELECT c.relname || '.' || a.attname || ':' ||
+                COALESCE(r.rolname, 'PUBLIC') || ':' || acl.privilege_type AS entry
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+           LEFT JOIN pg_roles r ON r.oid = acl.grantee
+          WHERE n.nspname = 'public'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+          ORDER BY entry`,
       );
 
-      /* id and deactivated_at for app_resolve_company, slug for
-         app_available_slug. Widening this is a migration and a diff here. */
-      expect(columns.map((r) => r.column_name)).toEqual([
-        "deactivated_at",
-        "id",
-        "slug",
-      ]);
+      expect(
+        rows.map((r) => r.entry),
+        "column grants have changed — widen COLUMN_GRANTS deliberately or revoke",
+      ).toEqual([...COLUMN_GRANTS].sort());
+    });
+
+    it("has no reach that neither allowlist accounts for", async () => {
+      /*
+       * The joint assertion, and the one that makes "the only cross-company
+       * capability in the system is a single text value out" a checkable claim.
+       *
+       * The two allowlists are otherwise independent checks with a gap between
+       * them: a whole-table grant is compared against RESOLVER_TABLE_GRANTS, a
+       * column grant against COLUMN_GRANTS, and a grant on a table named in
+       * neither list satisfies both — because each query only looks where its
+       * own list already points.
+       *
+       * So this asks the opposite question. Everything app_resolver holds
+       * anywhere in the schema, table-level and column-level together, against
+       * everything the two lists say it should.
+       */
+      const { rows } = await db.query<{ entry: string }>(
+        `SELECT c.relname || ':' || acl.privilege_type AS entry
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+           JOIN pg_roles r ON r.oid = acl.grantee
+          WHERE n.nspname = 'public' AND c.relkind = 'r'
+            AND r.rolname = 'app_resolver'
+         UNION ALL
+         SELECT c.relname || '.' || a.attname || ':' || acl.privilege_type
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+           JOIN pg_roles r ON r.oid = acl.grantee
+          WHERE n.nspname = 'public'
+            AND a.attnum > 0 AND NOT a.attisdropped
+            AND r.rolname = 'app_resolver'
+          ORDER BY entry`,
+      );
+
+      /* Whole-table entries are SELECT by construction — anything else on a
+         resolver table is precisely what this is looking for, so it is built
+         in rather than assumed away. */
+      const expected = [
+        ...[...RESOLVER_TABLE_GRANTS].map((table) => `${table}:SELECT`),
+        ...[...COLUMN_GRANTS]
+          .filter((entry) => entry.includes(":app_resolver:"))
+          .map((entry) => entry.replace(":app_resolver:", ":")),
+      ].sort();
+
+      expect(
+        rows.map((r) => r.entry),
+        "app_resolver's total footprint is not what the two allowlists describe",
+      ).toEqual(expected);
     });
 
     it("keeps the lookup functions owned by app_resolver, and definer", async () => {

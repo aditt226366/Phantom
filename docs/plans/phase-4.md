@@ -253,10 +253,10 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (26 commits on `phase-4a`)
+### Done — 4a (28 commits on `phase-4a`)
 
-Planned commits 1–19 of the original numbering, plus nine that emerged from the
-work and were not planned, plus the docs commit that wrote the rest down.
+Planned commits 1–20 of the original numbering, plus nine that emerged from the
+work and were not planned, plus the docs commits that wrote the rest down.
 
 | # | Hash | Subject |
 | --- | --- | --- |
@@ -285,6 +285,7 @@ work and were not planned, plus the docs commit that wrote the rest down.
 | 15 | `5299e4f` | `feat(core): parse what Meta sends, and post back to it` |
 | 16 | `809b41d` | `feat(db): whether a conversation can be sent to` |
 | — | `05440ac` | `refactor(db): store instants, not wall clocks` |
+| 17 | `9666eb7` | `feat(worker): turn a delivered webhook into a conversation` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -295,7 +296,6 @@ Both numberings appear below where it matters.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| 17 | 20 | `feat(worker): turn a delivered webhook into a conversation` |
 | 18 | 21 | `feat(worker): fetch inbound media before Meta's link expires` |
 | 19 | 22 | `feat(worker): send a message and remember what Meta called it` |
 | 20 | 23 | `feat(worker): mark a thread read when somebody opens it` |
@@ -319,6 +319,31 @@ the submission share; category price copy; create/read at Meta; the submit job;
 the derived edit quota; the template-status webhook branch; the seed; the split
 screen; submit-and-review; the Library tab; the template send that replaces
 4a's disabled picker; the gate. Thirteen commits, tag `phase-4b`.
+
+---
+
+### C6. A probe column outlived its run, and only the test database noticed
+
+`auth-schema.test.ts` began failing on a NOT NULL violation for
+`email_verification_tokens.forced_failure` — a column in no migration, no
+`schema.prisma`, and no source file. Only in `whatsapp_os_test`; `whatsapp_os`
+was clean.
+
+A deliberate break added it and its cleanup never ran, almost certainly killed
+by the fork crash mid-run. Nothing noticed afterwards, and the reason is
+structural: `migrate deploy` only applies migrations and never removes what a
+migration did not create, and the drift check runs against the **development**
+database, so a test-only mutation is outside everything that looks for drift.
+
+Recovery is `npm run db:nuke -- test`. Worth knowing before diagnosing the same
+symptom again, because it presents as a suite that was green an hour ago
+failing in several unrelated files at once, with unique and foreign-key
+violations that look like a broken feature.
+
+Not fixed here, and it is a real gap: nothing runs the drift check against the
+test database. The cheap version is a `migrate diff` against it in
+`migrate-test.mjs`, which would fail the run that inherits a stray object
+rather than the one after it.
 
 ---
 

@@ -148,6 +148,33 @@ describe("the admin client", () => {
   });
 });
 
+describe("the admin query surface", () => {
+  it("takes scalars, never Prisma argument types", () => {
+    /*
+     * What keeps lib/admin-db.ts a list of named queries rather than a
+     * passthrough with extra steps.
+     *
+     * The moment a function accepts `where`, `select` or a `…Args`, the file
+     * stops bounding what the panel can read: the shape is decided at the call
+     * site, the return type stops being written out, and reviewing this file no
+     * longer tells you what crosses the tenant boundary. Every parameter is a
+     * scalar — a company id, a provider, a search string.
+     *
+     * Prisma.InputJsonValue is the one exception and is not an argument type:
+     * it is the shape of an audit metadata blob on the way in.
+     */
+    const source = readFileSync(join(webRoot, "lib", "admin-db.ts"), "utf8");
+
+    const referenced = [
+      ...new Set(
+        [...source.matchAll(/\bPrisma\.(\w+)/g)].map((match) => match[1]!),
+      ),
+    ].sort();
+
+    expect(referenced).toEqual(["InputJsonValue"]);
+  });
+});
+
 describe("the lint rule and this test agree", () => {
   it("exempts the same files in both places", () => {
     /*

@@ -359,7 +359,11 @@ model IntegrationSecret {
   keyId      String @map("key_id")
   /// Last four characters of the plaintext, stored in the clear so the panel
   /// has something to render. The only part of a secret that ever leaves here.
-  last4      String
+  ///
+  /// Null for anything shorter than MIN_LENGTH_FOR_LAST4: showing the last
+  /// four characters of a six-character value discloses most of it, and the
+  /// hint exists to confirm which credential is loaded, not to rebuild it.
+  last4      String?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

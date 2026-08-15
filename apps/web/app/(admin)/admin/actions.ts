@@ -1,9 +1,22 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { safeParseInput, signInSchema } from "@whatsapp-os/core";
+import {
+  INTEGRATION_PROVIDERS,
+  echoableValues,
+  integrationFields,
+  integrationSaveSchema,
+  safeParseInput,
+  signInSchema,
+  type IntegrationProviderName,
+} from "@whatsapp-os/core";
 import { createConsoleMailer, sendMailSafely } from "@whatsapp-os/core";
-import { writeAdminAudit } from "@/lib/admin-db";
+import {
+  disconnectIntegration,
+  saveIntegrationSecrets,
+  writeAdminAudit,
+} from "@/lib/admin-db";
 import { issueAdminPasswordReset } from "@/lib/auth/admin-reset";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import {
@@ -17,6 +30,116 @@ import { safeNextPath } from "@/lib/auth/safe-next";
 
 export interface AdminFormState {
   message?: string;
+}
+
+/**
+ * The state a failed credential save hands back to the browser.
+ *
+ * `values` is the load-bearing field, and it carries non-secret entries only —
+ * see echoableValues(). React serialises this object into the HTML of the
+ * response, so anything in it has been disclosed to the page, its cache, and
+ * anything logging response bodies.
+ */
+export interface IntegrationFormState {
+  message?: string;
+  success?: string;
+  fieldErrors?: Record<string, string>;
+  /** Non-secret submitted values, so the form can repopulate them. */
+  values?: Record<string, string>;
+}
+
+export async function saveIntegrationAction(
+  _previous: IntegrationFormState,
+  formData: FormData,
+): Promise<IntegrationFormState> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) {
+    return { message: "Unknown provider." };
+  }
+
+  const submitted: Record<string, string> = {};
+  for (const field of integrationFields(provider)) {
+    submitted[field.key] = formData.get(field.key)?.toString() ?? "";
+  }
+
+  const parsed = safeParseInput(integrationSaveSchema(provider), submitted);
+
+  if (!parsed.ok) {
+    /* safeParseInput labels an object-level refinement "(root)", not "". */
+    const ROOT = "(root)";
+
+    const fieldErrors: Record<string, string> = {};
+    for (const issue of parsed.errors) {
+      if (issue.path !== ROOT) fieldErrors[issue.path] ??= issue.message;
+    }
+
+    return {
+      fieldErrors,
+      /*
+       * Never the raw submission. A token echoed here is a token in the page
+       * source — the one place this panel is otherwise careful never to put it.
+       */
+      values: echoableValues(submitted),
+      message:
+        parsed.errors.find((issue) => issue.path === ROOT)?.message ??
+        "Check the highlighted fields. Secret values must be re-entered.",
+    };
+  }
+
+  const result = await saveIntegrationSecrets(companyId, provider, parsed.data);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integration.saved",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* Key names, never values. */
+    metadata: { companyId, provider, keys: result.saved },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+
+  return {
+    success:
+      result.saved.length === 0
+        ? "Nothing changed."
+        : `Saved ${result.saved.length} credential${result.saved.length === 1 ? "" : "s"}.`,
+  };
+}
+
+export async function disconnectIntegrationAction(
+  formData: FormData,
+): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const provider = formData.get("provider")?.toString() ?? "";
+
+  if (!isIntegrationProvider(provider)) return;
+
+  const removed = await disconnectIntegration(companyId, provider);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.integration.disconnected",
+    ...(context.ip ? { ip: context.ip } : {}),
+    metadata: { companyId, provider, removed },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}/integrations`);
+}
+
+function isIntegrationProvider(
+  value: string,
+): value is IntegrationProviderName {
+  return (INTEGRATION_PROVIDERS as readonly string[]).includes(value);
 }
 
 /** One message for every failure, exactly as on the tenant side. */

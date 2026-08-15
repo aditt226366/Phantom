@@ -40,7 +40,7 @@ CREATE TABLE "integration_secrets" (
     "key" TEXT NOT NULL,
     "ciphertext" TEXT NOT NULL,
     "key_id" TEXT NOT NULL,
-    "last4" TEXT NOT NULL,
+    "last4" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 

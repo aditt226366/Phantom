@@ -1,6 +1,12 @@
 import "server-only";
+import {
+  INTEGRATION_LABELS,
+  integrationFields,
+  type IntegrationProviderName,
+} from "@whatsapp-os/core";
 import type { Prisma } from "@whatsapp-os/db";
 import { adminPrisma } from "@whatsapp-os/db/admin";
+import { seal } from "@/lib/integrations/seal";
 
 /**
  * The only module in the repository permitted to import the admin client.
@@ -205,4 +211,177 @@ export async function listCompanies(): Promise<CompanySummary[]> {
     createdAt: company.createdAt,
     userCount: company._count.users,
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Integrations and usage                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What the console may know about a stored credential.
+ *
+ * There is no shape in this file that carries a ciphertext, let alone a
+ * plaintext. last4 is the entire disclosure, and it is null for values short
+ * enough that four characters would give most of them away.
+ */
+export interface StoredSecretView {
+  key: string;
+  last4: string | null;
+  keyId: string;
+  updatedAt: Date;
+}
+
+export interface IntegrationView {
+  id: string;
+  provider: IntegrationProviderName;
+  label: string;
+  status: "CONNECTED" | "NOT_CONNECTED";
+  lastVerifiedAt: Date | null;
+  lastError: string | null;
+  secrets: StoredSecretView[];
+}
+
+/** Every integration a company has, masked. */
+export async function listIntegrations(
+  companyId: string,
+): Promise<IntegrationView[]> {
+  const rows = await adminPrisma.integration.findMany({
+    where: { companyId },
+    orderBy: { provider: "asc" },
+    select: {
+      id: true,
+      provider: true,
+      label: true,
+      status: true,
+      lastVerifiedAt: true,
+      lastError: true,
+      secrets: {
+        /* Note what is absent: ciphertext. */
+        select: { key: true, last4: true, keyId: true, updatedAt: true },
+        orderBy: { key: "asc" },
+      },
+    },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    provider: row.provider,
+    label: row.label,
+    status: row.status,
+    lastVerifiedAt: row.lastVerifiedAt,
+    lastError: row.lastError,
+    secrets: row.secrets.map((secret) => ({
+      key: secret.key,
+      last4: secret.last4,
+      keyId: secret.keyId,
+      updatedAt: secret.updatedAt,
+    })),
+  }));
+}
+
+export interface SaveSecretsResult {
+  integrationId: string;
+  /** Keys whose stored value was replaced. */
+  saved: string[];
+  /** Keys left alone because the field was submitted blank. */
+  unchanged: string[];
+}
+
+/**
+ * Store credentials for one provider. Write-only.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the encryption happens in here
+ * ---------------------------------------------------------------------------
+ *
+ * The AAD is ${companyId}:${integrationId}:${key}, so a value cannot be sealed
+ * until the integration row exists and has an id. On a first save that row is
+ * being created by this call. Doing the obvious thing — encrypt the submitted
+ * values, then insert them — builds an AAD from an id that does not exist yet,
+ * and produces rows that decrypt under nothing.
+ *
+ * So: create the integration, then seal against its id, then write the
+ * secrets, all in one transaction. Safe to hold, because sealing is CPU only —
+ * no provider call happens anywhere near here.
+ *
+ * ---------------------------------------------------------------------------
+ * Blank means unchanged
+ * ---------------------------------------------------------------------------
+ *
+ * A blank field leaves the stored value alone, so an operator can rotate one
+ * credential without re-typing the other three — which they cannot do anyway,
+ * since the panel never shows them. Clearing a credential is Disconnect, which
+ * is a different button and says what it does.
+ */
+export async function saveIntegrationSecrets(
+  companyId: string,
+  provider: IntegrationProviderName,
+  submitted: Readonly<Record<string, string>>,
+): Promise<SaveSecretsResult> {
+  const fields = integrationFields(provider);
+
+  return adminPrisma.$transaction(async (tx) => {
+    /* First, because the id below is part of what authenticates every value. */
+    const integration = await tx.integration.upsert({
+      where: { companyId_provider: { companyId, provider } },
+      create: { companyId, provider, label: INTEGRATION_LABELS[provider] },
+      update: {},
+      select: { id: true },
+    });
+
+    const saved: string[] = [];
+    const unchanged: string[] = [];
+
+    for (const field of fields) {
+      const value = submitted[field.key]?.trim() ?? "";
+
+      if (value === "") {
+        unchanged.push(field.key);
+        continue;
+      }
+
+      const sealed = seal(companyId, integration.id, field.key, value);
+
+      await tx.integrationSecret.upsert({
+        where: {
+          integrationId_key: { integrationId: integration.id, key: field.key },
+        },
+        create: {
+          companyId,
+          integrationId: integration.id,
+          key: field.key,
+          ciphertext: sealed.ciphertext,
+          keyId: sealed.keyId,
+          last4: sealed.last4,
+        },
+        update: {
+          ciphertext: sealed.ciphertext,
+          keyId: sealed.keyId,
+          last4: sealed.last4,
+        },
+      });
+
+      saved.push(field.key);
+    }
+
+    return { integrationId: integration.id, saved, unchanged };
+  });
+}
+
+/**
+ * Remove an integration and everything under it.
+ *
+ * The explicit way to clear a credential. Secrets and verification history go
+ * with it by cascade — there is no value in keeping ciphertext nothing can
+ * describe.
+ */
+export async function disconnectIntegration(
+  companyId: string,
+  provider: IntegrationProviderName,
+): Promise<boolean> {
+  const { count } = await adminPrisma.integration.deleteMany({
+    where: { companyId, provider },
+  });
+
+  return count > 0;
 }

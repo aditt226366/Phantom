@@ -222,9 +222,29 @@ What the investigation ruled out, so the fifth occurrence starts from here:
   everything else — but it is by far the largest moment in the suite, and it is
   the first thing that will look suspicious to whoever reads this next.
 
-The remaining suspect is contention between `db` and `web-server`, which share
-one test database and one `globalSetup`, and already have a documented deadlock
-hazard around that advisory lock (above). Unproven.
+- **Not `parseEnv`.** `process.exit()` in a fork produces exactly this
+  signature, and `parseEnv` exits on bad configuration — but walking
+  `auth-schema.test.ts`'s import graph (41 files) finds no call to it anywhere.
+  `migrate-test.mjs` does call `process.exit`, and cannot be the cause: it is
+  spawned as a child and checked through `result.status`.
+
+  A guard is installed permanently anyway — `tests/no-silent-exit.ts`, first in
+  every project's `setupFiles`. It replaces `process.exit` with a throw and
+  logs unhandled rejections to stderr, so the next silent death arrives as a
+  named failure with a file and line instead of a vanished worker. Verified by
+  probe: `process.exit(1)` in a test now fails that test by name.
+
+**The structural difference between a full run and `--project db`** is worth
+knowing, because it is the standing suspect and it is not obvious: `db` and
+`web-server` declare the *same* `globalSetup`. In a full run `migrate-test.mjs`
+executes twice against the one test database, and each execution runs
+`db-roles.mjs` — `ALTER ROLE` and grant changes against the database db's
+workers are already connected to. The advisory lock serialises the two setups
+against each other; it does not serialise them against tests already running.
+`globalSetup` mutates no environment variables, so that is not the difference.
+
+Unproven, but it is where to look next, and an unhandled rejection from a
+dropped `pg` connection would present exactly as the observed crash.
 
 Practical effect: a short test count with a non-zero exit is this, and a re-run
 is the right response. A short count with a **zero** exit is something else

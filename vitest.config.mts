@@ -24,6 +24,19 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * and Vite's native config loader warns on ESM syntax in a file it loads as
  * CommonJS.
  */
+/**
+ * Installed first in every project, before any other setup file.
+ *
+ * A process.exit() inside a Vitest fork is reported only as "Worker exited
+ * unexpectedly" - no stack, no file, and the tests that never started go
+ * missing rather than failing. parseEnv() exits on bad configuration, so
+ * anything reaching it from a test dies that way. The guard turns it into a
+ * located failure. See tests/no-silent-exit.ts.
+ */
+const SILENT_EXIT_GUARD = fileURLToPath(
+  new URL("./tests/no-silent-exit.ts", import.meta.url),
+);
+
 export default defineConfig({
   test: {
     projects: [
@@ -33,6 +46,7 @@ export default defineConfig({
           root: "./packages/core",
           environment: "node",
           include: ["tests/**/*.test.ts"],
+          setupFiles: [SILENT_EXIT_GUARD],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },
@@ -48,7 +62,7 @@ export default defineConfig({
           root: "./apps/worker",
           environment: "node",
           include: ["tests/**/*.test.ts"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },
@@ -59,7 +73,7 @@ export default defineConfig({
           environment: "node",
           include: ["tests/**/*.test.ts"],
           globalSetup: ["./tests/global-setup.ts"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
 
           pool: "forks",
@@ -106,7 +120,7 @@ export default defineConfig({
           include: ["tests/server/**/*.test.ts"],
           exclude: ["tests/server/setup.ts", "tests/server/server-only-stub.ts"],
           globalSetup: ["../../packages/db/tests/global-setup.ts"],
-          setupFiles: ["./tests/server/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/server/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
           pool: "forks",
           fileParallelism: false,
@@ -129,7 +143,7 @@ export default defineConfig({
           root: "./apps/web",
           environment: "jsdom",
           include: ["tests/*.test.tsx"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },

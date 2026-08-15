@@ -102,6 +102,7 @@ model Company {
   contacts               Contact[]
   conversations          Conversation[]
   messages               Message[]
+  whatsappMedia          WhatsAppMedia[]
 
   @@map("companies")
 }
@@ -748,6 +749,11 @@ model Message {
   errorCode   Int?                  @map("error_code")
   errorTitle  String?               @map("error_title")
 
+  /// The media this message carries, if any. SetNull, not Cascade: media is
+  /// shared by content hash, so one message being deleted must not take bytes
+  /// the other forty-nine still reference.
+  mediaId String? @map("media_id")
+
   /// How many times a person has asked for this to be sent again. Part of the
   /// send job's id, because BullMQ keeps completed job ids for an hour and a
   /// retry reusing one is silently dropped.
@@ -776,10 +782,11 @@ model Message {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  media        WhatsAppMedia? @relation(fields: [mediaId], references: [id], onDelete: SetNull)
   /// SetNull for the same reason as Conversation.assignedUser: deleting an
   /// employee must not delete the messages they sent to customers.
-  sentBy       User?        @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
+  sentBy       User?          @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
 
   /// Inbound idempotency. Meta redelivers, and a redelivered message must not
   /// appear twice in the thread.
@@ -789,6 +796,114 @@ model Message {
   /// The send worker claims rows by status.
   @@index([companyId, status])
   @@map("messages")
+}
+
+/// Whether the bytes for a piece of media are here.
+///
+/// Ours to define, so an enum. SKIPPED is not a failure: it is the expected
+/// outcome for anything over the size cap, and nothing retries it.
+enum MediaState {
+  PENDING
+  STORED
+  SKIPPED
+  FAILED
+
+  @@map("media_state")
+}
+
+/// Inbound media, stored by content hash.
+///
+/// Meta's media URLs expire in minutes and need the access token, so storing
+/// the URL means broken images tomorrow. The bytes are fetched on receipt.
+///
+/// ---------------------------------------------------------------------------
+/// Content-addressed, and scoped per company
+/// ---------------------------------------------------------------------------
+///
+/// Keyed on the sha256 rather than on Meta's media id: the same image forwarded
+/// to fifty contacts arrives as fifty media ids and one hash, and storing it
+/// fifty times is fifty downloads and fifty copies in every backup.
+///
+/// The unique is (company_id, sha256) and deliberately NOT sha256 alone.
+/// Deduplicating across tenants is the obvious optimisation and the reason to
+/// refuse it is a tenancy argument rather than a technical one: it would make
+/// one company's storage cost depend on another's traffic, it would produce a
+/// row two companies jointly own - so deleting one company's data would either
+/// take the other's bytes or leave them holding a row they cannot account for -
+/// and it would let a company learn, by timing, that another tenant already
+/// holds a file it is uploading.
+///
+/// ---------------------------------------------------------------------------
+/// Where the bytes live, and for how long
+/// ---------------------------------------------------------------------------
+///
+/// In Postgres, behind MediaStore in packages/db/src/media-store.ts. That is a
+/// decision with a named expiry: it inflates every pg_dump and every base
+/// backup, so it is revisited when the table passes a few GB. storage_backend
+/// and storage_key exist from this first migration so that moving to object
+/// storage is a value change and a backfill, not a schema redesign.
+model WhatsAppMedia {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's hash of the content, which is also our identity for it. Available
+  /// from GET /{media-id} before any transfer, so a duplicate costs one
+  /// metadata call and no download at all.
+  sha256 String
+
+  /// Meta's vocabulary, so text and not an enum - the same test message.type
+  /// answers. Meta forwards whatever the sending handset produced, including
+  /// types this build has never seen, and a mime type it does not recognise
+  /// must store as itself rather than fail the write that carried it.
+  mimeType String @map("mime_type")
+
+  fileName String? @map("file_name")
+
+  /// What Meta said the file is, in bytes. Recorded even when the bytes were
+  /// not stored, because the thread renders "6.2 MB, not stored" and needs the
+  /// number. A CHECK constraint ties it to octet_length(bytes) when bytes are
+  /// present, so the metadata cannot disagree with the content.
+  byteSize Int @map("byte_size")
+
+  state MediaState @default(PENDING)
+
+  /// Why there are no bytes. 'over_max_size' is the expected one and is not an
+  /// error: the thread shows the reason and the file name, the webhook that
+  /// carried it still succeeds, and nothing retries.
+  skippedReason String? @map("skipped_reason")
+
+  /// Which MediaStore implementation holds the bytes. Present from the first
+  /// migration so that adding 's3' later is a value, not a schema change.
+  storageBackend String @default("postgres") @map("storage_backend")
+  /// The backend's own handle. Null for 'postgres', where the bytes are below.
+  storageKey String? @map("storage_key")
+
+  /// Null unless storage_backend is 'postgres'.
+  ///
+  /// STORAGE EXTERNAL is set in the migration and is load-bearing rather than a
+  /// micro-optimisation: the read path slices this column with substring() to
+  /// stream it, and under the default EXTENDED the value is compressed, so a
+  /// slice has to decompress from the start and the streaming is a fiction.
+  /// JPEG, MP4 and PDF do not compress anyway.
+  ///
+  /// A CHECK constraint caps it at 5 MiB. The cap is enforced during the
+  /// download - the fetch is aborted the moment the running byte count crosses
+  /// the limit - because checking a content-length header trusts a remote value
+  /// and checking after the fact means a 200 MB response was already resident
+  /// in the worker. The constraint is the backstop for both, in the same spirit
+  /// as validating a file type by magic bytes rather than by its extension.
+  bytes Bytes?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([companyId, sha256])
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([companyId, state])
+  @@map("whatsapp_media")
 }
 
 /// One countable thing that happened, priced at the moment it happened.

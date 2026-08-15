@@ -618,6 +618,58 @@ describe("conversations and messages", () => {
   });
 });
 
+describe("stored media", () => {
+  async function storeMedia(company: SeededCompany, label: string): Promise<void> {
+    await withCompany(company.id, async (db, companyId) => {
+      await db.whatsAppMedia.create({
+        data: {
+          companyId,
+          sha256: `${label}-sha`,
+          mimeType: "image/jpeg",
+          byteSize: 3,
+          state: "STORED",
+          bytes: new TextEncoder().encode("abc"),
+        },
+      });
+    });
+  }
+
+  it("does not serve one company's media to another", async () => {
+    await storeMedia(alpha, "alpha");
+    await storeMedia(beta, "beta");
+
+    /*
+     * The read path is /api/media/[mediaId], which takes an id straight from a
+     * URL. RLS is what makes guessing one useless, so this is the assertion
+     * behind that route returning 404 rather than somebody else's photograph.
+     */
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ sha256: string }>>`SELECT sha256 FROM whatsapp_media ORDER BY sha256`,
+    );
+
+    expect(rows.map((r) => r.sha256)).toEqual(["beta-sha"]);
+  });
+
+  it("refuses to write media into another company", async () => {
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_media
+            (id, company_id, sha256, mime_type, byte_size, state, updated_at)
+          VALUES ('smuggled', ${beta.id}, 'smuggled-sha', 'image/jpeg', 0, 'PENDING', now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides stored media from the table's own owner", async () => {
+    await storeMedia(alpha, "alpha");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_media");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

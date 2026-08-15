@@ -7,9 +7,14 @@ payload parsing, transport, pricing, job contracts. None of them renders
 anything, so the screenshot suite spends minutes per commit proving that
 nothing changed.
 
-Turn it back on at commit 27, `test(web): seed a WhatsApp number, a contact and
-two threads`, which is where the web work starts and the first thing that can
+Turn it back on at `test(web): seed a WhatsApp number, a contact and two
+threads`, which is where the web work starts and the first thing that can
 actually move a pixel lands.
+
+That is commit 24 in the current numbering and 27 in the original - commits
+15-18 were delivered as one, so everything after shifted down by three. Named
+by title here because the number moved once and may again. See
+docs/plans/phase-4.md.
 
 Delete this file to restore. Nothing else needs changing.
 

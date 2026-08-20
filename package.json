@@ -2,7 +2,7 @@
   "name": "whatsapp-os",
   "version": "0.1.0",
   "private": true,
-  "description": "whatsapp-os — Next.js 16 App Router monorepo (web + worker + db + core)",
+  "description": "whatsapp-os \u2014 Next.js 16 App Router monorepo (web + worker + db + core)",
   "engines": {
     "node": ">=20.9.0"
   },
@@ -21,6 +21,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "test:gate": "node scripts/test-floor.mjs",
+    "break-once": "node scripts/break-once.mjs",
     "test:watch": "vitest",
     "test:visual": "npm run test:visual --workspace=web",
     "test:visual:update": "npm run test:visual:update --workspace=web",

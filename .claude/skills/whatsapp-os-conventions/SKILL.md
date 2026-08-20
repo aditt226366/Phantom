@@ -338,6 +338,46 @@ the completed `if`, always 0. It printed "commit refused" and exited zero, and
 the probe commit it was written to block landed anyway. Capture a status on the
 line that produces it: `cmd || status=$?`.
 
+**Every break goes through `scripts/break-once.mjs`, and git is the baseline.**
+It stages the file, applies the substitution, prints the diff, runs the command,
+restores from the index and refuses to call a break proved unless the command
+actually failed:
+
+```
+node scripts/break-once.mjs \
+  --file packages/core/src/whatsapp/media.ts \
+  --find 'if (received > MAX_MEDIA_BYTES) {' \
+  --replace 'if (received > MAX_MEDIA_BYTES * 100) {' \
+  --command 'npx vitest run --project core <file> > /tmp/break.log 2>&1'
+```
+
+It refuses four things, each because it has already gone wrong here: an
+**untracked file**, an anchor matching **nothing**, an anchor matching **more
+than one place**, and a `--command` containing a **pipe** — a pipeline's status
+is its last command's, so the failure would be invisible and reported as a pass.
+That last one caught this script on its own first run.
+
+Invoked as `node scripts/break-once.mjs` rather than through the `break-once`
+npm script, which also exists. Both work — verified — but npm eats a leading
+`--flag` under some versions, and that has already rebuilt the wrong database
+once in this repository. The direct form cannot be affected by it.
+
+**Why git rather than a copy, and why the refusal is absolute.** The fork crash
+has now caused two separate incidents by killing a process mid-break:
+
+- a probe added `email_verification_tokens.forced_failure` and left it, invisible
+  to every migration and drift check — 62 failures in 15 files, an afternoon;
+- a probe disabled the media size cap in an **untracked** file, and the
+  scratchpad backup taken beside it captured the damage too, so `diff` reported
+  clean against a broken baseline and nothing true was left to compare against.
+
+We are not investigating that crash, by agreement — so the mitigation cannot be
+care, because care is what the crash interrupts. It has to be that every break is
+recoverable by construction: `git add` first, so a killed run leaves the damage
+in `git status` and `git diff` where it is obvious, rather than in a file nobody
+is comparing. An untracked file has no baseline at all, which is why that is a
+refusal and not a warning.
+
 **Break-once mutates the database, and a killed process never cleans up.**
 That is not a discipline problem and cannot be fixed by being more careful.
 A probe that adds a column, drops a policy or disables RLS undoes itself in a

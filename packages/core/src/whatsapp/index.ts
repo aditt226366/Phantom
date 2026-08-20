@@ -30,6 +30,18 @@ export {
 export type { WindowState } from "./window.ts";
 export { sendPolicy } from "./send-policy.ts";
 export type { SendDecision, SendFacts, SendIntent, SendRefusal } from "./send-policy.ts";
+/* The cap lives with the send/receive shapes in graph.ts; it is re-exported
+   here because the callers that need it are the media ones. */
+export { MAX_MEDIA_BYTES } from "./graph.ts";
+export {
+  downloadWhatsAppMedia,
+  fetchWhatsAppMediaMetadata,
+} from "./media.ts";
+export type {
+  MediaDownloadOutcome,
+  MediaMetadataOutcome,
+  WhatsAppMediaMetadata,
+} from "./media.ts";
 export { parseWebhookPayload } from "./payload.ts";
 export type {
   InboundMessage,

@@ -207,6 +207,59 @@ export type GraphResult<T> =
   | VerificationFailure;
 
 /**
+ * GET from the Graph API, returning what it says.
+ *
+ * The sibling of graphGet above, which answers only "did this work" because
+ * that is all a verification needs. This one carries the body, for the calls
+ * that are asking a question rather than checking a credential - the first
+ * being GET /{media-id}, whose answer is where a download starts.
+ *
+ * `fields` is optional: a media lookup takes none, and Meta returns the whole
+ * object. Same timeout, same decoder, same scrubbing as everything else here.
+ */
+export async function graphGetJson<T = unknown>(
+  path: string,
+  fields: string | null,
+  accessToken: string,
+  secretValues: readonly string[],
+  fetchImpl: FetchImpl = fetch,
+): Promise<GraphResult<T>> {
+  try {
+    const url =
+      `${GRAPH_API_BASE}/${encodeURIComponent(path)}` +
+      (fields ? `?fields=${fields}` : "");
+
+    const response = await fetchImpl(url, {
+      /* Header, never the query string - see graphGet. */
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+
+    let parsed: unknown = {};
+    try {
+      parsed = await response.json();
+    } catch {
+      /* A gateway HTML page is not a Graph envelope. */
+    }
+
+    if (response.ok) {
+      return { ok: true, statusCode: response.status, data: parsed as T };
+    }
+
+    return decodeGraphFailure(response.status, parsed, secretValues);
+  } catch (cause) {
+    const message =
+      cause instanceof Error && cause.name === "TimeoutError"
+        ? `Timed out after ${PROVIDER_TIMEOUT_MS}ms`
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
+
+    return { ok: false, kind: "transient", error: scrubText(message, secretValues) };
+  }
+}
+
+/**
  * POST to the Graph API, decoded the same way as a GET.
  *
  * Same timeout, same three-class failure kinds, same scrubbing of anything

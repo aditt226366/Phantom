@@ -253,9 +253,9 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (28 commits on `phase-4a`)
+### Done — 4a (31 commits on `phase-4a`)
 
-Planned commits 1–20 of the original numbering, plus nine that emerged from the
+Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
 
 | # | Hash | Subject |
@@ -286,6 +286,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 16 | `809b41d` | `feat(db): whether a conversation can be sent to` |
 | — | `05440ac` | `refactor(db): store instants, not wall clocks` |
 | 17 | `9666eb7` | `feat(worker): turn a delivered webhook into a conversation` |
+| 18 | `0064185` | `feat(worker): fetch inbound media before Meta's link expires` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -296,7 +297,6 @@ Both numberings appear below where it matters.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| 18 | 21 | `feat(worker): fetch inbound media before Meta's link expires` |
 | 19 | 22 | `feat(worker): send a message and remember what Meta called it` |
 | 20 | 23 | `feat(worker): mark a thread read when somebody opens it` |
 | 21 | 24 | `feat(worker): keep a number's quality and tier current` |

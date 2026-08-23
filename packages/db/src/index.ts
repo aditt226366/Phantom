@@ -87,7 +87,6 @@ export {
   Plan,
   IntegrationProvider,
   IntegrationStatus,
-  WhatsAppNumberStatus,
   WhatsAppQualityRating,
   MessageDirection,
   MessageStatus,

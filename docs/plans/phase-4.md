@@ -375,6 +375,36 @@ answer rather than prevention.
 
 ---
 
+### C8. `WhatsAppNumberStatus` was our enum for Meta's vocabulary
+
+Applying commit 15's own test consistently, one column late. Meta defines this
+set and documents more of it than we modelled — `BANNED`, `MIGRATED`,
+`RATE_LIMITED` and `UNVERIFIED` beyond `CONNECTED`/`PENDING`/`FLAGGED`/
+`RESTRICTED`.
+
+Not the crash hazard `message.type` was: the `UNKNOWN` member absorbed a
+surprise and the write succeeded. It succeeded by **discarding the answer** — a
+number Meta had banned was stored as "we don't know" — which is precisely what
+made `messagingTier` and `throughputLevel` text in the same table. This column
+was left behind.
+
+`QualityRating` stays an enum. `GREEN`/`YELLOW`/`RED`/`UNKNOWN` is a closed
+traffic light, not a state machine Meta keeps extending.
+
+Done in `20260816100000`, which also drops the orphaned type. A type swap rather
+than a data migration — the table is effectively empty, `USING status::text` is
+exact, and nothing writes the column yet. **The timing is the point:** the
+refresh job (commit 21) is the first writer, and doing this afterwards would
+mean changing the column, its writer and its reader across three commits with a
+live consumer in between.
+
+The consequence for the send path, which is the half a type change hides:
+`sendPolicy` now splits its refusal. A status we model and know cannot send
+reports `number_not_sendable`; anything else — `UNKNOWN`, or anything Meta adds
+after this build — reports `number_status_unknown`. Both fail closed, so the
+safety is unchanged; what differs is that the refusal no longer claims knowledge
+we do not have. The real value is stored verbatim for display.
+
 ### C7. An orphan status is accepted and recorded, not queued
 
 **Decided before the send worker, because it changes what that worker does.**
@@ -462,23 +492,6 @@ recorded as such rather than chased.
 ---
 
 ## Still queued
-
-**`WhatsAppNumberStatus` should be text, not an enum.** Applying commit 15's own
-test consistently: the vocabulary is Meta's — `CONNECTED`, `PENDING`, `FLAGGED`,
-`RESTRICTED`, and Meta also documents `BANNED`, `MIGRATED`, `RATE_LIMITED`,
-`UNVERIFIED`. The `UNKNOWN` member absorbs surprises without failing the write,
-so it is not the webhook-crash hazard `message.type` was, but it silently
-discards the real value — the thing `messagingTier` was made text to avoid.
-`QualityRating` is genuinely closed and fine as an enum.
-
-Do this **before the numbers refresh job** (commit 21), which is the first code
-that writes the column.
-
-Commit 16 is the first code that *reads* it, and does not constrain the change:
-`canSend` passes `whatsapp_numbers.status` to `sendPolicy` as a string and
-compares it against a `Set`, so the column becoming text is invisible to it.
-The four-line `numberStatus` fixture in `conversation-send.test.ts` is the only
-thing that would need looking at.
 
 **The fork-crash investigation is stopped by agreement.** Nine-plus occurrences,
 always the db project, always `auth-schema.test.ts`, always full runs. It exits

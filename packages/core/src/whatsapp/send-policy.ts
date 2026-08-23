@@ -63,6 +63,28 @@ export type SendDecision =
  */
 const SENDABLE_NUMBER_STATUSES = new Set(["CONNECTED", "FLAGGED"]);
 
+/**
+ * The statuses this build has an opinion about.
+ *
+ * The column is text as of 20260816100000, because the vocabulary is Meta's and
+ * they document more members than we model - BANNED, MIGRATED, RATE_LIMITED and
+ * UNVERIFIED at least. So the interesting question is no longer "which of our
+ * five is it" but "do we recognise this at all".
+ *
+ * A value we do not recognise is treated as UNKNOWN for the send decision:
+ * refused, and refused with the reason that says we cannot vouch for the number
+ * rather than one that claims to know it may not send. Both fail closed, so the
+ * safety is the same either way - what differs is whether the refusal tells the
+ * truth about why. UNKNOWN is deliberately absent from this set for that reason;
+ * it means "Meta has told us nothing", which is not knowledge.
+ */
+const KNOWN_NUMBER_STATUSES = new Set([
+  "CONNECTED",
+  "PENDING",
+  "FLAGGED",
+  "RESTRICTED",
+]);
+
 export interface SendFacts {
   window: WindowState;
   /** whatsapp_numbers.status, as stored. */
@@ -88,12 +110,20 @@ export function sendPolicy(facts: SendFacts, intent: SendIntent): SendDecision {
     return { allowed: false, reason: "contact_opted_out" };
   }
 
-  if (facts.numberStatus === "UNKNOWN") {
-    return { allowed: false, reason: "number_status_unknown" };
-  }
-
   if (!SENDABLE_NUMBER_STATUSES.has(facts.numberStatus)) {
-    return { allowed: false, reason: "number_not_sendable" };
+    /*
+     * Two refusals, and the split is about honesty rather than safety - both
+     * arms decline. A status we model and know does not permit sending is
+     * reported as such; anything else, including UNKNOWN and anything Meta has
+     * added since this was written, is reported as not knowing.
+     *
+     * Getting this backwards would tell an operator "this number may not send"
+     * about a value we have simply never seen, and send them looking for a
+     * restriction that does not exist.
+     */
+    return KNOWN_NUMBER_STATUSES.has(facts.numberStatus)
+      ? { allowed: false, reason: "number_not_sendable" }
+      : { allowed: false, reason: "number_status_unknown" };
   }
 
   if (intent.kind === "template") {

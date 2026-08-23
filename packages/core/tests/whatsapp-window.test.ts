@@ -158,6 +158,25 @@ describe("sendPolicy", () => {
     }
   });
 
+  it("treats a status Meta invented after this build as unknown", () => {
+    /*
+     * The column is text as of 20260816100000, so a status this build has never
+     * seen reaches sendPolicy verbatim instead of arriving pre-flattened into
+     * UNKNOWN by the enum.
+     *
+     * Both arms refuse, so the safety is identical either way. What is asserted
+     * here is which refusal: `number_not_sendable` would claim knowledge we do
+     * not have and send an operator looking for a restriction that may not
+     * exist, while `number_status_unknown` says the true thing.
+     */
+    for (const status of ["BANNED", "MIGRATED", "RATE_LIMITED", "UNVERIFIED", "🙃"]) {
+      expect(
+        sendPolicy({ ...OPEN, numberStatus: status }, { kind: "freeform" }),
+        status,
+      ).toEqual({ allowed: false, reason: "number_status_unknown" });
+    }
+  });
+
   it("still sends from a flagged number", () => {
     /* FLAGGED means Meta is watching the quality, not that messaging stopped.
        Refusing would take a customer's messaging away before Meta did. */

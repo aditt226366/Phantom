@@ -460,23 +460,6 @@ model IntegrationVerification {
   @@map("integration_verifications")
 }
 
-/// Meta's view of whether a number may send.
-///
-/// UNKNOWN is a real member, not a placeholder for "not fetched yet" - that is
-/// what metadata_refreshed_at being null means. It exists because Meta has
-/// added values to this set before, and a number whose status this build does
-/// not recognise must render as itself rather than fail the write that carried
-/// it.
-enum WhatsAppNumberStatus {
-  CONNECTED
-  PENDING
-  FLAGGED
-  RESTRICTED
-  UNKNOWN
-
-  @@map("whatsapp_number_status")
-}
-
 /// The quality rating Meta assigns from how recipients react.
 ///
 /// Drops to RED before Meta restricts a number, so it is the earliest warning a
@@ -521,7 +504,18 @@ model WhatsAppNumber {
   verifiedName  String? @map("verified_name")
 
   qualityRating WhatsAppQualityRating @default(UNKNOWN) @map("quality_rating")
-  status        WhatsAppNumberStatus  @default(UNKNOWN)
+
+  /// Meta's own strings - CONNECTED, PENDING, FLAGGED, RESTRICTED, and at least
+  /// BANNED, MIGRATED, RATE_LIMITED and UNVERIFIED that we do not model. Text
+  /// and not an enum, for the same reason messaging_tier is: the vocabulary is
+  /// Meta's, they add to it, and an unrecognised value must render as itself
+  /// rather than be flattened into UNKNOWN on the way in.
+  ///
+  /// UNKNOWN remains the default and a real value, meaning "Meta has told us
+  /// nothing" - distinct from metadata_refreshed_at being null, which means we
+  /// have never asked. sendPolicy refuses to send from either that or anything
+  /// it does not recognise, which is the fail-closed half of 20260816100000.
+  status        String                @default("UNKNOWN")
 
   /// Meta's own strings, e.g. TIER_1K. Text and not enums, deliberately: the
   /// sets have changed twice already, and an unrecognised tier must render as

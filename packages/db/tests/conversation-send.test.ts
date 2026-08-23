@@ -37,7 +37,8 @@ interface Thread {
 async function seedThread(
   company: SeededCompany,
   label: string,
-  numberStatus: "CONNECTED" | "UNKNOWN" | "FLAGGED" | "RESTRICTED" = "CONNECTED",
+  /* Text since 20260816100000, so any string Meta might send is legal here. */
+  numberStatus = "CONNECTED",
 ): Promise<Thread> {
   return withCompany(company.id, async (db, companyId) => {
     const integration = await db.integration.create({
@@ -152,6 +153,33 @@ describe("canSend", () => {
 
   it("refuses a number Meta has told us nothing about", async () => {
     const thread = await seedThread(alpha, "a", "UNKNOWN");
+
+    const result = await withCompany(alpha.id, (db, companyId) =>
+      canSend(db, companyId, thread.conversationId, { kind: "freeform" }, NOW),
+    );
+
+    expect(result?.decision).toEqual({
+      allowed: false,
+      reason: "number_status_unknown",
+    });
+  });
+
+  it("stores a status Meta invented verbatim, and refuses to send from it", async () => {
+    /*
+     * The half of 20260816100000 that the enum could not do. BANNED is a real
+     * Meta status this build does not model; as an enum member it would have
+     * been flattened to UNKNOWN on the way in, and the one fact an operator
+     * needs would be gone from the row.
+     *
+     * Both halves are asserted together on purpose: keeping the real value is
+     * only safe because the send decision still fails closed on it.
+     */
+    const thread = await seedThread(alpha, "a", "BANNED");
+
+    const stored = await withCompany(alpha.id, (db) =>
+      db.whatsAppNumber.findFirstOrThrow({ where: { id: thread.numberId } }),
+    );
+    expect(stored.status).toBe("BANNED");
 
     const result = await withCompany(alpha.id, (db, companyId) =>
       canSend(db, companyId, thread.conversationId, { kind: "freeform" }, NOW),

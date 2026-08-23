@@ -270,7 +270,7 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (34 commits on `phase-4a`)
+### Done — 4a (40 commits on `phase-4a`)
 
 Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
@@ -305,6 +305,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 17 | `9666eb7` | `feat(worker): turn a delivered webhook into a conversation` |
 | 18 | `0064185` | `feat(worker): fetch inbound media before Meta's link expires` |
 | 20 | `1fdad02` | `feat(worker): mark a thread read when somebody opens it` |
+| 21 | `d493d27` | `feat(worker): keep a number's quality and tier current` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -320,7 +321,6 @@ plan order and with no dependency between them — 20 needs only
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
 | 19 | 22 | `feat(worker): send a message and remember what Meta called it` |
-| 21 | 24 | `feat(worker): keep a number's quality and tier current` |
 | 22 | 25 | `feat(web): throttle a public endpoint the way we throttle sign-in` |
 | 23 | 26 | `feat(web): hold a webhook's secret briefly, and drop it when it changes` |
 | **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |

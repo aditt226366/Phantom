@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 interface Target {
   messageId: string;
   wamid: string;
-  seenThrough: Date;
+  unreadCount: number;
 }
 
 /* Typed to the shapes the job calls, so the argument assertions below are
@@ -27,8 +27,8 @@ const markConversationRead =
       db: unknown,
       companyId: string,
       conversationId: string,
-      seenThrough: Date,
-    ) => Promise<boolean>
+      seen: number,
+    ) => Promise<number>
   >();
 const findFirstConversation = vi.fn();
 const markWhatsAppRead =
@@ -82,12 +82,10 @@ vi.mock("../src/keyring.ts", () => ({ keyring: () => ({}) }));
 const { handleWhatsAppMarkRead } = await import("../src/jobs/whatsapp-mark-read.ts");
 
 const JOB = { companyId: "c1", conversationId: "cnv-1" };
-const SEEN_THROUGH = new Date("2026-08-15T12:00:00.000Z");
-
 const TARGET = {
   messageId: "msg-9",
   wamid: "wamid.9",
-  seenThrough: SEEN_THROUGH,
+  unreadCount: 3,
 };
 
 const CONVERSATION = {
@@ -110,7 +108,7 @@ beforeEach(() => {
   scopesOpenDuringGraphCall.length = 0;
   openScopes = 0;
 
-  markConversationRead.mockResolvedValue(true);
+  markConversationRead.mockResolvedValue(0);
   findFirstConversation.mockResolvedValue(CONVERSATION);
   markWhatsAppRead.mockResolvedValue({ ok: true, statusCode: 200, data: {} });
 });
@@ -129,8 +127,8 @@ describe("a thread with something unread", () => {
     expect(markWhatsAppRead).toHaveBeenCalledTimes(1);
     expect(markWhatsAppRead.mock.calls[0]![1]).toBe("wamid.9");
 
-    /* Cleared against the state the reader saw, not against now(). */
-    expect(markConversationRead.mock.calls[0]![3]).toBe(SEEN_THROUGH);
+    /* Decremented by what the reader saw, not assigned zero. */
+    expect(markConversationRead.mock.calls[0]![3]).toBe(3);
   });
 
   it("never holds a company scope while Meta is answering", async () => {
@@ -143,13 +141,13 @@ describe("a thread with something unread", () => {
 
   it("reports the badge being kept as a success, not a failure", async () => {
     readReceiptTarget.mockResolvedValue(TARGET);
-    markConversationRead.mockResolvedValue(false);
+    markConversationRead.mockResolvedValue(2);
 
     const result = await handleWhatsAppMarkRead(JOB);
 
     /*
-     * A message arrived between the receipt and the reset, so the count was
-     * left alone. That is the conditional reset working, and throwing here
+     * Two messages arrived while the receipt was in flight, so the decrement
+     * left exactly those behind. That is the reset working, and throwing here
      * would retry a call Meta has already accepted.
      */
     expect(result).toEqual({ result: "badge_kept" });

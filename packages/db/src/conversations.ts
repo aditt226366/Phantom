@@ -382,10 +382,12 @@ export interface ReadReceiptTarget {
   /** What the mark-read call addresses. Meta marks everything before it too. */
   wamid: string;
   /**
-   * The thread as the reader saw it. The unread reset is conditional on this,
-   * so a message that lands afterwards keeps its badge.
+   * How many were unread when the reader looked.
+   *
+   * The number they saw, and the number the badge is decremented by - which is
+   * what makes the reset order-independent. See markConversationRead.
    */
-  seenThrough: Date;
+  unreadCount: number;
 }
 
 /**
@@ -441,53 +443,77 @@ export async function readReceiptTarget(
   return {
     messageId: newest.id,
     wamid: newest.wamid,
-    seenThrough: conversation.lastMessageAt,
+    unreadCount: conversation.unreadCount,
   };
 }
 
 /**
- * Clear the unread badge, but only if nothing has arrived since.
+ * Subtract what the reader saw, never assign.
  *
  * ---------------------------------------------------------------------------
- * Conditional, never an assignment - R1's second half
+ * Relative, for the same reason the window uses GREATEST
  * ---------------------------------------------------------------------------
  *
  * `unread_count = 0` is a read-modify-write with the read in the operator's
- * head: they opened the thread, and by the time the receipt has been sent and
- * the reset runs, a message may have arrived. Assigning zero drops that
- * message's badge silently - the thread looks read, nobody is told, and the
- * customer waits.
+ * head: they opened a thread showing three unread, and by the time the receipt
+ * has been sent and the reset runs, a fourth may have arrived. Assigning zero
+ * drops that message's badge silently - the thread looks read, nobody is told,
+ * and the customer waits.
  *
- * Exactly the failure the window advance has, and the same fix: compare against
- * the state that was actually seen. `last_message_at <= seenThrough` means "the
- * thread has not moved since the reader looked", so a message that arrived in
- * between makes the statement match no rows and the badge survives.
+ * Subtracting the number they actually saw is correct in every ordering,
+ * without a predicate to get right:
  *
- * Two limits, stated because a conditional reset looks stricter than it is:
+ *   nothing arrived meanwhile      N - N     = 0
+ *   two arrived meanwhile          N + 2 - N = 2
+ *   one arrived OUT OF ORDER       N + 1 - N = 1
  *
- *   An outbound reply also moves last_message_at, so replying in the moment
- *   between the receipt and the reset blocks it too. That is conservative
- *   rather than wrong - the badge stays for one more open - and narrowing it to
- *   last_inbound_at would trade that for a subtler question about which clock
- *   the counter belongs to.
+ * The third is the one a timestamp guard cannot do. Meta redelivers late, and a
+ * message with an older occurred_at increments the count without moving
+ * last_message_at, because that column advances with GREATEST - so
+ * `WHERE last_message_at <= seen` would pass and clear a badge nobody saw.
+ * A decrement does not care what order they arrived in, which is why there is
+ * no WHERE clause here beyond identity.
  *
- *   An inbound message delivered OUT OF ORDER - Meta does this - increments the
- *   count without moving last_message_at, because that column is advanced with
- *   GREATEST. The guard then passes and the badge is cleared for a message that
- *   was never seen. Closing it needs the count itself in the predicate
- *   (`unread_count = <observed>`), which is a tighter guard and a different
- *   decision from the one recorded in R1.
+ * It also removes a milder wrong answer the predicate had: our own outbound
+ * reply moves last_message_at too, so replying in that same moment used to
+ * block the reset and leave the badge up for one more open. Nothing about a
+ * reply changes how many unread messages the reader saw.
+ *
+ * ---------------------------------------------------------------------------
+ * What GREATEST(0, ...) is for
+ * ---------------------------------------------------------------------------
+ *
+ * One hazard remains: a job that failed AFTER this applied, then retried, would
+ * subtract the same N twice. It is already bounded - readReceiptTarget returns
+ * null at zero, so the second attempt normally never gets here - but "normally"
+ * is doing work in that sentence, and a negative badge is a rendering bug that
+ * outlives the cause.
+ *
+ * The clamp is the whole mitigation, deliberately. The alternative is a column
+ * recording which receipt was last applied, read through on every open, and
+ * that is a schema change and a second writer to keep honest for a case whose
+ * only symptom is a number that should not go below zero.
+ *
+ * Raw SQL because GREATEST has no query-builder form - the same reason
+ * advanceConversation is raw, in the same already-sanctioned file. The
+ * company_id predicate is redundant beside the policy and written anyway (R3).
  */
 export async function markConversationRead(
   db: CompanyClient,
   companyId: string,
   conversationId: string,
-  seenThrough: Date,
-): Promise<boolean> {
-  const { count } = await db.conversation.updateMany({
-    where: { id: conversationId, lastMessageAt: { lte: seenThrough } },
-    data: { unreadCount: 0 },
-  });
+  seen: number,
+): Promise<number> {
+  const rows = await db.$queryRaw<Array<{ unread_count: number }>>`
+    UPDATE conversations
+       SET unread_count = GREATEST(0, unread_count - ${seen}),
+           updated_at = now()
+     WHERE id = ${conversationId}
+       AND company_id = ${companyId}
+    RETURNING unread_count
+  `;
 
-  return count > 0;
+  /* No row means the thread is not visible in this scope. Nothing was cleared
+     and nothing remains to report. */
+  return rows[0]?.unread_count ?? 0;
 }

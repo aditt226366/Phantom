@@ -95,7 +95,8 @@ describe("what opening a thread should tell Meta", () => {
      */
     expect(target?.wamid).toBe("wamid.3");
     expect(target?.messageId).toBe(newest);
-    expect(target?.seenThrough.toISOString()).toBe(T2.toISOString());
+    /* And how many the reader saw, which is what the badge is decremented by. */
+    expect(target?.unreadCount).toBe(3);
   });
 
   it("says nothing at all when the thread is already read", async () => {
@@ -159,7 +160,7 @@ describe("what opening a thread should tell Meta", () => {
 });
 
 describe("clearing the badge", () => {
-  it("clears it when nothing has arrived since", async () => {
+  it("clears it exactly when nothing has arrived since", async () => {
     await inbound("wamid.1", T0);
     await inbound("wamid.2", T1);
 
@@ -167,15 +168,15 @@ describe("clearing the badge", () => {
       readReceiptTarget(db, companyId, conversationId),
     );
 
-    const cleared = await withCompany(alpha.id, (db, companyId) =>
-      markConversationRead(db, companyId, conversationId, target!.seenThrough),
+    const remaining = await withCompany(alpha.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, target!.unreadCount),
     );
 
-    expect(cleared).toBe(true);
+    expect(remaining).toBe(0);
     expect((await readConversation()).unreadCount).toBe(0);
   });
 
-  it("keeps it when a message arrives between the receipt and the reset", async () => {
+  it("leaves behind whatever arrived while the receipt was in flight", async () => {
     await inbound("wamid.1", T0);
 
     /* What the reader saw when they opened it. */
@@ -183,31 +184,103 @@ describe("clearing the badge", () => {
       readReceiptTarget(db, companyId, conversationId),
     );
 
-    /* The customer writes again while the receipt is in flight. */
+    /* The customer writes twice more before the reset lands. */
     await inbound("wamid.2", T1);
+    await inbound("wamid.3", T2);
 
-    const cleared = await withCompany(alpha.id, (db, companyId) =>
-      markConversationRead(db, companyId, conversationId, target!.seenThrough),
+    const remaining = await withCompany(alpha.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, target!.unreadCount),
     );
 
     /*
-     * R1's second half. An assignment here would drop the new message's badge
-     * silently: the thread would look read, nobody would be told, and the
-     * customer would wait. The conditional matches no rows instead.
+     * R1's second half. Assigning zero would drop both badges silently: the
+     * thread would look read, nobody would be told, and the customer would
+     * wait. Subtracting the one that was seen leaves exactly the two that
+     * were not.
      */
-    expect(cleared).toBe(false);
+    expect(remaining).toBe(2);
     expect((await readConversation()).unreadCount).toBe(2);
+  });
+
+  it("leaves behind a message delivered out of order, which a timestamp cannot", async () => {
+    await inbound("wamid.2", T1);
+
+    const target = await withCompany(alpha.id, (db, companyId) =>
+      readReceiptTarget(db, companyId, conversationId),
+    );
+
+    /*
+     * Meta redelivers late. This message is OLDER than the one already seen, so
+     * last_message_at does not move - it advances with GREATEST - while the
+     * unread count does. A `WHERE last_message_at <= seen` guard would pass and
+     * clear a badge nobody saw; the decrement does not care about order.
+     */
+    await withCompany(alpha.id, async (db, companyId) => {
+      await db.message.create({
+        data: {
+          companyId,
+          conversationId,
+          direction: "INBOUND",
+          type: "text",
+          status: "DELIVERED",
+          wamid: "wamid.late",
+          occurredAt: T0,
+        },
+      });
+      await db.conversation.update({
+        where: { id: conversationId },
+        data: { unreadCount: { increment: 1 } },
+      });
+    });
+
+    const before = await readConversation();
+    expect(before.lastMessageAt?.toISOString(), "the late message moved the clock").toBe(
+      T1.toISOString(),
+    );
+
+    const remaining = await withCompany(alpha.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, target!.unreadCount),
+    );
+
+    expect(remaining).toBe(1);
+    expect((await readConversation()).unreadCount).toBe(1);
+  });
+
+  it("does not go negative if the same receipt is applied twice", async () => {
+    await inbound("wamid.1", T0);
+    await inbound("wamid.2", T1);
+
+    const target = await withCompany(alpha.id, (db, companyId) =>
+      readReceiptTarget(db, companyId, conversationId),
+    );
+
+    await withCompany(alpha.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, target!.unreadCount),
+    );
+
+    /*
+     * A job that failed after the reset applied, then retried. Normally
+     * readReceiptTarget returns null at zero and it never gets here - the clamp
+     * is what makes that "normally" not load-bearing, because a negative badge
+     * is a rendering bug that outlives its cause.
+     */
+    const remaining = await withCompany(alpha.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, target!.unreadCount),
+    );
+
+    expect(remaining).toBe(0);
+    expect((await readConversation()).unreadCount).toBe(0);
   });
 
   it("does not reach another company's thread", async () => {
     const beta = await seedCompany("beta");
     await inbound("wamid.1", T0);
 
-    const cleared = await withCompany(beta.id, (db, companyId) =>
-      markConversationRead(db, companyId, conversationId, T2),
+    const remaining = await withCompany(beta.id, (db, companyId) =>
+      markConversationRead(db, companyId, conversationId, 1),
     );
 
-    expect(cleared).toBe(false);
+    expect(remaining).toBe(0);
     expect((await readConversation()).unreadCount).toBe(1);
   });
 });

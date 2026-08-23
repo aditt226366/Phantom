@@ -85,23 +85,24 @@ export async function handleWhatsAppMarkRead(
     );
   }
 
-  /* 3. Write, conditionally. */
-  const cleared = await withCompany(companyId, (db, scoped) =>
-    markConversationRead(db, scoped, conversationId, target.seenThrough),
+  /* 3. Write: subtract exactly what the reader saw. */
+  const remaining = await withCompany(companyId, (db, scoped) =>
+    markConversationRead(db, scoped, conversationId, target.unreadCount),
   );
 
   log.info("thread marked read", {
     companyId,
     conversationId,
     wamid: target.wamid,
-    cleared,
+    seen: target.unreadCount,
+    remaining,
   });
 
   /*
-   * `badge_kept` is a success, not a failure. It means a message arrived
-   * between the receipt and the reset, so the count was left alone - the whole
-   * point of the conditional reset, and worth being able to see in the logs
+   * `badge_kept` is a success, not a failure. A non-zero remainder means
+   * messages arrived while the receipt was in flight, and the decrement left
+   * exactly those behind - which is the point, and worth seeing in the logs
    * rather than inferring from a badge somebody complains about.
    */
-  return { result: cleared ? "marked" : "badge_kept" };
+  return { result: remaining === 0 ? "marked" : "badge_kept" };
 }

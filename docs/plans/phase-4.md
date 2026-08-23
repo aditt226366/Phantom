@@ -205,8 +205,25 @@ point:
 
 **R1 — the window moves backwards.** `windowExpiresAt` has the same
 out-of-order problem as statuses and needs `GREATEST()`, never assignment.
-`unreadCount`'s reset races an arriving message; reset with
-`WHERE last_message_at <= $readAt`.
+`unreadCount`'s reset races an arriving message — **resolved in `1fdad02` by a
+relative decrement rather than the conditional assignment first written here.**
+
+The original prescription was `WHERE last_message_at <= $readAt`. It closes the
+in-order race and misses two cases, both found while writing it:
+
+- an inbound message delivered **out of order** increments the count without
+  moving `last_message_at`, because that column advances with `GREATEST` — so
+  the guard passes and clears a badge nobody saw;
+- an **outbound reply** moves `last_message_at` too, so replying in that moment
+  blocks the reset and leaves the badge up for one more open.
+
+`SET unread_count = GREATEST(0, unread_count - $seen)` has neither. The reader
+saw N; clearing exactly N leaves whatever arrived, in order or out of it, and no
+predicate is needed because a decrement is order-independent by construction.
+The clamp covers the one hazard left — a job that failed after the reset applied
+and retried would subtract twice — which `readReceiptTarget` already bounds by
+returning null at zero. Same instinct as `GREATEST` on the window, and it is
+worth reading the two together.
 
 **R2 — the retry button silently does nothing without a versioned jobId.**
 BullMQ keeps completed ids for an hour and failed ids for a day. Hence

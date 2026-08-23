@@ -270,7 +270,7 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (45 commits on `phase-4a`)
+### Done — 4a (47 commits on `phase-4a`)
 
 Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
@@ -308,6 +308,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 20 | `1fdad02` | `feat(worker): mark a thread read when somebody opens it` |
 | 21 | `d493d27` | `feat(worker): keep a number's quality and tier current` |
 | 22+23 | `0601011` | `feat(web): protect the public endpoint before opening it` |
+| 25 | `92af5bd` | `feat(web): the webhook Meta posts to` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -323,7 +324,6 @@ neither is useful without the other. The route itself is next.
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
 | **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |
-| 25 | 28 | `feat(web): the webhook Meta posts to` |
 | 26 | 29 | `feat(web): show an operator the deliveries that never landed` |
 | 27 | 30 | `feat(web): serve a photo a customer sent` |
 | 28 | 31 | `feat(web): the numbers behind your WhatsApp connection` |
@@ -373,6 +373,30 @@ helps against that - so detection at the start of the next run is the durable
 answer rather than prevention.
 
 ---
+
+### C10. The dev database had drifted, and nothing was watching it
+
+Running the webhook end to end turned up a 500 on the bad-signature path that
+no unit test could see: `permission denied for table unroutable_webhooks`.
+
+Not the code. The **development** database was missing two of the three column
+grants `20260815160000` creates — `webhook_key_hash` and `attempt_count` — and
+those are exactly the two Prisma's upsert reads, one as the `ON CONFLICT`
+arbiter and one for the increment. The test database had all three, which is
+why the db suite passed throughout.
+
+Repaired in place with the two `GRANT SELECT (…)` statements rather than by
+nuking, since dev holds fixtures.
+
+The gap is the same shape as C6 and on the other database. `prisma migrate
+diff` cannot see column grants at all — they live in `pg_attribute.attacl`,
+which is why `COLUMN_GRANTS` exists in `schema-invariants.test.ts` — and that
+test runs against `whatsapp_os_test`. So nothing checks dev, and a drifted dev
+database presents as a route that works in tests and 500s in a browser.
+
+Not fixed here. The cheap version is pointing the same catalog assertions at
+dev behind a flag, or a `db:doctor` script an operator runs when something
+works in tests and not in the app.
 
 ### C9. A send that times out gets a status, not a marker
 

@@ -364,3 +364,130 @@ export async function applyStatusUpdate(
 
   return existing ? "stale" : "no_such_message";
 }
+
+/* ------------------------------------------------------------------------- *
+ * Read receipts
+ * ------------------------------------------------------------------------- */
+
+export interface ReadReceiptTarget {
+  /**
+   * Our row id for the newest inbound message, and the dedupe key.
+   *
+   * Ours rather than Meta's wamid because it is what the enqueue site already
+   * has in hand, and because it is stable - a wamid is Meta's identifier for a
+   * message and there is exactly one per inbound row anyway, so either would
+   * dedupe correctly. This one needs no second lookup.
+   */
+  messageId: string;
+  /** What the mark-read call addresses. Meta marks everything before it too. */
+  wamid: string;
+  /**
+   * The thread as the reader saw it. The unread reset is conditional on this,
+   * so a message that lands afterwards keeps its badge.
+   */
+  seenThrough: Date;
+}
+
+/**
+ * What opening this thread should tell Meta, or null if it should tell it
+ * nothing.
+ *
+ * ---------------------------------------------------------------------------
+ * Only the newest inbound message matters
+ * ---------------------------------------------------------------------------
+ *
+ * Marking one message read marks every earlier one read with it - that is
+ * Meta's behaviour, not an assumption - so a thread with forty unread messages
+ * is one call naming the last of them, never forty.
+ *
+ * ---------------------------------------------------------------------------
+ * Null is the common answer, and it is what stops the duplicate POSTs
+ * ---------------------------------------------------------------------------
+ *
+ * Null when there is nothing unread, or nothing inbound, or the newest inbound
+ * message has no wamid to name. The unread count is the test that matters:
+ * opening a thread that is already read is the ordinary case - people re-open
+ * threads constantly - and it must enqueue nothing at all rather than enqueue a
+ * job that discovers there is nothing to do.
+ *
+ * The same check serves the worker on a retry. If the POST succeeded and the
+ * reset succeeded, a second attempt finds the count at zero and does nothing;
+ * if the POST succeeded and the reset did not, the count is still up and the
+ * retry re-sends a call Meta treats as idempotent, then resets.
+ */
+export async function readReceiptTarget(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+): Promise<ReadReceiptTarget | null> {
+  const conversation = await db.conversation.findFirst({
+    where: { id: conversationId },
+    select: { unreadCount: true, lastMessageAt: true },
+  });
+
+  if (!conversation || conversation.unreadCount === 0) return null;
+  if (!conversation.lastMessageAt) return null;
+
+  const newest = await db.message.findFirst({
+    where: { conversationId, direction: "INBOUND", wamid: { not: null } },
+    /* The thread's own ordering, tie-broken the same way, so "newest" here and
+       "last" in the thread cannot disagree. */
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    select: { id: true, wamid: true },
+  });
+
+  if (!newest?.wamid) return null;
+
+  return {
+    messageId: newest.id,
+    wamid: newest.wamid,
+    seenThrough: conversation.lastMessageAt,
+  };
+}
+
+/**
+ * Clear the unread badge, but only if nothing has arrived since.
+ *
+ * ---------------------------------------------------------------------------
+ * Conditional, never an assignment - R1's second half
+ * ---------------------------------------------------------------------------
+ *
+ * `unread_count = 0` is a read-modify-write with the read in the operator's
+ * head: they opened the thread, and by the time the receipt has been sent and
+ * the reset runs, a message may have arrived. Assigning zero drops that
+ * message's badge silently - the thread looks read, nobody is told, and the
+ * customer waits.
+ *
+ * Exactly the failure the window advance has, and the same fix: compare against
+ * the state that was actually seen. `last_message_at <= seenThrough` means "the
+ * thread has not moved since the reader looked", so a message that arrived in
+ * between makes the statement match no rows and the badge survives.
+ *
+ * Two limits, stated because a conditional reset looks stricter than it is:
+ *
+ *   An outbound reply also moves last_message_at, so replying in the moment
+ *   between the receipt and the reset blocks it too. That is conservative
+ *   rather than wrong - the badge stays for one more open - and narrowing it to
+ *   last_inbound_at would trade that for a subtler question about which clock
+ *   the counter belongs to.
+ *
+ *   An inbound message delivered OUT OF ORDER - Meta does this - increments the
+ *   count without moving last_message_at, because that column is advanced with
+ *   GREATEST. The guard then passes and the badge is cleared for a message that
+ *   was never seen. Closing it needs the count itself in the predicate
+ *   (`unread_count = <observed>`), which is a tighter guard and a different
+ *   decision from the one recorded in R1.
+ */
+export async function markConversationRead(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+  seenThrough: Date,
+): Promise<boolean> {
+  const { count } = await db.conversation.updateMany({
+    where: { id: conversationId, lastMessageAt: { lte: seenThrough } },
+    data: { unreadCount: 0 },
+  });
+
+  return count > 0;
+}

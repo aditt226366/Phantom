@@ -14,6 +14,7 @@ import { handleIntegrationVerify } from "./jobs/integration-verify.ts";
 import { handleVaultReseal } from "./jobs/vault-reseal.ts";
 import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
 import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
+import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -61,6 +62,11 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.WHATSAPP_MEDIA_FETCH:
       return handleWhatsAppMediaFetch(
         parseJobPayload(JOB_NAMES.WHATSAPP_MEDIA_FETCH, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_MARK_READ:
+      return handleWhatsAppMarkRead(
+        parseJobPayload(JOB_NAMES.WHATSAPP_MARK_READ, job.data),
       );
 
     default:

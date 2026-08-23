@@ -113,6 +113,27 @@ export const whatsappMarkReadJobSchema = z.object({
 
 export type WhatsAppMarkReadJob = z.infer<typeof whatsappMarkReadJobSchema>;
 
+/**
+ * The job id for a read receipt, keyed on the thread AND the message.
+ *
+ * Opening a thread three times must not tell Meta three times. BullMQ refuses a
+ * job whose id it already holds, so the id is the deduplication - and it has to
+ * name the message, not just the conversation: keyed on the conversation alone,
+ * a genuinely new message arriving after the first open would be silently
+ * dropped as a duplicate and never marked read at all.
+ *
+ * The message id rather than the wamid, because the enqueue site has ours in
+ * hand and does not need a second lookup for Meta's.
+ *
+ * Dedup here is a burst guard, not a permanent record: BullMQ keeps completed
+ * ids for an hour. The rule that stops the steady-state noise is upstream -
+ * readReceiptTarget returns null when nothing is unread, so re-opening a thread
+ * that is already read enqueues nothing at all.
+ */
+export function markReadJobId(conversationId: string, messageId: string): string {
+  return `read:${conversationId}:${messageId}`;
+}
+
 export const whatsappMediaFetchJobSchema = z.object({
   companyId: z.string().min(1),
   messageId: z.string().min(1),

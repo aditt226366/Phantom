@@ -29,10 +29,13 @@ export {
   canSend,
   advanceConversation,
   applyStatusUpdate,
+  readReceiptTarget,
+  markConversationRead,
 } from "./conversations.ts";
 export type {
   Sendability,
   ConversationActivity,
+  ReadReceiptTarget,
   StatusOutcome,
   StatusUpdateInput,
 } from "./conversations.ts";

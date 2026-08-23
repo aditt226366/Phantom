@@ -581,6 +581,12 @@ enum MessageDirection {
 /// failure and leave a message reading as on-its-way for ever.
 enum MessageStatus {
   PENDING
+  /// Handed to Meta, and Meta never answered. Not FAILED - we do not know it
+  /// failed; not SENT - we do not know it sent; and deliberately not PENDING,
+  /// because anything that claims work by status would pick it up and send it
+  /// again. There is no wamid, so no callback can ever resolve it: only a
+  /// person can, by looking at WhatsApp. See 20260816120000.
+  UNCONFIRMED
   /// Meta answered 200 and gave us a wamid, then held the message for quality
   /// assessment instead of sending it. Written from the send response, never
   /// from a status callback - Meta reports it on the POST and nowhere else.

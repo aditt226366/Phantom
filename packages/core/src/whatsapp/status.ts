@@ -9,6 +9,7 @@
 
 export const MESSAGE_STATUSES = [
   "PENDING",
+  "UNCONFIRMED",
   "HELD",
   "SENT",
   "FAILED",
@@ -70,6 +71,19 @@ export type MessageStatusName = (typeof MESSAGE_STATUSES)[number];
  * Above PENDING because a wamid exists: the message is Meta's problem now, and
  * a retry would send a second copy.
  *
+ * ---------------------------------------------------------------------------
+ * Why UNCONFIRMED sits between PENDING and HELD
+ * ---------------------------------------------------------------------------
+ *
+ * It means the send timed out: handed over, and Meta never answered. Above
+ * PENDING because a retry is no longer free - Meta may have sent it. Below HELD
+ * because HELD carries a wamid, which is strictly more than we know here.
+ *
+ * The rank barely matters for this one, and the reason is worth knowing: with
+ * no wamid, no callback can ever match the row, so nothing will move it. It is
+ * ranked anyway because the map has to be total - a status missing from it
+ * renders as a NULL arm in the SQL CASE and silently stops comparing.
+ *
  * Below SENT because Meta has not sent it, and that is the direction with a
  * cost. A message released from hold gets an ordinary `sent` callback
  * afterwards; ranked above SENT, the guard would read that callback as a step
@@ -78,11 +92,12 @@ export type MessageStatusName = (typeof MESSAGE_STATUSES)[number];
  */
 const MESSAGE_STATUS_RANK: Readonly<Record<MessageStatusName, number>> = {
   PENDING: 0,
-  HELD: 1,
-  SENT: 2,
-  FAILED: 3,
-  DELIVERED: 4,
-  READ: 5,
+  UNCONFIRMED: 1,
+  HELD: 2,
+  SENT: 3,
+  FAILED: 4,
+  DELIVERED: 5,
+  READ: 6,
 };
 
 export function statusRank(status: MessageStatusName): number {

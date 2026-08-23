@@ -16,6 +16,7 @@ import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
 import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
 import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
+import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -58,6 +59,15 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.WHATSAPP_WEBHOOK:
       return handleWhatsAppWebhook(
         parseJobPayload(JOB_NAMES.WHATSAPP_WEBHOOK, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_MESSAGE_SEND:
+      /*
+       * No job id is threaded through: usage is deduped on the message id, not
+       * the job (C3), and this job runs once by contract anyway.
+       */
+      return handleWhatsAppMessageSend(
+        parseJobPayload(JOB_NAMES.WHATSAPP_MESSAGE_SEND, job.data),
       );
 
     case JOB_NAMES.WHATSAPP_MEDIA_FETCH:

@@ -1,0 +1,285 @@
+import {
+  decrypt,
+  secretAad,
+  usageDedupeKey,
+  type WhatsAppMessageSendJob,
+} from "@whatsapp-os/core";
+import { sendWhatsAppText } from "@whatsapp-os/core/whatsapp";
+import {
+  canSend,
+  recordSendAccepted,
+  recordSendDeclined,
+  recordSendRefused,
+  recordSendUnconfirmed,
+  recordUsage,
+  withCompany,
+  type CompanyClient,
+} from "@whatsapp-os/db";
+import { keyring } from "../keyring.ts";
+import { log } from "../logger.ts";
+
+/**
+ * Hand one already-persisted message to Meta, and remember what it called it.
+ *
+ * The composer writes the row and enqueues; this is the only thing that talks
+ * to Meta. Everything about the shape follows from one fact: /messages has no
+ * idempotency key and no "did this land" lookup, so a repeat is a repeat.
+ *
+ *   attempts: 1                 lives in SEND_JOB_OPTIONS rather than here, so
+ *                               the rule travels with the contract instead of
+ *                               with one call site
+ *   sendAttempt in the job id   BullMQ keeps completed ids for an hour and
+ *                               failed ones for a day, so a retry re-enqueued
+ *                               under the first attempt's id is silently
+ *                               dropped and the button appears to do nothing
+ *   read, close, call, write    no provider call inside a transaction
+ */
+
+export type SendResult =
+  | "sent"
+  | "held"
+  | "declined"
+  | "refused"
+  | "unconfirmed"
+  | "already_sent"
+  | "unknown_message";
+
+export async function handleWhatsAppMessageSend(
+  payload: WhatsAppMessageSendJob,
+): Promise<{ result: SendResult }> {
+  const { companyId, messageId } = payload;
+
+  /* 1. Read the message and the credentials, then close the scope. */
+  const loaded = await withCompany(companyId, (db) =>
+    db.message.findFirst({
+      where: { id: messageId },
+      select: {
+        id: true,
+        conversationId: true,
+        body: true,
+        wamid: true,
+        conversation: {
+          select: {
+            contact: { select: { id: true, waId: true } },
+            whatsappNumber: {
+              select: {
+                integrationId: true,
+                integration: {
+                  select: { secrets: { select: { key: true, ciphertext: true } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  if (!loaded) return { result: "unknown_message" };
+
+  if (loaded.wamid) {
+    /*
+     * Meta has already named this message, so it has already been handed over.
+     * Refusing to send again is the point of attempts: 1 - a second POST here
+     * reaches a real customer twice and cannot be un-sent.
+     */
+    log.warn("send skipped: the message already has a wamid", {
+      companyId,
+      messageId,
+    });
+    return { result: "already_sent" };
+  }
+
+  const number = loaded.conversation.whatsappNumber;
+
+  /* 2. Decrypt. CPU only, nothing open. */
+  const secrets: Record<string, string> = {};
+  for (const row of number.integration.secrets) {
+    secrets[row.key] = decrypt(
+      row.ciphertext,
+      keyring(),
+      secretAad(companyId, number.integrationId, row.key),
+    );
+  }
+
+  /*
+   * 3. canSend, as late as a database read can be: after the decrypt, in its
+   * own short scope, immediately before the call.
+   *
+   * The composer already ran this and showed the operator an answer. It runs
+   * again because that answer is minutes old by the time a queue has been
+   * through it, and the 24-hour window can close in between - which is exactly
+   * the case where the composer said yes and Meta would say no. This one is the
+   * boundary; the other is feedback.
+   */
+  const now = new Date();
+
+  const sendability = await withCompany(companyId, (db, scoped) =>
+    canSend(db, scoped, loaded.conversationId, { kind: "freeform" }, now),
+  );
+
+  if (!sendability) return { result: "unknown_message" };
+
+  if (!sendability.decision.allowed) {
+    const reason = sendability.decision.reason;
+
+    /*
+     * Written to the row, not only logged. A refusal the operator cannot see is
+     * a message that silently never went, and the thread is where they look.
+     */
+    await withCompany(companyId, (db, scoped) =>
+      recordSendDeclined(db, scoped, messageId, reason, now),
+    );
+
+    log.info("send declined by policy", { companyId, messageId, reason });
+    return { result: "declined" };
+  }
+
+  /* 4. The call. No scope is open. */
+  const outcome = await sendWhatsAppText(secrets, {
+    to: sendability.waId,
+    body: loaded.body ?? "",
+  });
+
+  /* 5. Write what happened. */
+  if (outcome.ok) {
+    await withCompany(companyId, async (db, scoped) => {
+      await recordSendAccepted(db, scoped, messageId, {
+        wamid: outcome.wamid,
+        held: outcome.held,
+        waId: outcome.waId,
+      });
+
+      await reconcileWaId(db, {
+        contactId: loaded.conversation.contact.id,
+        stored: loaded.conversation.contact.waId,
+        canonical: outcome.waId,
+        companyId,
+        messageId,
+      });
+
+      /*
+       * Deduped on OUR message id, never the wamid - correction C3. The wamid
+       * does not exist until Meta answers, so a send that timed out and was
+       * retried produces a second wamid for the same message row, and this
+       * table becomes an invoice.
+       */
+      await recordUsage(db, scoped, {
+        kind: "whatsapp.message.sent",
+        dedupeKey: usageDedupeKey("whatsapp.message.sent", messageId),
+      });
+    });
+
+    log.info("message sent", {
+      companyId,
+      messageId,
+      wamid: outcome.wamid,
+      held: outcome.held,
+    });
+
+    return { result: outcome.held ? "held" : "sent" };
+  }
+
+  if (outcome.delivery === "refused") {
+    /*
+     * Meta answered, so non-delivery is proven and a retry cannot duplicate
+     * anything. Its own code and title are stored, because they are what the
+     * thread shows and what a support conversation quotes.
+     */
+    await withCompany(companyId, (db, scoped) =>
+      recordSendRefused(db, scoped, messageId, {
+        code: readCode(outcome.details),
+        title: outcome.error,
+        occurredAt: new Date(),
+      }),
+    );
+
+    log.warn("Meta refused the message", {
+      companyId,
+      messageId,
+      kind: outcome.kind,
+      error: outcome.error,
+    });
+
+    return { result: "refused" };
+  }
+
+  /*
+   * No answer at all. Meta may have sent it and may not, and no query resolves
+   * the ambiguity - which is why this job runs once, and why the row gets a
+   * status of its own rather than being left looking unsent.
+   *
+   * No usage is recorded. If Meta did send it we under-bill by one message,
+   * which is the right way round to be wrong about somebody's invoice.
+   */
+  await withCompany(companyId, (db, scoped) =>
+    recordSendUnconfirmed(db, scoped, messageId),
+  );
+
+  log.error("send outcome unknown", { companyId, messageId, error: outcome.error });
+
+  return { result: "unconfirmed" };
+}
+
+/** Meta's error code, when the decoder kept one. */
+function readCode(details: Record<string, unknown> | undefined): number | null {
+  const code = details?.["code"];
+  return typeof code === "number" ? code : null;
+}
+
+/**
+ * Point the contact at the wa_id Meta actually uses.
+ *
+ * Brazil and Mexico have historically differed by a digit between the number
+ * that messages and the wa_id it arrives as. Send to one form and the reply
+ * comes back under the other, which creates a second contact - with its own
+ * conversation and its own 24-hour window - for the same person, and neither
+ * half then holds the whole thread. It is the reason wa_id is the contact key
+ * rather than the normalised number.
+ *
+ * Not attempted when it would collide. If another contact already holds the
+ * canonical wa_id then these are two rows for one person, and merging them
+ * means moving conversations and messages between them: a bigger operation than
+ * a send job should perform, and not one that should happen as a side effect of
+ * a message going out. It is logged for somebody to decide about.
+ */
+async function reconcileWaId(
+  db: CompanyClient,
+  input: {
+    contactId: string;
+    stored: string;
+    canonical: string | null;
+    companyId: string;
+    messageId: string;
+  },
+): Promise<void> {
+  const { canonical, stored, contactId } = input;
+
+  if (!canonical || canonical === stored) return;
+
+  const clash = await db.contact.findFirst({
+    where: { waId: canonical },
+    select: { id: true },
+  });
+
+  if (clash && clash.id !== contactId) {
+    log.warn("two contacts for one wa_id", {
+      companyId: input.companyId,
+      messageId: input.messageId,
+      stored,
+      canonical,
+    });
+    return;
+  }
+
+  await db.contact.update({
+    where: { id: contactId },
+    data: { waId: canonical },
+  });
+
+  log.info("contact wa_id reconciled", {
+    companyId: input.companyId,
+    stored,
+    canonical,
+  });
+}

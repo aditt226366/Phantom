@@ -1,0 +1,57 @@
+-- A message we handed to Meta and never heard back about.
+--
+-- The send job runs with attempts: 1 because Meta's /messages endpoint has no
+-- idempotency key and no "did this land" lookup, so a timeout AFTER Meta
+-- processed the request is indistinguishable from one before it did. An
+-- automatic retry there sends a real customer the same message twice.
+--
+-- That leaves the row in a state the existing ladder cannot express. It is not
+-- FAILED - we do not know that it failed, and showing a failure invites a retry
+-- that may duplicate. It is not SENT - we do not know that either, and a
+-- confident tick is the worst of the three lies. And leaving it PENDING is the
+-- stuck-forever bubble in a new costume.
+--
+-- ---------------------------------------------------------------------------
+-- Why a status rather than PENDING plus an error code
+-- ---------------------------------------------------------------------------
+--
+-- Marking it PENDING and setting a distinct error field would render correctly
+-- and costs no migration. It was rejected for one reason, and it is in this
+-- schema already:
+--
+--     @@index([companyId, status])   "The send worker claims rows by status."
+--
+-- Anything that claims work by status - a resume sweep, Phase 5's bulk queue,
+-- an operator tool - selects PENDING rows and sends them. A row that is
+-- PENDING-with-an-error is picked up by every one of those unless each
+-- remembers to add "and no error", which is a convention, not a guarantee, and
+-- the failure it produces is the exact duplicate send attempts: 1 exists to
+-- prevent.
+--
+-- A distinct member makes that query correct by construction rather than by
+-- everyone remembering.
+--
+-- ---------------------------------------------------------------------------
+-- Where it sits, and why nothing will ever move it
+-- ---------------------------------------------------------------------------
+--
+--   PENDING 0 · UNCONFIRMED 1 · HELD 2 · SENT 3 · FAILED 4 · DELIVERED 5 · READ 6
+--
+-- Above PENDING: we did hand it over, and a retry is no longer free. Below
+-- HELD: HELD means Meta answered and gave us a wamid, which is strictly more
+-- than we know here.
+--
+-- The rank is close to decoration in this one case, and that is worth stating.
+-- There is no wamid - Meta never answered - so no status callback can ever
+-- match this row, and it cannot advance on its own. If Meta did send the
+-- message, the sent/delivered/read callbacks arrive for a wamid we do not hold,
+-- reach applyStatusUpdate's no_such_message branch, and are dropped by
+-- correction C7. Only a person can resolve it, by looking at WhatsApp.
+--
+-- Which is what the thread says: "delivery unknown - check WhatsApp before
+-- sending again", with retry offered and explicitly warned as possibly
+-- duplicating. error_title carries that sentence; error_source stays NULL,
+-- because nobody refused this - Meta did not answer and we did not decline.
+-- A null source beside a populated title is the shape that means "no verdict".
+
+ALTER TYPE "message_status" ADD VALUE 'UNCONFIRMED' AFTER 'PENDING';

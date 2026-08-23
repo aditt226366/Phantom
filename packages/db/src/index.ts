@@ -39,6 +39,15 @@ export type {
   StatusOutcome,
   StatusUpdateInput,
 } from "./conversations.ts";
+export {
+  recordSendAccepted,
+  recordSendRefused,
+  recordSendUnconfirmed,
+  recordSendDeclined,
+  describeRefusal,
+  DELIVERY_UNKNOWN_TITLE,
+} from "./send.ts";
+export type { SendAcceptance } from "./send.ts";
 export { applyNumberRefresh, MISSING_FROM_META_LIST } from "./numbers.ts";
 export type { NumberRefreshCounts } from "./numbers.ts";
 export { ingestWebhookDelivery } from "./webhook-ingest.ts";

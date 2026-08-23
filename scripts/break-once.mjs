@@ -143,6 +143,41 @@ if (git(["add", "--", file]).status !== 0) {
   fail(`could not stage ${file}.`);
 }
 
+/*
+ * The baseline run, and it is not optional.
+ *
+ * Without it this script decides the break was observed from a single fact -
+ * the command exited non-zero - and a command can exit non-zero for reasons
+ * that have nothing to do with the break. Not hypothetical: it once reported
+ * "the command failed with the break applied, as it should have" when the
+ * command had failed because Postgres was down and vitest never ran a test at
+ * all. A false pass, from the tool whose whole job is to prevent them.
+ *
+ * A mistyped test path does the same thing - "No test files found" exits 1 and
+ * is indistinguishable from a break being caught.
+ *
+ * So the command must PASS before the break, or the run afterwards is not
+ * attributable to it. This doubles the wall clock, and that is the price of
+ * the result meaning what it says.
+ */
+console.log(`\nbreak-once: baseline (before the break) - ${command}\n`);
+const baseline = spawnSync(command, { shell: true, stdio: "inherit" });
+
+if (baseline.status !== 0) {
+  fail(
+    [
+      `the command FAILED before the break was applied (exit ${baseline.status}).`,
+      "",
+      "  Nothing that happens after this would be attributable to the break, so",
+      "  the run is refused rather than reported. Usual causes, in order:",
+      "",
+      "    the environment is down       npm run services:up",
+      "    the filter matches no tests   check the path in --command",
+      "    something is already failing  fix that first",
+    ].join("\n"),
+  );
+}
+
 writeFileSync(file, original.replace(find, replace));
 
 console.log(`\nbreak-once: applied to ${file}\n`);
@@ -181,5 +216,5 @@ if (run.status === 0) {
 }
 
 console.log(
-  `break-once: the command failed with the break applied, as it should have.\n`,
+  `break-once: the command passed clean, then failed with the break applied.\n`,
 );

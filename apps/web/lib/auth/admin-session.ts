@@ -1,6 +1,6 @@
 import "server-only";
-import { createHmac } from "node:crypto";
 import { cache } from "react";
+import { hashIp } from "./ip-hash.ts";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -55,11 +55,6 @@ export interface AdminSessionContext {
   adminUserId: string;
   username: string;
   csrfSecret: string;
-}
-
-function hashIp(ip: string): string {
-  const key = process.env["ENCRYPTION_KEY"] ?? "";
-  return createHmac("sha256", key).update(ip).digest("hex");
 }
 
 export const getAdminSession = cache(

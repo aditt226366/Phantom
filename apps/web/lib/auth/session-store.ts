@@ -1,5 +1,5 @@
 import "server-only";
-import { createHmac } from "node:crypto";
+import { hashIp } from "./ip-hash.ts";
 import {
   generateCsrfSecret,
   hashToken,
@@ -59,19 +59,6 @@ export interface SessionContext {
 export interface SessionMeta {
   ip?: string | undefined;
   userAgent?: string | undefined;
-}
-
-/**
- * Hash an IP before storing it.
- *
- * An unsalted digest of an IPv4 address is not anonymisation — the whole
- * keyspace is four billion entries and reverses in seconds. Keying the HMAC
- * with the application secret means the stored value is only correlatable by
- * something that already holds the key.
- */
-function hashIp(ip: string): string {
-  const key = process.env["ENCRYPTION_KEY"] ?? "";
-  return createHmac("sha256", key).update(ip).digest("hex");
 }
 
 /**

@@ -32,6 +32,7 @@ import {
   endAdminSession,
   getAdminSession,
 } from "@/lib/auth/admin-session";
+import { evictWebhookSecrets } from "@/lib/webhook-secrets.ts";
 import { requestContext } from "@/lib/auth/request";
 import { safeNextPath } from "@/lib/auth/safe-next";
 
@@ -110,6 +111,17 @@ export async function saveIntegrationAction(
   });
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
+
+  /*
+   * Beside the revalidate, and for the same reason: something is holding a
+   * stale copy of what just changed. The page holds a rendered badge; this
+   * process holds a decrypted app secret, and a rotated secret that keeps
+   * failing signatures for another minute reads exactly like a save that did
+   * not work.
+   *
+   * Reaches THIS instance only. Others converge when their entries expire.
+   */
+  evictWebhookSecrets(companyId);
 
   const saved =
     result.saved.length === 0
@@ -224,6 +236,9 @@ export async function disconnectIntegrationAction(
   });
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
+  /* Otherwise a disconnected integration keeps verifying deliveries from cache
+     for up to the TTL. */
+  evictWebhookSecrets(companyId);
   redirect(`/admin/companies/${companyId}/integrations`);
 }
 

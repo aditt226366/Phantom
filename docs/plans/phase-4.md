@@ -270,7 +270,7 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (40 commits on `phase-4a`)
+### Done — 4a (43 commits on `phase-4a`)
 
 Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
@@ -304,6 +304,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | — | `05440ac` | `refactor(db): store instants, not wall clocks` |
 | 17 | `9666eb7` | `feat(worker): turn a delivered webhook into a conversation` |
 | 18 | `0064185` | `feat(worker): fetch inbound media before Meta's link expires` |
+| 19 | `6e9abca` | `feat(worker): send a message and remember what Meta called it` |
 | 20 | `1fdad02` | `feat(worker): mark a thread read when somebody opens it` |
 | 21 | `d493d27` | `feat(worker): keep a number's quality and tier current` |
 
@@ -314,13 +315,10 @@ Both numberings appear below where it matters.
 
 ### Remaining — 4a
 
-**19 is still open.** The mark-read job landed before the send worker, out of
-plan order and with no dependency between them — 20 needs only
-`markWhatsAppRead`, which the Graph adapter has carried since `5299e4f`.
+**Every worker commit is done.** What remains is the web layer.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| 19 | 22 | `feat(worker): send a message and remember what Meta called it` |
 | 22 | 25 | `feat(web): throttle a public endpoint the way we throttle sign-in` |
 | 23 | 26 | `feat(web): hold a webhook's secret briefly, and drop it when it changes` |
 | **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |
@@ -374,6 +372,35 @@ helps against that - so detection at the start of the next run is the durable
 answer rather than prevention.
 
 ---
+
+### C9. A send that times out gets a status, not a marker
+
+The third outcome of a send had no home. Meta's /messages has no idempotency
+key and no "did this land" lookup, so a timeout after Meta processed the
+request is indistinguishable from one before it did — which is why the job runs
+with `attempts: 1`, and which leaves a row the ladder could not describe.
+
+Not `FAILED`: we do not know it failed, and a failure invites a retry as though
+it were free. Not `SENT`: we do not know that either. Not bare `PENDING`: that
+is the stuck-forever bubble in a new costume.
+
+The cheap option was `PENDING` plus a distinct error code. Rejected on a query
+rather than a rendering — this schema already says *"the send worker claims rows
+by status"* over `@@index([companyId, status])`. Anything claiming work that way
+selects `PENDING` and sends it, so a marked `PENDING` row is one forgotten `AND`
+clause away from the duplicate send `attempts: 1` exists to prevent.
+
+So `MessageStatus.UNCONFIRMED`, added in `20260816120000`, ranked between
+PENDING and HELD. `errorTitle` carries *"delivery unknown — check WhatsApp
+before sending again; retrying may send this message twice"*; `errorSource`
+stays **null**, because nobody refused it — Meta said nothing and we did not
+decline, and a populated title beside a null source is the shape that means "no
+verdict".
+
+Nothing will ever move it on its own. There is no wamid, so no callback can
+match the row; if Meta did send it, the callbacks arrive for a wamid we do not
+hold and are dropped by C7. Only a person can resolve it, and no usage is
+recorded — under-billing by one message is the right way round to be wrong.
 
 ### C8. `WhatsAppNumberStatus` was our enum for Meta's vocabulary
 

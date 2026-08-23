@@ -39,6 +39,8 @@ export type {
   StatusOutcome,
   StatusUpdateInput,
 } from "./conversations.ts";
+export { applyNumberRefresh, MISSING_FROM_META_LIST } from "./numbers.ts";
+export type { NumberRefreshCounts } from "./numbers.ts";
 export { ingestWebhookDelivery } from "./webhook-ingest.ts";
 export type { IngestSummary, MediaFetchRequest } from "./webhook-ingest.ts";
 export { recordUnroutableWebhook } from "./unroutable-webhooks.ts";

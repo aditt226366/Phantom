@@ -154,9 +154,31 @@ export interface SkippedChange {
   field: string | null;
 }
 
+/**
+ * Meta says a number's quality or messaging tier moved.
+ *
+ * Carried as a TRIGGER, not as data. The payload names a display number and an
+ * event, and neither is what we store: the display number is not a key - Meta
+ * has changed its spacing - and one event is a worse description of a number's
+ * state than the number's state is. So this causes a refresh, which asks Meta
+ * for the whole account and writes what comes back.
+ *
+ * The fields are kept anyway, because a log line saying which number and which
+ * event is the difference between "a refresh ran" and knowing why.
+ */
+export interface NumberQualityUpdate {
+  kind: "quality";
+  displayPhoneNumber: string | null;
+  /** Meta's own event string, e.g. FLAGGED, UPGRADE, DOWNGRADE. */
+  event: string | null;
+  currentLimit: string | null;
+}
+
 export interface ParsedWebhook {
   messages: InboundMessage[];
   statuses: StatusUpdate[];
+  /** Numbers Meta says have changed. A reason to refresh, not a source. */
+  qualityUpdates: NumberQualityUpdate[];
   /** Everything that could not be turned into one of the above, and why. */
   skipped: SkippedChange[];
 }
@@ -196,7 +218,12 @@ function readMedia(
  * over the raw text before this, in @whatsapp-os/core/whatsapp-server.
  */
 export function parseWebhookPayload(body: unknown): ParsedWebhook {
-  const result: ParsedWebhook = { messages: [], statuses: [], skipped: [] };
+  const result: ParsedWebhook = {
+    messages: [],
+    statuses: [],
+    qualityUpdates: [],
+    skipped: [],
+  };
 
   const envelope = envelopeSchema.safeParse(body);
   if (!envelope.success) {
@@ -226,6 +253,26 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
        * and the refresh job respectively - recorded as skipped rather than
        * dropped, so the count is honest.
        */
+      if (field === "phone_number_quality_update") {
+        /*
+         * The third thing that triggers a numbers refresh, alongside a person
+         * pressing Refresh and a successful verification. Recorded here and
+         * acted on by the worker, which re-reads the account rather than
+         * trusting the notification's own contents.
+         */
+        const raw = value as Record<string, unknown>;
+        const str = (v: unknown): string | null =>
+          typeof v === "string" && v.length > 0 ? v : null;
+
+        result.qualityUpdates.push({
+          kind: "quality",
+          displayPhoneNumber: str(raw["display_phone_number"]),
+          event: str(raw["event"]),
+          currentLimit: str(raw["current_limit"]),
+        });
+        continue;
+      }
+
       if (field !== "messages") {
         result.skipped.push({ reason: "unhandled_field", field });
         continue;

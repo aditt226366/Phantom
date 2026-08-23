@@ -15,6 +15,7 @@ import { handleVaultReseal } from "./jobs/vault-reseal.ts";
 import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
 import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
 import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
+import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -67,6 +68,13 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.WHATSAPP_MARK_READ:
       return handleWhatsAppMarkRead(
         parseJobPayload(JOB_NAMES.WHATSAPP_MARK_READ, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_NUMBERS_REFRESH:
+      /* The job id is the usage dedupe key, as with integration.verify. */
+      return handleWhatsAppNumbersRefresh(
+        parseJobPayload(JOB_NAMES.WHATSAPP_NUMBERS_REFRESH, job.data),
+        job.id ?? `${job.name}:${job.timestamp}`,
       );
 
     default:

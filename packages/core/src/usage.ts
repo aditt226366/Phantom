@@ -55,6 +55,13 @@ export const USAGE_KINDS = [
   "whatsapp.conversation.utility",
   "whatsapp.conversation.authentication",
   "whatsapp.conversation.service",
+  /*
+   * One metadata read of a company's numbers. Meta charges nothing for it and
+   * it is recorded anyway: it is an API call we chose to make, it is the thing
+   * a dashboard would otherwise make on every render, and a rate that starts
+   * climbing is the first sign somebody wired it to a page load after all.
+   */
+  "whatsapp.numbers.refresh",
 ] as const;
 
 export type UsageKind = (typeof USAGE_KINDS)[number];
@@ -110,6 +117,7 @@ const PRICES: readonly UsagePrice[] = [
   { kind: "whatsapp.conversation.utility", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.conversation.authentication", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.conversation.service", currency: "INR", version: 1, micros: 0 },
+  { kind: "whatsapp.numbers.refresh", currency: "INR", version: 1, micros: 0 },
 ];
 
 /** The conversation kind for one of Meta's pricing categories, if we know it. */

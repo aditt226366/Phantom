@@ -69,7 +69,10 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv.slice(2));
 
 for (const required of ["file", "find", "replace", "command"]) {
-  if (!args[required]) fail(`--${required} is required.`);
+  /* Presence, not truthiness: `--replace ''` is a legitimate break - deleting a
+     guard is often the cleanest way to remove it - and a falsy check refused
+     it. */
+  if (args[required] === undefined) fail(`--${required} is required.`);
 }
 
 const { file, find, replace, command } = args;

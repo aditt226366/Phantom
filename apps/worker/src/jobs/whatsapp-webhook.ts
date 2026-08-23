@@ -28,6 +28,23 @@ export async function handleWhatsAppWebhook(
     await enqueueMediaFetch(companyId, request);
   }
 
+  /*
+   * Meta told us a number's quality or tier moved. The third trigger for a
+   * refresh, and the notification is treated as a reason to look rather than as
+   * data: the job re-reads the whole account and writes what comes back.
+   *
+   * The job id collapses a burst - Meta sends one of these per number and they
+   * arrive together - into a single Graph call for the delivery that carried
+   * them.
+   */
+  if (summary.numberQualityUpdates > 0) {
+    await systemQueue.add(
+      JOB_NAMES.WHATSAPP_NUMBERS_REFRESH,
+      { companyId },
+      { jobId: `numbers:${companyId}:${eventId}` },
+    );
+  }
+
   const result = {
     status: summary.status,
     inserted: summary.inserted,
@@ -41,6 +58,7 @@ export async function handleWhatsAppWebhook(
     ...result,
     messages: summary.messages,
     statuses: summary.statuses,
+    qualityUpdates: summary.numberQualityUpdates,
     /* Machine codes, and only the distinct ones - a batch of forty statuses for
        messages sent from Business Manager should be one line, not forty. */
     ...(summary.skipped.length > 0

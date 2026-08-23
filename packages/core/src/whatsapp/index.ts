@@ -42,9 +42,12 @@ export type {
   MediaMetadataOutcome,
   WhatsAppMediaMetadata,
 } from "./media.ts";
+export { fetchWhatsAppNumbers } from "./numbers.ts";
+export type { NumbersFetchOutcome, WhatsAppNumberFacts } from "./numbers.ts";
 export { parseWebhookPayload } from "./payload.ts";
 export type {
   InboundMessage,
+  NumberQualityUpdate,
   ParsedWebhook,
   SkippedChange,
   StatusUpdate,

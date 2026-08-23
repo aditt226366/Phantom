@@ -69,6 +69,15 @@ export interface IngestSummary {
   skipped: IngestSkipReason[];
   /** For the caller to enqueue, once it is no longer holding a scope. */
   media: MediaFetchRequest[];
+  /**
+   * Meta said a number's quality or tier moved, so the cache is stale.
+   *
+   * A count rather than the payload's contents, deliberately: the refresh reads
+   * the whole account from Meta and writes what comes back, so the notification
+   * is a reason to look, not a thing to store. Enqueued by the caller, like the
+   * media requests, once no scope is open.
+   */
+  numberQualityUpdates: number;
 }
 
 function emptySummary(status: IngestSummary["status"]): IngestSummary {
@@ -80,6 +89,7 @@ function emptySummary(status: IngestSummary["status"]): IngestSummary {
     advanced: 0,
     skipped: [],
     media: [],
+    numberQualityUpdates: 0,
   };
 }
 
@@ -183,6 +193,12 @@ export async function ingestWebhookDelivery(
       messages: parsed.messages.length,
       statuses: parsed.statuses.length,
       media: await outstandingMedia(companyId, parsed.messages),
+      /*
+       * Deliberately zero. A refresh for this delivery was enqueued when it was
+       * first processed, and re-enqueueing on every redelivery would turn one
+       * of Meta's retries into a second Graph call for no new information.
+       */
+      numberQualityUpdates: 0,
     };
   }
 
@@ -261,6 +277,7 @@ export async function ingestWebhookDelivery(
     advanced,
     skipped,
     media,
+    numberQualityUpdates: parsed.qualityUpdates.length,
   };
 }
 

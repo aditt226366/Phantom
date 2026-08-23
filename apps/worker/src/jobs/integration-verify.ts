@@ -9,8 +9,10 @@ import {
   type VerificationOutcome,
 } from "@whatsapp-os/core";
 import { recordUsage, withCompany, type Prisma } from "@whatsapp-os/db";
+import { JOB_NAMES } from "@whatsapp-os/core";
 import { keyring } from "../keyring.ts";
 import { log } from "../logger.ts";
+import { systemQueue } from "../queue.ts";
 
 /**
  * Check a company's integrations against the real providers.
@@ -107,6 +109,33 @@ export async function handleIntegrationVerify(
     checked: loaded.length,
     ok,
   });
+
+  /*
+   * A successful verification is the moment a WhatsApp number's metadata is
+   * most likely to be missing and the credentials are known good, so it is one
+   * of the three things that trigger a refresh - the others being a person
+   * pressing Refresh and Meta's phone_number_quality_update webhook.
+   *
+   * Enqueued after the loop and outside every scope: this is a Redis call, and
+   * the refresh is somebody else's job by design. Failing to enqueue must not
+   * fail the verification that already succeeded and was already recorded, so
+   * it is caught and logged rather than thrown - the next verification, webhook
+   * or button press will do it.
+   */
+  if (ok > 0) {
+    try {
+      await systemQueue.add(
+        JOB_NAMES.WHATSAPP_NUMBERS_REFRESH,
+        { companyId },
+        { jobId: `numbers:${companyId}:${jobId}` },
+      );
+    } catch (error) {
+      log.warn("could not enqueue a numbers refresh after verification", {
+        companyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   return { checked: loaded.length, ok };
 }

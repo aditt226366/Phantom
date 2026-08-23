@@ -525,7 +525,23 @@ model WhatsAppNumber {
 
   /// When this row last agreed with Meta. Everything above it is a cache, and a
   /// cache with no age is a claim nobody can check. Null means never fetched.
+  ///
+  /// Read by the numbers page to say how stale the data is. Never a trigger to
+  /// go and fetch: a Graph call on page load is the thing this cache exists to
+  /// prevent, and staleness shown honestly beats a dashboard that calls Meta
+  /// every time somebody opens it.
   metadataRefreshedAt DateTime? @db.Timestamptz(3) @map("metadata_refreshed_at")
+
+  /// When Meta first stopped returning this number, or null if it still does.
+  ///
+  /// Set rather than deleting the row: a number absent because somebody removed
+  /// it in Business Manager and one absent because a single API call came back
+  /// short look identical from here, and only one is real. Untouched by later
+  /// refreshes that also miss it, so the age of the absence is readable, and
+  /// cleared the moment Meta returns it again.
+  missingSince  DateTime? @db.Timestamptz(3) @map("missing_since")
+  /// Why, as a machine code - the shape skipped_reason uses elsewhere.
+  missingReason String?   @map("missing_reason")
 
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
   updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")

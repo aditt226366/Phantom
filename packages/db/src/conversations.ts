@@ -323,6 +323,39 @@ export async function applyStatusUpdate(
    *
    * The extra read happens only on the paths that did not advance. The common
    * case stays one statement.
+   *
+   * -------------------------------------------------------------------------
+   * no_such_message DROPS the callback, and that is a decision (C7)
+   * -------------------------------------------------------------------------
+   *
+   * Nothing redelivers a webhook we answered 200 to, so a status that lands
+   * here is gone. Including the one case that looks alarming: Meta can deliver
+   * `sent` for a wamid before the send job has finished storing it.
+   *
+   * It was weighed against a small orphan_statuses table, keyed on
+   * (company_id, wamid) and drained by the send worker after it writes the
+   * wamid. Rejected, for reasons that hold only as long as this stays true:
+   *
+   *   THE SEND WORKER WRITES SENT (or HELD) FROM THE GRAPH RESPONSE ITSELF,
+   *   in the same update that stores the wamid.
+   *
+   * That is what makes a lost `sent` redundant rather than load-bearing - the
+   * status floor comes from the response, not from the callback, so no message
+   * is left reading PENDING for ever. What a lost callback can still cost is a
+   * DELIVERED or READ, leaving the ticks grey on a message that arrived; that
+   * needs the whole webhook chain to beat an UPDATE already in flight, and a
+   * later `read` rescues the thread anyway because the ladder is monotonic.
+   *
+   * The table was also not the tidy option it appears to be. Most of what
+   * arrives here is a wamid that will never be ours - somebody replying from
+   * Business Manager - and nothing drains those, so it would need a retention
+   * job on day one and an extra read on the send path to claim the rest.
+   *
+   * If the send worker ever stops setting the status from the response, this
+   * reasoning is void and the orphan table becomes the right answer. Every
+   * occurrence is counted as status_no_such_message on the webhook event and
+   * surfaces on the admin Overview, so the assumption is measured rather than
+   * trusted.
    */
   const existing = await db.message.findFirst({
     where: { wamid: input.wamid },

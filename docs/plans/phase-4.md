@@ -354,6 +354,60 @@ answer rather than prevention.
 
 ---
 
+### C7. An orphan status is accepted and recorded, not queued
+
+**Decided before the send worker, because it changes what that worker does.**
+
+The race: Meta can deliver a status webhook for a wamid before the send job has
+finished storing it. `applyStatusUpdate` finds no row, returns
+`no_such_message`, and that callback is gone — nothing redelivers a webhook we
+answered 200 to.
+
+**Resolution: accept the loss, and say so where the branch is.** No
+`orphan_statuses` table. Four reasons, in the order that decided it.
+
+**1. The worst case does not occur, because the floor is our write.** The
+worry is a bubble stuck on `PENDING` for ever — a message that is sent and
+never delivered, where `sent` is the only callback that will ever arrive. That
+cannot happen here: the send worker writes `SENT` (or `HELD`) from
+`SendAccepted` itself, in the same update that stores the wamid. The status
+floor is set by the Graph response, not by the webhook, so a lost `sent` is
+redundant rather than load-bearing.
+
+**2. The residual harm is an understated thread, and needs an implausible
+ordering.** What a lost callback can still cost is `DELIVERED` or `READ`: the
+ticks stay grey on a message that arrived. But `delivered` is only generated
+after Meta hands the message to the handset, which is after the response we are
+already committing — so to lose it, the whole chain (handset ack → webhook →
+our endpoint → event insert → enqueue → worker → ingest) has to beat one UPDATE
+that is already in flight. Possible under a pool stall; not ordinary. And
+`read` usually arrives minutes later, when a human opens the chat, which
+rescues the thread on its own — the ladder is monotonic, so `READ` applies
+whether or not `DELIVERED` was seen.
+
+**3. The table is not self-cleaning, which is the argument that actually
+kills it.** `no_such_message` fires mostly for wamids that will *never* be
+ours — a message sent from Business Manager, where a human replied from Meta's
+own console. Nothing drains those: the send worker only ever claims wamids it
+wrote. So the table needs a retention job on day one, and "bounded and
+self-cleaning" is true only for the rare case and false for the common one.
+It also puts an extra read on the send path immediately after the Graph call,
+which is the one place this phase has been most careful about (R7).
+
+**4. The gap is already instrumented, so it does not have to be guessed at.**
+Every occurrence is recorded as `status_no_such_message` on the webhook event,
+and P6 (commit 26) puts those counts on the admin Overview. If this stops being
+rare, it shows up as a number an operator can see, rather than as a thread
+somebody eventually notices is wrong.
+
+**What would reverse this.** If the send worker ever stops writing the status
+from the Graph response — if `SENT`/`HELD` come to depend on the callback
+instead — then reason 1 disappears and with it the whole argument. Anyone
+making that change is choosing this decision again, and the comment on the
+branch in `conversations.ts` says so.
+
+---
+
 ## Process, as it now stands
 
 **The gate runs in a pre-commit hook.** `.githooks/pre-commit`, wired by a

@@ -270,7 +270,7 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (43 commits on `phase-4a`)
+### Done — 4a (45 commits on `phase-4a`)
 
 Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
@@ -307,6 +307,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 19 | `6e9abca` | `feat(worker): send a message and remember what Meta called it` |
 | 20 | `1fdad02` | `feat(worker): mark a thread read when somebody opens it` |
 | 21 | `d493d27` | `feat(worker): keep a number's quality and tier current` |
+| 22+23 | `0601011` | `feat(web): protect the public endpoint before opening it` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -315,12 +316,12 @@ Both numberings appear below where it matters.
 
 ### Remaining — 4a
 
-**Every worker commit is done.** What remains is the web layer.
+**Every worker commit is done**, and the two protections the webhook route
+needs landed together as one commit — 22 and 23 of the new numbering — because
+neither is useful without the other. The route itself is next.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| 22 | 25 | `feat(web): throttle a public endpoint the way we throttle sign-in` |
-| 23 | 26 | `feat(web): hold a webhook's secret briefly, and drop it when it changes` |
 | **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |
 | 25 | 28 | `feat(web): the webhook Meta posts to` |
 | 26 | 29 | `feat(web): show an operator the deliveries that never landed` |

@@ -9,7 +9,7 @@ import {
   type VerificationOutcome,
 } from "@whatsapp-os/core";
 import { recordUsage, withCompany, type Prisma } from "@whatsapp-os/db";
-import { JOB_NAMES } from "@whatsapp-os/core";
+import { applyVerificationEffects } from "@whatsapp-os/core";
 import { keyring } from "../keyring.ts";
 import { log } from "../logger.ts";
 import { systemQueue } from "../queue.ts";
@@ -111,31 +111,20 @@ export async function handleIntegrationVerify(
   });
 
   /*
-   * A successful verification is the moment a WhatsApp number's metadata is
-   * most likely to be missing and the credentials are known good, so it is one
-   * of the three things that trigger a refresh - the others being a person
-   * pressing Refresh and Meta's phone_number_quality_update webhook.
+   * Everything that follows a successful verification lives in one place, so
+   * this path and the admin panel's inline one cannot drift. They did: commit
+   * 21 put the refresh here only, and Save & Verify - the button an operator
+   * actually presses - never triggered it.
    *
-   * Enqueued after the loop and outside every scope: this is a Redis call, and
-   * the refresh is somebody else's job by design. Failing to enqueue must not
-   * fail the verification that already succeeded and was already recorded, so
-   * it is caught and logged rather than thrown - the next verification, webhook
-   * or button press will do it.
+   * The job id is unique per verification, not per company (R2).
    */
-  if (ok > 0) {
-    try {
-      await systemQueue.add(
-        JOB_NAMES.WHATSAPP_NUMBERS_REFRESH,
-        { companyId },
-        { jobId: `numbers:${companyId}:${jobId}` },
-      );
-    } catch (error) {
-      log.warn("could not enqueue a numbers refresh after verification", {
-        companyId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  await applyVerificationEffects(
+    { companyId, verified: ok > 0, token: jobId },
+    {
+      enqueue: (name, data, options) => systemQueue.add(name, data, options),
+      onWarn: (message, fields) => log.warn(message, fields),
+    },
+  );
 
   return { checked: loaded.length, ok };
 }

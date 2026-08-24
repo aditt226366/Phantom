@@ -174,6 +174,55 @@ string.
 
 ---
 
+## A6. `db:verify` is a Phase 12 launch gate
+
+**Adds to: Phase 12 (launch readiness).**
+
+`npm run db:verify -- <dev|test|connection-url>` checks four catalog invariants
+against whichever database it is pointed at — `COLUMN_GRANTS`,
+`RESOLVER_TABLE_GRANTS`, `OUT_OF_BAND_DDL` and the timestamp check. It is
+read-only: every statement is a `SELECT` against a system catalog, which is what
+makes it safe to run against production.
+
+**It runs against production before first customer traffic, and after every
+deploy.**
+
+### Why a launch gate and not just a test
+
+These four assertions already existed and already passed on every run — against
+the *test* database. The database that was wrong was **dev**, missing two column
+grants for eight commits, and the first symptom was a route that worked in the
+suite and returned 500 in a browser (C10). Nothing about the assertions was
+test-specific. Only the connection was.
+
+Production is the instance of that problem nobody can rebuild. A tenant-visible
+grant that drifted between staging and production is invisible to the suite by
+construction, and the failure it produces is a 500 on a path that works
+everywhere else.
+
+### It is not `prisma migrate diff`, and does not overlap it
+
+`migrate diff` compares tables and columns. It cannot see **grants** — a column
+grant is not even in `pg_class.relacl`, it lives in `pg_attribute.attacl` — and
+it cannot see **CHECK constraints**, **column storage** or **triggers**, none of
+which `schema.prisma` can express. It reported *"No difference detected"* over
+the drifted database throughout.
+
+Both run at launch. They answer different questions, and neither answers the
+other's.
+
+### The root cause it exists to catch
+
+Amending a migration in place after a database has applied it. `migrate deploy`
+never re-runs an applied migration, so that database keeps the original's
+effects for ever, and the recorded checksums are the only trace. Recorded in the
+conventions skill, with the rule: **any in-place amendment must be followed by
+rebuilding every database that applied the original — dev included.** A
+production database cannot be rebuilt, so there the only fix is a new additive
+migration.
+
+---
+
 ## Sequencing, after these amendments
 
 Two hard orderings, each with its reason:

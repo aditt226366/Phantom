@@ -5,6 +5,14 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDatabaseUrl } from "../scripts/db-urls.mjs";
 import { COMPANY_SCOPED_MODELS } from "../src/with-company.ts";
+import {
+  COLUMN_GRANTS,
+  OUT_OF_BAND_DDL,
+  RESOLVER_TABLE_GRANTS,
+  checkColumnGrants,
+  checkOutOfBandDdl,
+  checkResolverTableGrants,
+} from "../scripts/invariants.mjs";
 
 /**
  * Rule 1 of CLAUDE.md, enforced by the database rather than by memory.
@@ -69,119 +77,8 @@ const ADMIN_TABLES = [
   "admin_repair_runs",
 ];
 
-/**
- * Tables where app_resolver still holds a *whole-table* SELECT grant.
- *
- * app_resolver answers one question — "which company does this opaque key
- * belong to" — from outside every company context, running SECURITY DEFINER.
- * The entire argument for giving it that reach is that it can see almost
- * nothing, and a whole-table grant is how that stops being true without anyone
- * deciding it: companies was granted whole-table so that app_available_slug()
- * could read `slug`, and `deactivated_at` was consequently readable by the
- * resolver before any migration granted it.
- *
- * companies has since been narrowed to three columns and is deliberately
- * absent below. These four have the same shape of problem and are listed
- * rather than fixed, because each needs its own reading of which columns the
- * lookup functions touch and bundling four narrowings into one migration is
- * how one of them goes wrong quietly.
- *
- * Listing them is the point. Narrowing one is a shrinking diff in a security
- * test; granting a new one is a widening diff in the same place. Neither is
- * a comment in a migration nobody reads again.
- */
-const RESOLVER_TABLE_GRANTS = new Set<string>([
-  /* app_resolve_company: username and email lookups. */
-  "users",
-  /* app_resolve_company: the session token lookup. */
-  "sessions",
-  /* app_resolve_company: consuming an unauthenticated verification link. */
-  "email_verification_tokens",
-  /* app_resolve_company: consuming an unauthenticated reset link. */
-  "password_reset_tokens",
-]);
 
-/**
- * Every column-level grant in the schema, to any role.
- *
- * Named for what it checks rather than for who currently appears in it. A
- * stray column grant to app_runtime or app_admin is exactly as undecided as one
- * to app_resolver, and the query that finds one finds all — so a narrower name
- * would read, later, as permission to grant elsewhere.
- *
- * The entry is (table, column, grantee, privilege), not (table, column).
- * SELECT on a column and UPDATE on the same column are different decisions, and
- * an allowlist that recorded only the column would let a grant widen from read
- * to write with no diff here at all.
- *
- * Column grants are invisible to information_schema.role_table_grants — it
- * reads pg_class.relacl, while a column grant lives in pg_attribute.attacl —
- * which is why RESOLVER_TABLE_GRANTS below cannot see these and why both lists
- * exist. The joint assertion in the suite closes the gap between them.
- */
-const COLUMN_GRANTS = new Set<string>([
-  /* app_resolve_company joins companies and checks suspension; the id and
-     deactivated_at are the whole of it. */
-  "companies.id:app_resolver:SELECT",
-  "companies.deactivated_at:app_resolver:SELECT",
-  /* app_available_slug: SELECT 1 ... WHERE slug = $1, and nothing else. */
-  "companies.slug:app_resolver:SELECT",
-  /* app_resolve_company's 'webhook' kind: the key it matches, the id it
-     returns, and the provider it constrains on so that a Sheets or Ads key
-     cannot resolve into a WhatsApp handler. */
-  "integrations.webhook_key:app_resolver:SELECT",
-  "integrations.company_id:app_resolver:SELECT",
-  "integrations.provider:app_resolver:SELECT",
-  /* The tenant runtime writes unroutable_webhooks but must not enumerate it.
-     These three are forced by the upsert - RETURNING needs id, ON CONFLICT
-     reads its arbiter column, and the increment reads what it writes. What is
-     absent is the point: company_id, reason, last_ip_hash and the timestamps
-     stay unreadable, so a tenant request cannot learn which companies are
-     failing verification. */
-  "unroutable_webhooks.id:app_runtime:SELECT",
-  "unroutable_webhooks.webhook_key_hash:app_runtime:SELECT",
-  "unroutable_webhooks.attempt_count:app_runtime:SELECT",
-]);
 
-/**
- * Database objects that schema.prisma cannot express.
- *
- * Everything here is invisible to `prisma migrate diff`. It lives only in a
- * migration, the schema file has no way to describe it, and the drift check
- * reports nothing when it disappears — so dropping one is a silent change to
- * what the database guarantees, and adding one by hand is a decision only its
- * author knows about.
- *
- * Asserted in both directions, like GLOBAL_TABLES and COLUMN_GRANTS: everything
- * named here still exists, and nothing exists that is not named here.
- *
- * Format is `kind:table.object`, plus the value for storage, so that a change
- * of *setting* is as loud as a removal.
- *
- * Kinds swept: CHECK constraints, non-default column storage, non-internal
- * triggers, and exclusion constraints. The last two have no members today and
- * are swept anyway, so the first one anybody adds arrives as a diff here.
- *
- * NOT NULL does not appear: Postgres 17 keeps it in pg_attribute.attnotnull
- * rather than pg_constraint, and schema.prisma expresses it anyway.
- */
-const OUT_OF_BAND_DDL = new Set<string>([
-  /* The 5 MiB cap on stored media. The real enforcement aborts the download
-     once the running byte count crosses the limit; this is the backstop that
-     does not depend on the caller having behaved. */
-  "check:whatsapp_media.whatsapp_media_bytes_within_cap",
-  /* byte_size cannot disagree with the bytes actually present. */
-  "check:whatsapp_media.whatsapp_media_byte_size_matches",
-  "check:whatsapp_media.whatsapp_media_byte_size_non_negative",
-  /* EXTERNAL, not the type's default EXTENDED. Load-bearing: the read path
-     slices this column with substring() to stream it, and a compressed value
-     has to be decompressed from the start, so every slice would become a full
-     read and the streaming would be a fiction. */
-  "storage:whatsapp_media.bytes=e",
-  /* 64 KiB on a stored webhook body. The route truncates and flags; this is
-     the backstop that does not depend on it having done so. */
-  "check:whatsapp_webhook_events.whatsapp_webhook_events_payload_within_cap",
-]);
 
 /**
  * Tenant-owned models deliberately absent from COMPANY_SCOPED_MODELS.
@@ -500,54 +397,29 @@ describe("schema invariants", () => {
     });
 
     it("holds a whole-table grant only where the allowlist says", async () => {
-      const { rows } = await db.query<{ table_name: string }>(
-        `SELECT DISTINCT table_name FROM information_schema.role_table_grants
-         WHERE grantee = 'app_resolver' AND table_schema = 'public'
-         ORDER BY table_name`,
-      );
-
       /*
-       * An allowlist rather than "no matches", so that narrowing one of these
-       * shows up as a shrinking diff here and granting a fifth shows up as a
-       * widening one — in a security test, rather than as a line in a
-       * migration that reads like every other GRANT.
+       * The assertion runs from scripts/invariants.mjs, which is also what
+       * `npm run db:verify` points at another database. One implementation, so
+       * a suite that is green cannot mean a different thing from a clean
+       * report against dev or production - which is exactly the gap that let
+       * dev drift for eight commits (C10).
        */
       expect(
-        rows.map((r) => r.table_name),
+        await checkResolverTableGrants(db),
         "app_resolver's whole-table grants have changed",
-      ).toEqual([...RESOLVER_TABLE_GRANTS].sort());
+      ).toEqual([]);
     });
 
     it("holds a column grant only where the allowlist says", async () => {
       /*
-       * Read from pg_attribute.attacl rather than
-       * information_schema.column_privileges, which expands every whole-table
-       * grant into one row per column and would bury six deliberate entries in
-       * several hundred inherited ones. attacl is null unless somebody granted
-       * a specific column, so this lists decisions and nothing else.
-       *
-       * Replaces a narrower check that asserted only companies' three columns.
-       * This subsumes it: companies is still pinned to exactly those three, and
-       * so is every other table, to every other role.
+       * Column grants live in pg_attribute.attacl, not pg_class.relacl, so
+       * information_schema.column_privileges cannot see them and neither can
+       * `prisma migrate diff`. See scripts/invariants.mjs.
        */
-      const { rows } = await db.query<{ entry: string }>(
-        `SELECT c.relname || '.' || a.attname || ':' ||
-                COALESCE(r.rolname, 'PUBLIC') || ':' || acl.privilege_type AS entry
-           FROM pg_attribute a
-           JOIN pg_class c ON c.oid = a.attrelid
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-           CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
-           LEFT JOIN pg_roles r ON r.oid = acl.grantee
-          WHERE n.nspname = 'public'
-            AND a.attnum > 0
-            AND NOT a.attisdropped
-          ORDER BY entry`,
-      );
-
       expect(
-        rows.map((r) => r.entry),
+        await checkColumnGrants(db),
         "column grants have changed — widen COLUMN_GRANTS deliberately or revoke",
-      ).toEqual([...COLUMN_GRANTS].sort());
+      ).toEqual([]);
     });
 
     it("has no reach that neither allowlist accounts for", async () => {
@@ -751,51 +623,14 @@ describe("schema invariants", () => {
   describe("DDL that schema.prisma cannot express", () => {
     it("is exactly what the allowlist names", async () => {
       /*
-       * The sweep. Everything below is invisible to `prisma migrate diff`: it
-       * exists only because a migration wrote it, the schema file has no way to
-       * describe it, and nothing in the toolchain notices when it goes away.
-       *
-       * Both directions in one comparison. A dropped CHECK fails a security
-       * test instead of passing silently, and a hand-added one is a visible
-       * diff here rather than a fact only its author knows.
-       *
-       * Triggers and exclusion constraints have no members yet and are swept
-       * anyway, so the first one anybody adds shows up as a widening diff.
+       * CHECK constraints, column storage, triggers and exclusion constraints -
+       * everything schema.prisma cannot express and the drift check therefore
+       * cannot see. Swept in both directions from scripts/invariants.mjs.
        */
-      const { rows } = await db.query<{ entry: string }>(
-        `SELECT 'check:' || c.relname || '.' || con.conname AS entry
-           FROM pg_constraint con
-           JOIN pg_class c ON c.oid = con.conrelid
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public' AND con.contype = 'c'
-         UNION ALL
-         SELECT 'exclusion:' || c.relname || '.' || con.conname
-           FROM pg_constraint con
-           JOIN pg_class c ON c.oid = con.conrelid
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public' AND con.contype = 'x'
-         UNION ALL
-         SELECT 'storage:' || c.relname || '.' || a.attname || '=' || a.attstorage::text
-           FROM pg_attribute a
-           JOIN pg_class c ON c.oid = a.attrelid
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-           JOIN pg_type t ON t.oid = a.atttypid
-          WHERE n.nspname = 'public' AND c.relkind = 'r'
-            AND a.attnum > 0 AND NOT a.attisdropped
-            AND a.attstorage <> t.typstorage
-         UNION ALL
-         SELECT 'trigger:' || c.relname || '.' || tg.tgname
-           FROM pg_trigger tg
-           JOIN pg_class c ON c.oid = tg.tgrelid
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public' AND NOT tg.tgisinternal
-          ORDER BY entry`,
-      );
-
       expect(
-        rows.map((r) => r.entry),
+        await checkOutOfBandDdl(db),
         "out-of-band DDL has changed — update OUT_OF_BAND_DDL deliberately",
-      ).toEqual([...OUT_OF_BAND_DDL].sort());
+      ).toEqual([]);
     });
   });
 });

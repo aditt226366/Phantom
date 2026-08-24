@@ -121,6 +121,57 @@ sweep.** Without that exclusion the next run reassigns them to
 every username and session lookup silently returns NULL — sign-in fails with
 nothing in the logs.
 
+## An amended migration silently forks every database that ran it
+
+**`prisma migrate deploy` never re-runs a migration it has already applied**, so
+editing one after it has run leaves every database that ran the original holding
+the original's effects — permanently, and with nothing to say so.
+
+It happened here. `20260815160000` was edited during its own commit, after the
+development database had applied an earlier version. Dev kept the old effects:
+two of three column grants on `unroutable_webhooks` were missing for eight
+commits. The test database was rebuilt often enough to get the final version, so
+the suite was green throughout. The first symptom was a webhook route that
+worked in tests and returned **500 in a browser** (C10).
+
+The recorded checksums are the proof, and the way to confirm it:
+
+```sql
+SELECT migration_name, checksum FROM _prisma_migrations ORDER BY migration_name;
+```
+
+Different checksums for the same migration across two databases means they
+applied different files. Exactly one had drifted out of 28.
+
+**So: any in-place amendment to an applied migration must be followed by
+rebuilding every database that applied the original — `dev` included, not just
+`test`.**
+
+```
+npm run db:nuke -- dev
+npm run db:nuke -- test
+```
+
+A production database cannot be rebuilt, which is the real reason to avoid the
+edit: there the only fix is a new, additive migration.
+
+**`npm run db:verify -- <dev|test|url>` is what notices.** It runs the four
+catalog invariants — `COLUMN_GRANTS`, `RESOLVER_TABLE_GRANTS`, `OUT_OF_BAND_DDL`
+and the timestamp check — against whichever database you point it at, from
+`packages/db/scripts/invariants.mjs`. The same module backs the test suite, so a
+green suite and a clean report cannot mean different things.
+
+Read-only: every statement is a `SELECT` against a system catalog, which is why
+it is safe to point at production — and it is a **Phase 12 launch gate**, run
+before first customer traffic and after every deploy.
+
+**It is not a substitute for `prisma migrate diff`, and the diff is not a
+substitute for it.** The diff compares tables and columns. It cannot see grants
+at all — a column grant is not even in `pg_class.relacl`, it lives in
+`pg_attribute.attacl` — and it cannot see CHECK constraints, column storage or
+triggers, none of which `schema.prisma` can express. It reported
+*"No difference detected"* over the drifted database the whole time. Run both.
+
 ## Timestamps are `timestamptz(3)`, and a new one must say so
 
 **Every `DateTime` field carries `@db.Timestamptz(3)`, and there is a test that

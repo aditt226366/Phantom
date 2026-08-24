@@ -1,38 +1,8 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDatabaseUrl } from "../scripts/db-urls.mjs";
+import { checkTimestampColumns } from "../scripts/invariants.mjs";
 
-/**
- * Every timestamp column stores an instant, not a wall clock.
- *
- * Prisma maps DateTime to `timestamp(3) WITHOUT time zone` by default. That
- * column stores digits with no offset attached, and the ORM is self-consistent
- * about them, so nothing goes wrong until somebody writes raw SQL - at which
- * point binding a Date and casting `::timestamp` keeps the digits and discards
- * the offset, writing a value out by the node process's UTC offset. `now()`
- * fails the same way through the session's TimeZone. Both produce rows that
- * look entirely plausible and are wrong by hours.
- *
- * 20260816090000 converted all 64 columns to timestamptz(3), which removes the
- * wall clock and with it the whole class of mistake. This test is what keeps it
- * removed: a `DateTime` field added without `@db.Timestamptz(3)` reintroduces a
- * naive column silently, since the generated migration looks like every other
- * column addition and nothing else in the suite would notice.
- *
- * The allowlist is empty and is meant to stay empty. It exists rather than
- * being written as "no matches" so that an exception, if one is ever genuinely
- * needed, has somewhere to be argued for and a reason attached - the shape
- * GLOBAL_TABLES and the raw-SQL allowlist both use. A naive column is a
- * decision, not an accident, or it is a bug.
- */
-const NAIVE_COLUMNS_ALLOWED = new Map<string, string>([
-  /*
-   * Nothing. A local wall clock with no zone is only correct for a value that
-   * genuinely has no instant - a birthday, an opening time - and this schema
-   * has none. If one arrives, name it here with the reason it is not an
-   * instant, and expect to be asked.
-   */
-]);
 
 /** Prisma's own bookkeeping table, which it owns and already stores as tz. */
 const NOT_OURS = new Set(["_prisma_migrations"]);
@@ -73,16 +43,15 @@ describe("timestamp columns", () => {
   });
 
   it("are all timestamptz, with no exceptions", async () => {
-    const naive = await timestampColumns(false);
-
+    /*
+     * Runs from scripts/invariants.mjs, the same implementation
+     * `npm run db:verify` points at another database - so a green suite and a
+     * clean report about dev or production mean the same thing.
+     */
     expect(
-      naive.sort(),
-      "a DateTime field is missing @db.Timestamptz(3) — it stores a wall clock " +
-        "with no offset, and raw SQL touching it needs an explicit cast to stay " +
-        "correct. Add the attribute and an ALTER ... TYPE timestamptz(3) USING " +
-        "col AT TIME ZONE 'UTC', or name the column in NAIVE_COLUMNS_ALLOWED " +
-        "with the reason it holds no instant",
-    ).toEqual([...NAIVE_COLUMNS_ALLOWED.keys()].sort());
+      await checkTimestampColumns(db),
+      "a DateTime field is missing @db.Timestamptz(3), or a timestamptz is not (3)",
+    ).toEqual([]);
   });
 
   it("keeps millisecond precision, matching Prisma's DateTime", async () => {

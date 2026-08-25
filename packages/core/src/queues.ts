@@ -106,6 +106,25 @@ export const whatsappMessageSendJobSchema = z.object({
 
 export type WhatsAppMessageSendJob = z.infer<typeof whatsappMessageSendJobSchema>;
 
+/**
+ * The job id for a send, naming the attempt as well as the message.
+ *
+ * R2, and the reason `sendAttempt` exists on the row at all. BullMQ keeps
+ * completed job ids for an hour and failed ones for a day, and refuses a job
+ * whose id it already holds - silently, because for every other job in this
+ * system that refusal IS the deduplication. A retry re-enqueued under the first
+ * attempt's id is therefore dropped without an error anywhere, and the button
+ * the operator pressed appears to do nothing at all.
+ *
+ * So the attempt is in the id. Retrying message X for the second time is a
+ * different job from sending it the first, which is the truth of it: the send
+ * job runs with attempts: 1, so every subsequent try is a person deciding to
+ * send again rather than a queue retrying on its own.
+ */
+export function sendJobId(messageId: string, sendAttempt: number): string {
+  return `send:${messageId}:${sendAttempt}`;
+}
+
 export const whatsappMarkReadJobSchema = z.object({
   companyId: z.string().min(1),
   conversationId: z.string().min(1),

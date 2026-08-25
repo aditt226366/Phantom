@@ -26,6 +26,14 @@ export const FIXTURE = {
    */
   conversationId: "c000visualfixtureconvo01",
   /**
+   * The closed-window thread, and the more interesting of the two to look at.
+   *
+   * It carries everything the open one cannot: a composer disabled with its
+   * reason, the template picker disabled beside it, an inbound image served
+   * through /api/media, and an outbound message Meta refused.
+   */
+  closedConversationId: "c000visualfixtureconvo02",
+  /**
    * The owner's last sign-in, as the console renders it.
    *
    * Here rather than only in the seed because signing in overwrites it, and
@@ -85,6 +93,16 @@ export const ROUTES: readonly VisualRoute[] = [
 
   { name: "dashboard", path: "/dashboard", audience: "tenant" },
   { name: "inbox", path: "/inbox", audience: "tenant" },
+  {
+    name: "inbox-thread-open",
+    path: `/inbox/${FIXTURE.conversationId}`,
+    audience: "tenant",
+  },
+  {
+    name: "inbox-thread-closed",
+    path: `/inbox/${FIXTURE.closedConversationId}`,
+    audience: "tenant",
+  },
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },

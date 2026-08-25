@@ -353,7 +353,7 @@ const CONVERSATION = {
   /* The open one. FIXTURE.conversationId, because the walker in pages.spec.ts
      substitutes it for [conversationId] and the thread page will be its URL. */
   open: FIXTURE.conversationId,
-  closed: "c000visualfixtureconvo02",
+  closed: FIXTURE.closedConversationId,
 };
 
 /**

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { describeWindow } from "@whatsapp-os/core/whatsapp";
 import { withCompany } from "@whatsapp-os/db";
 import { Badge } from "@/components/ui/badge";
@@ -135,7 +136,13 @@ function ConversationRow({
   const waiting = needsHuman(conversation);
 
   return (
-    <li className="rounded-xl border border-hairline bg-surface-card p-base">
+    <li>
+      {/* The whole row is the target. A thread opened by a careful click on the
+          name is a thread nobody opens on a phone. */}
+      <Link
+        href={`/inbox/${conversation.id}`}
+        className="block rounded-xl border border-hairline bg-surface-card p-base transition-colors hover:border-hairline-strong hover:bg-canvas-soft"
+      >
       {/* min-w-0 on the growing child, not just truncate on the text. See the
           note at the top of this file — this is the R4 mitigation itself. */}
       <div className="flex items-start justify-between gap-base">
@@ -168,6 +175,7 @@ function ConversationRow({
           {formatTimestamp(conversation.lastMessageAt)}
         </span>
       </div>
+      </Link>
     </li>
   );
 }

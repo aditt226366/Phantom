@@ -116,10 +116,20 @@ test.describe("coverage", () => {
      *
      * So: a map, and a guard below that names the real problem. Every entry is
      * a row the visual seed writes.
+     *
+     * A list per segment rather than one value, because a single route can be
+     * worth photographing in more than one state. The open-window thread and
+     * the closed one are the same page.tsx and completely different pictures —
+     * only the second has a disabled composer, a refused message and an image
+     * in it — and with one value per segment the second id read as a route
+     * nothing renders.
      */
-    const DYNAMIC_SEGMENTS = new Map([
-      ["[id]", FIXTURE.companyId],
-      ["[conversationId]", FIXTURE.conversationId],
+    const DYNAMIC_SEGMENTS = new Map<string, readonly string[]>([
+      ["[id]", [FIXTURE.companyId]],
+      [
+        "[conversationId]",
+        [FIXTURE.conversationId, FIXTURE.closedConversationId],
+      ],
     ]);
 
     const found: string[] = [];
@@ -136,10 +146,21 @@ test.describe("coverage", () => {
 
         const segments = relative(appDir, dirname(full))
           .split(/[\\/]/)
-          .filter((segment) => segment !== "" && !segment.startsWith("("))
-          .map((segment) => DYNAMIC_SEGMENTS.get(segment) ?? segment);
+          .filter((segment) => segment !== "" && !segment.startsWith("("));
 
-        found.push(`/${segments.join("/")}`);
+        /* One path per combination of fixture values. An unmapped segment
+           stands for itself, brackets included, so the guard below sees it. */
+        let paths = [""];
+        for (const segment of segments) {
+          const values = DYNAMIC_SEGMENTS.get(segment) ?? [segment];
+          paths = paths.flatMap((prefix) =>
+            values.map((value) => `${prefix}/${value}`),
+          );
+        }
+
+        /* app/page.tsx has no segments at all, so the accumulator never gets
+           its leading slash from the loop. That is the marketing page. */
+        found.push(...paths.map((path) => (path === "" ? "/" : path)));
       }
     }
 

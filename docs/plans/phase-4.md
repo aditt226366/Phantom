@@ -4,8 +4,12 @@ Working plan, updated as the phase runs. Written down because the decisions
 below cost more to re-derive than to record, and several of them reverse
 something that looked obvious.
 
-Status: **4a in progress.** The schema and the core layer are complete; the
-worker and web layers are not.
+Status: **4a in progress.** Schema, core and worker are complete. The web layer
+has the webhook route, the media route, the visual fixture and the numbers page;
+the inbox, the thread and the retry action are not built.
+
+**Screenshots are back in the gate** as of commit 24. `.githooks/SKIP_VISUAL` is
+deleted and every commit from here is photographed at 1440 and 390.
 
 ---
 
@@ -263,8 +267,16 @@ a compliance question.
 `/inbox/[conversationId]` does not typecheck until the page exists.
 
 **R11 — the coverage walker has never been exercised on a non-`[id]`
-segment.** `pages.spec.ts` substitutes only `[id]`; anything else stays literal
-and can never match. Commit 24 replaces the ternary with a map.
+segment.** **Closed in `84a41f7`.** It was worse than "can never match": an
+unmapped segment failed *both* directions of the coverage assertion, with two
+messages that were each wrong — "nothing photographs them" when something does,
+and "no page.tsx renders them" when one does. Whoever added the thread page
+would have been debugging the walker rather than their page.
+
+Now a `DYNAMIC_SEGMENTS` map plus the guard that is the real fix: a segment
+still in brackets is its own named failure saying where to add it. Broken once
+by deleting the `[id]` entry — it names the four company routes and the remedy,
+and fires ahead of both older assertions.
 
 ---
 
@@ -310,6 +322,8 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 22+23 | `0601011` | `feat(web): protect the public endpoint before opening it` |
 | 25 | `92af5bd` | `feat(web): the webhook Meta posts to` |
 | 27 | `011f279` | `feat(web): serve a photo a customer sent` |
+| 24 | `84a41f7` | `test(web): seed a WhatsApp number, a contact and two threads` |
+| 28 | `8234da4` | `feat(web): the numbers behind your WhatsApp connection` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -318,19 +332,29 @@ Both numberings appear below where it matters.
 
 ### Remaining — 4a
 
-**Every worker commit is done**, and the two protections the webhook route
-needs landed together as one commit — 22 and 23 of the new numbering — because
-neither is useful without the other. The route itself is next.
+**Every worker commit is done.** So is the fixture, and the numbers page —
+taken ahead of 26, which renders and therefore lands under screenshots when it
+comes.
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
-| **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |
 | 26 | 29 | `feat(web): show an operator the deliveries that never landed` |
-| 28 | 31 | `feat(web): the numbers behind your WhatsApp connection` |
 | 29 | 32 | `feat(web): a conversation list that says how long is left` |
 | 30 | 33 | `feat(web): a thread, and a composer that closes with the window` |
 | 31 | 34 | `feat(web): retry a message that Meta refused` |
 | 32 | 35 | `chore: the third place a company id may come from` — tag `phase-4a` |
+
+**What the fixture already holds**, so these four do not have to extend it:
+three numbers across three states, two contacts, an open thread with two unread
+and a closed one, an inbound image behind `/api/media`, and an outbound Meta
+refused with 131047. The one constraint it imposes is C11 below.
+
+**Webhook-key rotation is deferred and unscheduled.** The schema comment has
+always put the control on Configuration > Numbers; commit 28 renders the URL and
+stops there. Rotating drops every inbound message until the tenant has pasted
+the new URL into Meta — accumulating exactly the failures C2 exists to avoid —
+so it needs a confirmation step, copy that says so, and the P1 cache evicted
+alongside. A commit, not a button.
 
 ### Remaining — 4b
 
@@ -373,6 +397,42 @@ helps against that - so detection at the start of the next run is the durable
 answer rather than prevention.
 
 ---
+
+### C11. A screenshot fixture's rule is about *rendering*, not about the clock
+
+`visual-seed.mjs` opens by saying every value in it is a literal, with one
+exception stamped `now()`. Building the numbers page found two places that rule
+was being read too narrowly, in opposite directions.
+
+**A value nothing renders can still be random, and that is not safe — it is
+merely undetected.** `Integration.webhookKey` defaults to a database expression,
+so every seed run wrote four fresh random keys. Nothing had ever rendered one,
+so nothing failed, and the seed had been non-deterministic for as long as it had
+existed. Configuration > Numbers renders it, and the first run would have
+produced a baseline that never matched twice — diagnosed, most likely, as a
+flaky screenshot suite rather than as a fixture. Pinned now, in the same 32-hex
+shape the default produces.
+
+The same trap one layer out: `playwright.config.ts` derived `APP_URL` from
+`BASE_URL`, and carried a comment saying the port was not rendered anywhere so
+`VISUAL_PORT` could not invalidate a baseline. True when written. This page
+prints the URL, so the escape hatch for a busy port became a silent re-record.
+`APP_URL` is a literal now, and the comment says why.
+
+**And the converse: a value the clock decides is fine, as long as it is never
+printed.** The open thread cannot be both permanently open and described by a
+fixed instant — a literal in the future becomes a literal in the past, and the
+composer this fixture exists to photograph closes for good on a date nobody
+wrote down. So `window_expires_at` is `now() + 18 hours` while
+`last_inbound_at`, `last_message_at` and the preview stay literal, because those
+are what the inbox prints.
+
+That is the rule, stated properly in the seed's header: **a value here may be
+decided on at render time, and may never be rendered as a time.** The usage
+events already had that licence; the window now shares it. The consequence
+belongs to commits 29 and 30 — render the window as the open/closed state it
+determines, or as a bucket coarse enough that the minutes between seed and
+screenshot cannot move it. Never as a timestamp.
 
 ### C10. The dev database had drifted, and nothing was watching it
 
@@ -523,12 +583,15 @@ signature present *and* no test reporting a failure. A genuine red never gets a
 second roll. Retries append to `.git/gate-retries.log` and the count is printed,
 so a rising rate surfaces itself.
 
-**Screenshots are off**, via the committed `.githooks/SKIP_VISUAL` marker, which
-switches the hook to `npm run verify:no-visual`. A file rather than a hook edit,
-so the state shows in `git status` and is undone by deleting something. It comes
-off at the visual-seed-harness commit — **24** in the new numbering, 27 in the
-original, which is what the marker names by title. Typecheck, lint, build and
-the full vitest suite with its floor all stay in.
+**Screenshots are back on.** `.githooks/SKIP_VISUAL` was deleted in `84a41f7`,
+the commit its own text named by title, and the hook runs the full `npm run
+verify` again. The marker worked as intended: a file rather than a hook edit, so
+the state showed in `git status` throughout and was undone by deleting
+something.
+
+The seed commit was the right place to restore it, and the run proved why —
+the fixture grew by seven tables and **not one baseline moved**, which is a
+fact worth having before a page depends on that data rather than after.
 
 **The test-count floor** (`npm run test:gate`) refuses a run that *collected*
 fewer tests than the committed minimum. It guards the silent case — a deleted

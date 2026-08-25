@@ -566,10 +566,36 @@ Things worth knowing before touching it:
 - **The fixture is literal.** `apps/web/scripts/visual-seed.mjs` writes fixed
   ids, names, counts and timestamps into `whatsapp_os_test`. A suite that diffs
   on a moving value is one people re-record without looking.
-- **The one moving part is the platform day.** "API calls today" and "Est.
-  spend this month" are windowed at render time, so their events are stamped
-  `now()`. A run crossing midnight IST between seed and screenshot sees both
-  cards go to zero. Re-seed and re-run.
+- **The rule is about rendering, not about the clock**, and it cuts both ways.
+  A value may be stamped `now()` provided nothing ever prints it: "API calls
+  today" and "Est. spend this month" are windowed at render time, and the open
+  thread's `window_expires_at` is `now() + 18h` because a conversation cannot
+  be both permanently open and described by a fixed instant. The corollary is
+  binding on whoever renders one — the window may appear as an open/closed
+  state or as a coarse bucket, **never as a timestamp**.
+
+  The reverse is the trap. A value nothing renders *today* can be random and
+  nothing will notice: `webhook_key` defaults to a database expression, so the
+  seed wrote four fresh random keys on every run for as long as it existed, and
+  the first page to display one would have produced a baseline that never
+  matched twice — diagnosed as a flaky suite rather than as a fixture. When a
+  page starts rendering a column, check what writes it.
+- **A rendered value must be a literal even when it lives in the config.**
+  `playwright.config.ts` derived `APP_URL` from `BASE_URL`, which comes from
+  `VISUAL_PORT`, under a comment saying the port was not rendered anywhere.
+  True until Configuration > Numbers printed the webhook URL, at which point an
+  escape hatch for a busy port silently re-recorded a screenshot. It is a fixed
+  literal now. Nothing navigates by `APP_URL` — Playwright uses `baseURL`.
+- **A run crossing midnight IST** between seed and screenshot sees the two
+  windowed cards go to zero. Re-seed and re-run.
+- **The TRUNCATE is discovered, not listed**, for the reason `truncateAll` in
+  `packages/db/tests/helpers.ts` gives. It was a hand-written list of fifteen
+  tables and Phase 4a added seven it did not know about. A fixture that does
+  not wipe is one that accumulates, and every baseline drifts a run at a time.
+- **A dynamic route segment needs an entry in `DYNAMIC_SEGMENTS`** in
+  `pages.spec.ts`. Without one the coverage test fails in *both* directions
+  with two messages that are each wrong; the guard beside the map catches it
+  first and names the route and the remedy.
 - **Baselines are per platform** — `{platform}` is in the snapshot path,
   because the same Chromium rasterises text differently on Windows, macOS and
   Linux. A first run on a new platform reports them missing and writes them.
@@ -582,6 +608,12 @@ Things worth knowing before touching it:
 - **Adding a page means adding it to `ROUTES`** in `tests/visual/fixture.ts`.
   A coverage test walks `app/**` and fails on anything missing, in both
   directions.
+- **`--update-snapshots` only rewrites what actually failed.** A copy change
+  small enough to fit inside `maxDiffPixelRatio` (0.1%) passes, so the baseline
+  is never re-recorded and keeps depicting the old text — which is how the
+  desktop `/configuration` shot ended up showing a CTA the page no longer
+  rendered while the 390px shot of the same change failed. When a change is
+  deliberate, force it with `--update-snapshots=all` and look at the result.
 
 Re-record with `npm run test:visual:update` — and then look at the images. A
 baseline nobody reviewed is a screenshot of a bug.

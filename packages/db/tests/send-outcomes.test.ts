@@ -21,6 +21,7 @@ import { seedCompany, truncateAll, type SeededCompany } from "./helpers.ts";
 
 let alpha: SeededCompany;
 let conversationId: string;
+let integrationId: string;
 
 const OCCURRED = new Date("2026-08-16T12:00:00.000Z");
 
@@ -41,6 +42,12 @@ async function newMessage(): Promise<string> {
   });
 }
 
+function readIntegration() {
+  return withCompany(alpha.id, (db) =>
+    db.integration.findFirstOrThrow({ where: { id: integrationId } }),
+  );
+}
+
 function readMessage(id: string) {
   return withCompany(alpha.id, (db) =>
     db.message.findFirstOrThrow({ where: { id } }),
@@ -53,8 +60,14 @@ beforeEach(async () => {
 
   conversationId = await withCompany(alpha.id, async (db, companyId) => {
     const integration = await db.integration.create({
-      data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+      data: {
+        companyId,
+        provider: "WHATSAPP_CLOUD",
+        label: "Primary",
+        status: "CONNECTED",
+      },
     });
+    integrationId = integration.id;
     const number = await db.whatsAppNumber.create({
       data: {
         companyId,
@@ -145,6 +158,8 @@ describe("Meta refused it", () => {
         code: 131_047,
         title: "Re-engagement message outside the 24 hour window",
         occurredAt: OCCURRED,
+        kind: "config",
+        integrationId,
       }),
     );
 
@@ -154,6 +169,73 @@ describe("Meta refused it", () => {
     expect(row.errorCode).toBe(131_047);
     expect(row.errorTitle).toContain("24 hour window");
     expect(row.failedAt?.toISOString()).toBe(OCCURRED.toISOString());
+  });
+
+  it("demotes the integration when the credential is refused", async () => {
+    const id = await newMessage();
+
+    await withCompany(alpha.id, (db, companyId) =>
+      recordSendRefused(db, companyId, id, {
+        code: 190,
+        title: "Authentication Error",
+        occurredAt: OCCURRED,
+        kind: "auth",
+        integrationId,
+      }),
+    );
+
+    /*
+     * A dead credential is dead for every call, not just this send. Left
+     * CONNECTED, the operator's only signal is opening threads and reading red
+     * bubbles while the panel insists the integration is fine - a badge
+     * confidently wrong about the one thing it exists to report.
+     */
+    const integration = await readIntegration();
+    expect(integration.status).toBe("NOT_CONNECTED");
+    expect(integration.lastError).toBe("Authentication Error");
+  });
+
+  it("leaves the badge alone when the failure is transient", async () => {
+    const id = await newMessage();
+
+    await withCompany(alpha.id, (db, companyId) =>
+      recordSendRefused(db, companyId, id, {
+        code: 4,
+        title: "Application request limit reached",
+        occurredAt: OCCURRED,
+        kind: "transient",
+        integrationId,
+      }),
+    );
+
+    /*
+     * Commit 11's rule, and the half that costs more when it is wrong. Meta
+     * throttles or has an outage, and demoting on that turns a blip into every
+     * tenant retyping working credentials - burying the one genuinely revoked
+     * token in the noise.
+     */
+    expect((await readIntegration()).status).toBe("CONNECTED");
+
+    /* The message still fails. Only the badge is spared. */
+    expect((await readMessage(id)).status).toBe("FAILED");
+  });
+
+  it("demotes on a config refusal too, which is not a credential problem", async () => {
+    const id = await newMessage();
+
+    await withCompany(alpha.id, (db, companyId) =>
+      recordSendRefused(db, companyId, id, {
+        code: 100,
+        title: "Unsupported post request",
+        occurredAt: OCCURRED,
+        kind: "config",
+        integrationId,
+      }),
+    );
+
+    /* config is the third class: a real misconfiguration somebody must fix.
+       Calling it transient would hide it for ever. */
+    expect((await readIntegration()).status).toBe("NOT_CONNECTED");
   });
 });
 

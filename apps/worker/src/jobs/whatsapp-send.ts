@@ -191,6 +191,13 @@ export async function handleWhatsAppMessageSend(
         code: readCode(outcome.details),
         title: outcome.error,
         occurredAt: new Date(),
+        /*
+         * The kind decides whether the badge moves, and it comes from
+         * decodeGraphFailure rather than from statusCode - Meta's 190 arrives
+         * with a 400 as often as a 401. See recordSendRefused.
+         */
+        kind: outcome.kind,
+        integrationId: number.integrationId,
       }),
     );
 

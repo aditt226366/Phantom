@@ -1,3 +1,4 @@
+import { demotesStatus, type FailureKind } from "@whatsapp-os/core";
 import type { SendRefusal } from "@whatsapp-os/core/whatsapp";
 import type { CompanyClient } from "./with-company.ts";
 
@@ -63,12 +64,49 @@ export async function recordSendAccepted(
  * plainly. Meta's own code and title are stored because they are what a support
  * conversation quotes, and error_source records that they are Meta's rather
  * than ours.
+ *
+ * ---------------------------------------------------------------------------
+ * An auth-class refusal demotes the integration, exactly as verification does
+ * ---------------------------------------------------------------------------
+ *
+ * A 190 or a 401 on a send means the credential is dead, and it is dead for
+ * every other call too - the same fact a verification would have discovered.
+ * Without this the operator's only signal is opening individual threads and
+ * reading red bubbles, while the panel still says CONNECTED: a badge that is
+ * confidently wrong about the one thing it exists to report.
+ *
+ * `demotesStatus` and the three-way classification are commit 11's, unchanged
+ * and reused rather than reimplemented - only the wiring was missing. Its
+ * argument applies here word for word:
+ *
+ *   auth and config demote; transient never does. Meta has an outage or a
+ *   request runs long, and demoting on that turns a blip into every tenant
+ *   retyping working credentials - burying the one genuinely revoked token in
+ *   the noise. A wrong CONNECTED is a delay; a wrong NOT_CONNECTED is an
+ *   operator re-entering a credential that was never broken.
+ *
+ * Classifying on HTTP status alone would get Meta wrong in both directions,
+ * which is why the kind comes from decodeGraphFailure rather than from
+ * `statusCode`: 190 arrives with a 400 as often as a 401, and the rate-limit
+ * codes 4, 17 and 32 arrive as 400 as well.
+ *
+ * The demotion shares this transaction with the message write. They are one
+ * fact about one refusal, and a gap between them is a thread showing a failure
+ * beside a panel that still says the credential is good.
  */
 export async function recordSendRefused(
   db: CompanyClient,
   companyId: string,
   messageId: string,
-  failure: { code: number | null; title: string; occurredAt: Date },
+  failure: {
+    code: number | null;
+    title: string;
+    occurredAt: Date;
+    /** From decodeGraphFailure, never derived from the status code here. */
+    kind: FailureKind;
+    /** The integration whose credential was refused. */
+    integrationId: string;
+  },
 ): Promise<void> {
   await db.message.update({
     where: { id: messageId },
@@ -79,6 +117,13 @@ export async function recordSendRefused(
       errorTitle: failure.title,
       failedAt: failure.occurredAt,
     },
+  });
+
+  if (!demotesStatus(failure.kind)) return;
+
+  await db.integration.update({
+    where: { id: failure.integrationId },
+    data: { status: "NOT_CONNECTED", lastError: failure.title },
   });
 }
 

@@ -47,7 +47,13 @@ const recordSendRefused =
       db: unknown,
       companyId: string,
       messageId: string,
-      failure: { code: number | null; title: string; occurredAt: Date },
+      failure: {
+        code: number | null;
+        title: string;
+        occurredAt: Date;
+        kind: string;
+        integrationId: string;
+      },
     ) => Promise<void>
   >();
 const recordSendUnconfirmed =
@@ -329,8 +335,19 @@ describe("Meta refuses", () => {
     const result = await handleWhatsAppMessageSend(JOB);
 
     expect(result).toEqual({ result: "refused" });
-    expect(recordSendRefused.mock.calls[0]![3]).toMatchObject({ code: 131_047 });
     expect(recordUsage).not.toHaveBeenCalled();
+
+    /*
+     * The kind and the integration are what let the recorder decide whether the
+     * badge moves. Passing statusCode instead would get Meta wrong in both
+     * directions - 190 arrives with a 400 as often as a 401, and the rate-limit
+     * codes 4, 17 and 32 arrive as 400 too.
+     */
+    expect(recordSendRefused.mock.calls[0]![3]).toMatchObject({
+      code: 131_047,
+      kind: "config",
+      integrationId: "int-1",
+    });
   });
 });
 

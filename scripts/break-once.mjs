@@ -41,7 +41,9 @@ import { readFileSync, writeFileSync } from "node:fs";
  *     --replace 'if (received > MAX_MEDIA_BYTES * 100) {' \
  *     --command 'npx vitest run --project core packages/core/tests/whatsapp-media.test.ts'
  *
- * \n in --find and --replace is expanded, for multi-line anchors.
+ * \n in --find and --replace is expanded, for multi-line anchors — to whatever
+ * line ending the target file actually uses, so an anchor written with \n
+ * matches a CRLF checkout.
  */
 
 function fail(message) {
@@ -61,7 +63,7 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || value === undefined) {
       fail(`could not read arguments at "${key ?? ""}". See the header of this file.`);
     }
-    parsed[key.slice(2)] = value.replaceAll("\n", "\n");
+    parsed[key.slice(2)] = value;
   }
   return parsed;
 }
@@ -75,7 +77,9 @@ for (const required of ["file", "find", "replace", "command"]) {
   if (args[required] === undefined) fail(`--${required} is required.`);
 }
 
-const { file, find, replace, command } = args;
+const { file, command } = args;
+/* Raw, because expanding them needs the file's line endings. See below. */
+const { find: rawFind, replace: rawReplace } = args;
 
 /*
  * The refusal that matters, and the reason this is a script rather than a
@@ -122,7 +126,44 @@ if (pipeless.includes("|")) {
 }
 
 const original = readFileSync(file, "utf8");
-const occurrences = original.split(find).length - 1;
+
+/**
+ * Expand `\n` in the anchor, tolerating whichever line ending is actually there.
+ *
+ * Two bugs lived here, and the second would have hidden the first.
+ *
+ * The expansion was `value.replaceAll("\n", "\n")` — in a JavaScript source file
+ * both arguments are already a real newline, so it replaced a newline with a
+ * newline and did nothing whatsoever. A shell passes `\n` inside single quotes
+ * as two characters, backslash and n, so every multi-line anchor anyone ever
+ * wrote matched nothing. The documented feature had never worked.
+ *
+ * Fixing that alone was not enough. This checkout holds files with CRLF endings,
+ * LF endings, and — where a tool has edited part of a CRLF file — both at once.
+ * Sniffing the file for one answer gets a mixed file wrong, and gets it wrong in
+ * the direction that matters: the anchor is usually the region something just
+ * edited, which is exactly the region whose endings disagree with the rest.
+ *
+ * So `\n` becomes `\r?\n` and the match is a regex. Nothing is normalised on
+ * disk — rewriting a file's endings during a break would put every untouched
+ * line in the diff and bury the one that is the point.
+ *
+ * Both failures were safe: "matched nothing" is a refusal, so nothing was ever
+ * broken silently. What they cost was a whole class of break — the structural
+ * ones, spanning lines — which could not be performed at all.
+ */
+function anchorPattern(literal) {
+  const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped.replaceAll("\\\\n", "\\r?\\n"), "g");
+}
+
+const findPattern = anchorPattern(rawFind);
+
+/* $ is a substitution sigil to String.replace, and an anchor's replacement is
+   source code that may legitimately contain one. */
+const replace = rawReplace.replaceAll("\\n", "\n").replaceAll("$", "$$$$");
+
+const occurrences = original.match(findPattern)?.length ?? 0;
 
 if (occurrences === 0) {
   /*
@@ -181,7 +222,7 @@ if (baseline.status !== 0) {
   );
 }
 
-writeFileSync(file, original.replace(find, replace));
+writeFileSync(file, original.replace(findPattern, replace));
 
 console.log(`\nbreak-once: applied to ${file}\n`);
 const diff = git(["diff", "--", file]).stdout;

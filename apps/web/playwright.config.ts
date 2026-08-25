@@ -103,20 +103,33 @@ export default defineConfig({
   expect: {
     toHaveScreenshot: {
       /*
-       * Two thresholds, doing different jobs.
+       * Two knobs, and only one of them is allowed to absorb anything.
        *
-       * `threshold` is per pixel: how different two pixels must be before
-       * either counts as changed at all. 0.2 in YIQ space absorbs antialiasing
-       * on curved glyph edges and nothing else.
+       * `threshold` is per pixel: how far two pixels may differ in YIQ space
+       * before either counts as changed at all. This is the one that exists for
+       * rasteriser noise — antialiasing along curved glyph edges, subpixel
+       * hinting — and 0.2 absorbs it without reaching a pixel that changed
+       * because the markup did.
        *
-       * `maxDiffPixelRatio` is the budget: 0.1% of the page. A 1440x2000 shot
-       * allows about 2,800 changed pixels — enough for the rasteriser to
-       * disagree with itself along a few hundred glyph edges, far short of a
-       * moved element. The card that collapsed to 20px changed a third of the
-       * viewport.
+       * `maxDiffPixelRatio` is a budget for pixels that got past that, and it
+       * is zero. A pixel the threshold did not absorb is a pixel that genuinely
+       * changed, and there is no number of those a screenshot suite should
+       * accept quietly.
+       *
+       * It used to be 0.001, and that was the two knobs doing each other's
+       * jobs. 0.1% of a 1440x900 page is about 1,300 pixels, which is enough to
+       * hide a whole CTA: /configuration's call to action was replaced, the
+       * 390px shot failed, and the 1440px shot passed and kept a baseline
+       * depicting a control the page no longer rendered. A budget wide enough
+       * to swallow a button is not a tolerance, it is a blind spot — in the one
+       * suite whose entire job is noticing that something looks different.
+       *
+       * If a run ever goes noisy, that is evidence `threshold` is wrong, and
+       * the fix is there. Raising this back up would only re-hide whatever the
+       * noise turned out to be.
        */
       threshold: 0.2,
-      maxDiffPixelRatio: 0.001,
+      maxDiffPixelRatio: 0,
       animations: "disabled",
       caret: "hide",
       scale: "css",

@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
  * every commit that adds a test, which trains people to edit the number without
  * reading it - and a number nobody reads is the failure this exists to prevent.
  */
-const MINIMUM_TESTS = 872;
+const MINIMUM_TESTS = 886;
 
 const out = mkdtempSync(path.join(tmpdir(), "wa-os-test-"));
 const report = path.join(out, "report.json");

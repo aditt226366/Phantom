@@ -270,7 +270,7 @@ and can never match. Commit 24 replaces the ternary with a map.
 
 ## Commits
 
-### Done — 4a (47 commits on `phase-4a`)
+### Done — 4a (52 commits on `phase-4a`)
 
 Planned commits 1–21 of the original numbering, plus ten that emerged from the
 work and were not planned, plus the docs commits that wrote the rest down.
@@ -309,6 +309,7 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 21 | `d493d27` | `feat(worker): keep a number's quality and tier current` |
 | 22+23 | `0601011` | `feat(web): protect the public endpoint before opening it` |
 | 25 | `92af5bd` | `feat(web): the webhook Meta posts to` |
+| 27 | `011f279` | `feat(web): serve a photo a customer sent` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -325,7 +326,6 @@ neither is useful without the other. The route itself is next.
 | --- | --- | --- |
 | **24** | **27** | `test(web): seed a WhatsApp number, a contact and two threads` — **screenshots back on here** |
 | 26 | 29 | `feat(web): show an operator the deliveries that never landed` |
-| 27 | 30 | `feat(web): serve a photo a customer sent` |
 | 28 | 31 | `feat(web): the numbers behind your WhatsApp connection` |
 | 29 | 32 | `feat(web): a conversation list that says how long is left` |
 | 30 | 33 | `feat(web): a thread, and a composer that closes with the window` |

@@ -103,6 +103,25 @@ test.describe("coverage", () => {
      */
     const EXCLUDED = new Map([["/reset-password", "needs a live reset token"]]);
 
+    /**
+     * What a dynamic segment stands for.
+     *
+     * This was a ternary that substituted `[id]` and left everything else
+     * alone, which is a silent trap rather than a missing feature: an
+     * unsubstituted `[conversationId]` matches nothing in ROUTES, so it fails
+     * *both* assertions below with two messages that are each wrong — "nothing
+     * photographs them" when something does, and "no page.tsx renders them"
+     * when one does. Whoever adds the thread page would be debugging the
+     * walker, not their page.
+     *
+     * So: a map, and a guard below that names the real problem. Every entry is
+     * a row the visual seed writes.
+     */
+    const DYNAMIC_SEGMENTS = new Map([
+      ["[id]", FIXTURE.companyId],
+      ["[conversationId]", FIXTURE.conversationId],
+    ]);
+
     const found: string[] = [];
 
     function walk(dir: string): void {
@@ -118,9 +137,7 @@ test.describe("coverage", () => {
         const segments = relative(appDir, dirname(full))
           .split(/[\\/]/)
           .filter((segment) => segment !== "" && !segment.startsWith("("))
-          .map((segment) =>
-            segment === "[id]" ? FIXTURE.companyId : segment,
-          );
+          .map((segment) => DYNAMIC_SEGMENTS.get(segment) ?? segment);
 
         found.push(`/${segments.join("/")}`);
       }
@@ -128,6 +145,18 @@ test.describe("coverage", () => {
 
     expect(existsSync(appDir), `app/ not found at ${appDir}`).toBe(true);
     walk(appDir);
+
+    /*
+     * The guard the map is actually for. A segment still in brackets is one
+     * nobody gave a value to, and saying so here is the difference between a
+     * one-line fix and an afternoon reading the two assertions below.
+     */
+    const unmapped = found.filter((path) => path.includes("[")).sort();
+
+    expect(
+      unmapped,
+      "these routes have a dynamic segment with no fixture value — add it to DYNAMIC_SEGMENTS above",
+    ).toEqual([]);
 
     /* Query strings distinguish tabs of one page, not separate pages. */
     const covered = new Set(ROUTES.map((route) => route.path.split("?")[0]));

@@ -18,6 +18,14 @@ export const FIXTURE = {
   /** Literal, so every admin URL below is a constant. */
   companyId: "c000visualfixturecompany1",
   /**
+   * The open-window thread, which is the one a `[conversationId]` route gets.
+   *
+   * Here before any page renders it, so that adding the thread page is one
+   * entry in ROUTES and nothing else — the walker in pages.spec.ts already
+   * substitutes this segment. See DYNAMIC_SEGMENTS there.
+   */
+  conversationId: "c000visualfixtureconvo01",
+  /**
    * The owner's last sign-in, as the console renders it.
    *
    * Here rather than only in the seed because signing in overwrites it, and

@@ -1,4 +1,5 @@
 import "./_load-env.mjs";
+import { createHash } from "node:crypto";
 import pg from "pg";
 import {
   createKeyring,
@@ -37,20 +38,38 @@ import {
  * Asia/Kolkata, so a literal in this file renders as the same string forever.
  *
  * ---------------------------------------------------------------------------
- * The one thing that is not frozen
+ * The two things that are not frozen, and the rule they share
  * ---------------------------------------------------------------------------
  *
- * "API calls today" and "Est. spend this month" are windowed on the platform
- * day and month, computed when the page renders rather than when this runs.
- * Their events are therefore stamped at the current instant, which is inside
- * both windows by definition — the count and the total are fixed even though
- * the timestamps are not, and neither timestamp is rendered anywhere.
+ * Both are stamped `now()`, and both are safe for the same reason: they are
+ * *decided on* at render time and never *rendered*. That is the rule. A value
+ * this file stamps relative to the clock may drive a count, a badge or a
+ * branch; the moment one is printed as a timestamp, this suite stops diffing.
  *
- * The residue is that a run which crosses midnight IST between the seed and
- * the screenshot sees those two cards go to zero. Re-seed and re-run. Freezing
- * it properly would mean the application reading its clock from somewhere a
- * test could set, and a production code path that exists only for tests is a
- * worse trade than a rare re-run.
+ * 1. "API calls today" and "Est. spend this month" are windowed on the
+ *    platform day and month, computed when the page renders rather than when
+ *    this runs. Their events are stamped at the current instant, which is
+ *    inside both windows by definition — the count and the total are fixed
+ *    even though the timestamps are not.
+ *
+ *    The residue is that a run which crosses midnight IST between the seed and
+ *    the screenshot sees those two cards go to zero. Re-seed and re-run.
+ *    Freezing it properly would mean the application reading its clock from
+ *    somewhere a test could set, and a production code path that exists only
+ *    for tests is a worse trade than a rare re-run.
+ *
+ * 2. The open thread's `window_expires_at`. A conversation cannot be both
+ *    permanently open and described by a fixed instant — a literal in the
+ *    future becomes a literal in the past, and the composer this fixture
+ *    exists to photograph closes for good on a date nobody wrote down.
+ *
+ *    So it is `now() + 18 hours`, while `last_inbound_at`, `last_message_at`
+ *    and the preview beside them stay literal, because those are what the
+ *    inbox prints. The consequence, for whoever builds that page: render the
+ *    window as the open/closed state it decides, or as a bucket coarse enough
+ *    that the minutes between this script and the screenshot cannot move it.
+ *    Never as a time. The closed thread is entirely literal and needs none of
+ *    this — a window that expired stays expired.
  *
  * ---------------------------------------------------------------------------
  * Which database
@@ -114,6 +133,13 @@ const T = {
     "2026-08-12T05:22:17Z",
     "2026-08-09T14:03:40Z",
   ],
+
+  /* When each number last agreed with Meta, and when Meta stopped returning
+     the second one. Three days apart so "refreshed" and "missing since" are
+     visibly different dates rather than two readings of the same moment. */
+  numberRefreshed: "2026-08-14T19:45:00Z", //  15/08/2026 01:15:00
+  numberRefreshedOld: "2026-08-11T19:45:00Z", // 12/08/2026 01:15:00
+  numberMissingSince: "2026-08-12T19:45:00Z", // 13/08/2026 01:15:00
 };
 
 /**
@@ -185,6 +211,247 @@ const USAGE = [
   })),
 ];
 
+/**
+ * The webhook path Meta posts to, per integration.
+ *
+ * Pinned, where every other seeded row lets the column default. `webhook_key`
+ * defaults to a database expression — a fresh random 32-hex value on every
+ * INSERT — which was invisible for as long as nothing rendered it. Configuration
+ * > Numbers renders it, and a random string on a photographed page is a baseline
+ * that never matches twice.
+ *
+ * Same 32-hex shape the default produces, so nothing downstream can tell these
+ * apart from a real one.
+ */
+const WEBHOOK_KEY = {
+  [INTEGRATION.sheets]: "c8a15d7302e94b61af53d806e27b9145",
+  [INTEGRATION.whatsapp]: "9f2c41a7b06d4e58a3d17c9e5b820f36",
+  [INTEGRATION.otherCompany]: "4b7e0d93c1a84f26b5e8a07d3f19c254",
+  [INTEGRATION.thirdCompany]: "1d6b83f5407c42e9b0a75c14e83f9d27",
+};
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp: numbers, contacts, threads                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Three numbers, three states.
+ *
+ * The same reasoning as the integrations below, one table over: a page that
+ * only ever photographs a healthy row never photographs what an operator
+ * actually opens it to look at.
+ *
+ *   01  the happy row, and the number both threads hang off.
+ *   02  quality degraded AND absent from Meta's list since the day after it
+ *       was last read. Not a contradiction — that is precisely what
+ *       missing_since is for: the cache is frozen at what Meta last said,
+ *       and the row survives so the absence has an age.
+ *   03  a status this build does not model, which must render as itself
+ *       rather than be flattened into UNKNOWN (see 20260816100000), with no
+ *       verified name and no refresh — so the "Never" branch and the
+ *       unapproved-name fallback are both on screen.
+ */
+const NUMBERS = [
+  {
+    id: "c000visualfixturenumber01",
+    phoneNumberId: "109384756201847",
+    displayNumber: "+91 98765 43210",
+    verifiedName: "Northwind Traders",
+    quality: "GREEN",
+    status: "CONNECTED",
+    tier: "TIER_1K",
+    throughput: "STANDARD",
+    refreshedAt: T.numberRefreshed,
+    missingSince: null,
+  },
+  {
+    id: "c000visualfixturenumber02",
+    phoneNumberId: "109384756201848",
+    displayNumber: "+91 98765 43211",
+    verifiedName: "Northwind Support",
+    quality: "YELLOW",
+    status: "FLAGGED",
+    tier: "TIER_250",
+    throughput: "STANDARD",
+    refreshedAt: T.numberRefreshedOld,
+    missingSince: T.numberMissingSince,
+  },
+  {
+    id: "c000visualfixturenumber03",
+    phoneNumberId: "109384756201849",
+    displayNumber: "+91 98765 43212",
+    verifiedName: null,
+    quality: "UNKNOWN",
+    status: "UNVERIFIED",
+    tier: null,
+    throughput: null,
+    refreshedAt: null,
+    missingSince: null,
+  },
+];
+
+/* The code the refresh job writes. A literal rather than an import: reaching
+   @whatsapp-os/db for it pulls in client.ts, which parses env — and ESM
+   evaluates that above the redirect at the top of this file. The constant is
+   MISSING_FROM_META_LIST in packages/db/src/numbers.ts. */
+const MISSING_FROM_META_LIST = "absent_from_meta_list";
+
+/**
+ * Two contacts on number 01, so the inbox has two threads and not one person
+ * twice — @@unique(company_id, contact_id, whatsapp_number_id) means one
+ * contact with two threads would have to be two different numbers.
+ *
+ * Anita has a profile name and nothing else; Vikram has a display name
+ * somebody here typed, which wins. Both branches of the name resolution.
+ */
+const CONTACTS = [
+  {
+    id: "c000visualfixturecontact1",
+    waId: "919812345690",
+    phoneE164: "+919812345690",
+    profileName: "Anita Desai",
+    displayName: null,
+  },
+  {
+    id: "c000visualfixturecontact2",
+    waId: "919812345691",
+    phoneE164: "+919812345691",
+    profileName: "Vikram Shah",
+    displayName: "Vikram (Ashgrove PO)",
+  },
+];
+
+const MEDIA_ID = "c000visualfixturemedia001";
+
+/**
+ * A real 1x1 PNG, not a placeholder blob.
+ *
+ * Small enough to sit in the source and still be a file a browser will decode,
+ * which matters: the thread renders it through /api/media/[mediaId] with a
+ * content type and an ETag, and a byte string that is not an image would fail
+ * there and nowhere else.
+ *
+ * The hash is computed rather than pasted. It is the row's identity, the
+ * route's ETag and half of the (company_id, sha256) unique, and a CHECK
+ * constraint ties byte_size to octet_length(bytes) — so a pasted value that
+ * drifted would be three wrong things at once.
+ */
+const MEDIA_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const MEDIA_SHA256 = createHash("sha256").update(MEDIA_BYTES).digest("hex");
+
+const CONVERSATION = {
+  /* The open one. FIXTURE.conversationId, because the walker in pages.spec.ts
+     substitutes it for [conversationId] and the thread page will be its URL. */
+  open: FIXTURE.conversationId,
+  closed: "c000visualfixtureconvo02",
+};
+
+/**
+ * Two threads, and between them every state the next three commits render.
+ *
+ * Open: unanswered, two unread, the window still running. Closed: the window
+ * expired on the 10th, and the outbound that went out on the 11th was refused
+ * by Meta for exactly that reason — 131047 is the error a closed window
+ * produces, so the thread tells one coherent story rather than carrying a
+ * failure that could not have happened.
+ *
+ * The image is INBOUND. Outbound media is deferred to Phase 5 (P4) and the
+ * composer renders a disabled attach control saying so, so a seeded outbound
+ * image would be a fixture for a feature that does not exist.
+ */
+const MESSAGES = [
+  {
+    id: "c000visualfixturemessage1",
+    conversationId: CONVERSATION.open,
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkwFQIAEhggMEExRkIzM0M0NUE2N0Q4OQA=",
+    body: "Hi — do you still have the 5kg pack of the Assam CTC?",
+    occurredAt: "2026-08-14T09:02:11Z", // 14/08/2026 14:32:11
+    sentBy: null,
+  },
+  {
+    id: "c000visualfixturemessage2",
+    conversationId: CONVERSATION.open,
+    direction: "OUTBOUND",
+    status: "READ",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkwFQIAERgSN0QyQTkxMEY4QjRDNjEyRDIA",
+    body: "We do — 5kg is ₹1,240 including delivery. Shall I reserve one?",
+    occurredAt: "2026-08-14T09:05:40Z", // 14/08/2026 14:35:40
+    sentBy: "c000visualfixtureuser001",
+  },
+  {
+    id: "c000visualfixturemessage3",
+    conversationId: CONVERSATION.open,
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkwFQIAEhggQjc1RTBEMjE5QThDNDRGMQA=",
+    body: "Yes please. Same address as last time.",
+    occurredAt: "2026-08-14T09:11:03Z", // 14/08/2026 14:41:03
+    sentBy: null,
+  },
+  {
+    id: "c000visualfixturemessage4",
+    conversationId: CONVERSATION.open,
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkwFQIAEhggRjMwOEM2QTdEMTJCNEU4NQA=",
+    body: "And can you add two of the jaggery blocks?",
+    occurredAt: "2026-08-14T09:12:58Z", // 14/08/2026 14:42:58
+    sentBy: null,
+  },
+
+  {
+    id: "c000visualfixturemessage5",
+    conversationId: CONVERSATION.closed,
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "image",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkxFQIAEhggMkU5QjRDMDdBNjFEMzhBNwA=",
+    body: "Purchase order for August.",
+    mediaId: MEDIA_ID,
+    occurredAt: "2026-08-09T05:30:00Z", // 09/08/2026 11:00:00
+    sentBy: null,
+  },
+  {
+    id: "c000visualfixturemessage6",
+    conversationId: CONVERSATION.closed,
+    direction: "OUTBOUND",
+    status: "DELIVERED",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkxFQIAERgSQTFDNUY4M0IyRDdFNDA5NkEA",
+    body: "Received — I'll confirm the dispatch date by Monday.",
+    occurredAt: "2026-08-09T05:41:12Z", // 09/08/2026 11:11:12
+    sentBy: "c000visualfixtureuser001",
+  },
+  {
+    /* Sent a day after the window closed, and refused for that reason. The
+       failed bubble and its retry action are commit 31; the row is here
+       because it belongs to this thread's story and not to that commit. */
+    id: "c000visualfixturemessage7",
+    conversationId: CONVERSATION.closed,
+    direction: "OUTBOUND",
+    status: "FAILED",
+    type: "text",
+    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkxFQIAERgSNkI4RDIwRTRDOTFBNzUzM0YA",
+    body: "Dispatch is confirmed for Tuesday the 12th.",
+    occurredAt: "2026-08-11T06:15:00Z", // 11/08/2026 11:45:00
+    failedAt: "2026-08-11T06:15:03Z",
+    errorSource: "META",
+    errorCode: 131047,
+    errorTitle:
+      "Message failed to send because more than 24 hours have passed since the customer last replied to this number.",
+    sentBy: "c000visualfixtureuser001",
+  },
+];
+
 /* ------------------------------------------------------------------ */
 /* Writing it                                                          */
 /* ------------------------------------------------------------------ */
@@ -205,9 +472,17 @@ try {
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
   );
   const tables = new Set(present.map((row) => row.tablename));
-  const missing = ["companies", "integrations", "usage_events", "admin_users"].filter(
-    (table) => !tables.has(table),
-  );
+  const missing = [
+    "companies",
+    "integrations",
+    "usage_events",
+    "admin_users",
+    "whatsapp_numbers",
+    "contacts",
+    "conversations",
+    "messages",
+    "whatsapp_media",
+  ].filter((table) => !tables.has(table));
 
   if (missing.length > 0) {
     console.error(
@@ -217,15 +492,27 @@ try {
     process.exit(1);
   }
 
-  await client.query(`
-    TRUNCATE TABLE "integration_secrets", "integration_verifications",
-                   "integrations", "usage_events", "sessions",
-                   "email_verification_tokens", "password_reset_tokens",
-                   "audit_log", "login_attempts", "users", "companies",
-                   "admin_sessions", "admin_audit_log", "admin_repair_runs",
-                   "admin_users"
-    RESTART IDENTITY CASCADE
-  `);
+  /*
+   * Discovered, not listed.
+   *
+   * This was a hand-written list of fifteen tables, and Phase 4a added seven it
+   * did not know about — which is the failure truncateAll in
+   * packages/db/tests/helpers.ts already describes: a hardcoded list silently
+   * stops covering the next table someone adds, and the residue turns up as a
+   * confusing failure somewhere unrelated. Here it would be worse than
+   * confusing: a fixture that does not wipe is a fixture that accumulates, and
+   * every baseline drifts one run at a time.
+   *
+   * CASCADE handles the ordering, so the set does not need to be dependency
+   * sorted. _prisma_migrations is excluded for the obvious reason.
+   */
+  const wipe = present
+    .map((row) => row.tablename)
+    .filter((table) => table !== "_prisma_migrations")
+    .map((table) => `"${table}"`)
+    .join(", ");
+
+  await client.query(`TRUNCATE TABLE ${wipe} RESTART IDENTITY CASCADE`);
 
   const tenantHash = await hashPassword(FIXTURE.tenant.password);
   const adminHash = await hashPassword(FIXTURE.admin.password);
@@ -277,14 +564,17 @@ try {
      META_ADS gets no row at all, so one card renders its "not connected"
      state — the state an operator sees most often and the one a suite that
      only seeds happy paths never photographs. */
+  /* webhook_key is named rather than left to the column default, which is a
+     fresh random value on every INSERT. See WEBHOOK_KEY above. */
   await client.query(
     `INSERT INTO integrations (id, company_id, provider, label, status,
-                               last_verified_at, last_error, created_at, updated_at)
-     VALUES ($1, $5, 'GOOGLE_SHEETS',  'Order sheet',      'CONNECTED',     $6, NULL, $8, $8),
-            ($2, $5, 'WHATSAPP_CLOUD', 'Primary number',   'CONNECTED',     $6, NULL, $8, $8),
+                               last_verified_at, last_error, webhook_key,
+                               created_at, updated_at)
+     VALUES ($1, $5, 'GOOGLE_SHEETS',  'Order sheet',      'CONNECTED',     $6, NULL, $11, $8, $8),
+            ($2, $5, 'WHATSAPP_CLOUD', 'Primary number',   'CONNECTED',     $6, NULL, $12, $8, $8),
             ($3, $9, 'WHATSAPP_CLOUD', 'Support number',   'NOT_CONNECTED', $7,
-             'Meta Graph API returned 190: Error validating access token.', $8, $8),
-            ($4, $10, 'GOOGLE_SHEETS', 'Consignment log',  'CONNECTED',     $6, NULL, $8, $8)`,
+             'Meta Graph API returned 190: Error validating access token.', $13, $8, $8),
+            ($4, $10, 'GOOGLE_SHEETS', 'Consignment log',  'CONNECTED',     $6, NULL, $14, $8, $8)`,
     [
       INTEGRATION.sheets,
       INTEGRATION.whatsapp,
@@ -296,6 +586,10 @@ try {
       T.companyCreated,
       COMPANY.deactivated,
       COMPANY.enterprise,
+      WEBHOOK_KEY[INTEGRATION.sheets],
+      WEBHOOK_KEY[INTEGRATION.whatsapp],
+      WEBHOOK_KEY[INTEGRATION.otherCompany],
+      WEBHOOK_KEY[INTEGRATION.thirdCompany],
     ],
   );
 
@@ -407,10 +701,148 @@ try {
     );
   }
 
+  /* ---------------------------------------------------------------- */
+  /* WhatsApp                                                          */
+  /* ---------------------------------------------------------------- */
+
+  for (const number of NUMBERS) {
+    await client.query(
+      `INSERT INTO whatsapp_numbers (id, company_id, integration_id, phone_number_id,
+                                     display_number, verified_name, quality_rating,
+                                     status, messaging_tier, throughput_level,
+                                     metadata_refreshed_at, missing_since,
+                                     missing_reason, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::whatsapp_quality_rating, $8, $9, $10,
+               $11, $12, $13, $14, $14)`,
+      [
+        number.id,
+        COMPANY.active,
+        INTEGRATION.whatsapp,
+        number.phoneNumberId,
+        number.displayNumber,
+        number.verifiedName,
+        number.quality,
+        number.status,
+        number.tier,
+        number.throughput,
+        number.refreshedAt,
+        number.missingSince,
+        number.missingSince ? MISSING_FROM_META_LIST : null,
+        T.companyCreated,
+      ],
+    );
+  }
+
+  for (const contact of CONTACTS) {
+    await client.query(
+      `INSERT INTO contacts (id, company_id, wa_id, phone_e164, profile_name,
+                             display_name, opted_out_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $7)`,
+      [
+        contact.id,
+        COMPANY.active,
+        contact.waId,
+        contact.phoneE164,
+        contact.profileName,
+        contact.displayName,
+        T.companyCreated,
+      ],
+    );
+  }
+
+  await client.query(
+    `INSERT INTO whatsapp_media (id, company_id, sha256, mime_type, file_name,
+                                 byte_size, state, skipped_reason,
+                                 storage_backend, storage_key, bytes,
+                                 created_at, updated_at)
+     VALUES ($1, $2, $3, 'image/png', 'purchase-order-august.png', $4,
+             'STORED'::media_state, NULL, 'postgres', NULL, $5, $6, $6)`,
+    [
+      MEDIA_ID,
+      COMPANY.active,
+      MEDIA_SHA256,
+      MEDIA_BYTES.length,
+      MEDIA_BYTES,
+      T.companyCreated,
+    ],
+  );
+
+  /*
+   * The open thread's window is the only value here the clock decides — see
+   * the note at the top of this file, and do not render it as a time.
+   *
+   * The closed one expired on 10/08 and stays expired, which is what makes the
+   * refusal on message 7 the truth rather than a decorative error.
+   */
+  await client.query(
+    `INSERT INTO conversations (id, company_id, contact_id, whatsapp_number_id,
+                                source, last_inbound_at, last_message_at,
+                                last_message_preview, window_expires_at,
+                                unread_count, assigned_user_id, assigned_at,
+                                created_at, updated_at)
+     VALUES ($1, $3, $4, $6, 'INBOUND'::conversation_source, $7, $7, $8,
+             now() + interval '18 hours', 2, NULL, NULL, $7, $7),
+            ($2, $3, $5, $6, 'INBOUND'::conversation_source, $9, $10, $11,
+             $12, 0, $13, $10, $9, $9)`,
+    [
+      CONVERSATION.open,
+      CONVERSATION.closed,
+      COMPANY.active,
+      CONTACTS[0].id,
+      CONTACTS[1].id,
+      NUMBERS[0].id,
+      "2026-08-14T09:12:58Z",
+      "And can you add two of the jaggery blocks?",
+      "2026-08-09T05:30:00Z",
+      "2026-08-11T06:15:00Z",
+      "Dispatch is confirmed for Tuesday the 12th.",
+      "2026-08-10T05:30:00Z" /* 24h after the last inbound. Closed. */,
+      "c000visualfixtureuser001",
+    ],
+  );
+
+  for (const message of MESSAGES) {
+    await client.query(
+      `INSERT INTO messages (id, company_id, conversation_id, direction, status,
+                             type, wamid, body, media_id, error_source,
+                             error_code, error_title, send_attempt,
+                             sent_by_user_id, occurred_at, delivered_at,
+                             read_at, failed_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4::message_direction, $5::message_status, $6, $7, $8,
+               $9, $10::message_failure_source, $11, $12, 0, $13, $14,
+               $15, $16, $17, $14, $14)`,
+      [
+        message.id,
+        COMPANY.active,
+        message.conversationId,
+        message.direction,
+        message.status,
+        message.type,
+        message.wamid,
+        message.body,
+        message.mediaId ?? null,
+        message.errorSource ?? null,
+        message.errorCode ?? null,
+        message.errorTitle ?? null,
+        message.sentBy,
+        message.occurredAt,
+        /* The ladder, spelled out rather than derived: a DELIVERED row has a
+           delivered_at, a READ row has both, and a FAILED row has neither and
+           a failed_at instead. A thread rendering ticks from these columns
+           would otherwise photograph a state no real message can be in. */
+        message.status === "FAILED" ? null : message.occurredAt,
+        message.status === "READ" ? message.occurredAt : null,
+        message.failedAt ?? null,
+      ],
+    );
+  }
+
   console.log(
     `Seeded ${TEST_DATABASE_NAME}: 3 companies, ${users.length} users, ` +
       `4 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
-      `${USAGE.length} usage events.`,
+      `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
+      `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
+      `1 media row.`,
   );
 } finally {
   await client.end();

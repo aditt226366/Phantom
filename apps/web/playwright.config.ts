@@ -45,11 +45,26 @@ import {
 
 /*
  * Not 3000, so a dev server can stay up while this runs, and overridable
- * because "already used" is otherwise a config edit rather than a flag. The
- * port is not rendered anywhere, so changing it does not invalidate a baseline.
+ * because "already used" is otherwise a config edit rather than a flag.
  */
 const PORT = Number(process.env["VISUAL_PORT"] ?? 3210);
 const BASE_URL = `http://localhost:${PORT}`;
+
+/*
+ * What the app calls itself, which is not where the suite finds it.
+ *
+ * These were the same value until Configuration > Numbers rendered the webhook
+ * address, and this comment used to say the port was not rendered anywhere so
+ * changing it could not invalidate a baseline. That stopped being true: APP_URL
+ * is now printed on a photographed page, and derived from BASE_URL it would
+ * make VISUAL_PORT — an escape hatch for a busy port — silently re-record a
+ * screenshot.
+ *
+ * So it is a literal, on the same rule every id and timestamp in the seed
+ * follows: a value this fixture renders is written down, not computed. Nothing
+ * navigates by it — Playwright uses baseURL — so it costs nothing to pin.
+ */
+const FIXTURE_APP_URL = "http://localhost:3210";
 
 export default defineConfig({
   testDir: "./tests/visual",
@@ -143,7 +158,7 @@ export default defineConfig({
       DATABASE_URL: testDatabaseUrl(),
       DATABASE_URL_APP: testAppDatabaseUrl(),
       DATABASE_URL_ADMIN: testAdminDatabaseUrl(),
-      APP_URL: BASE_URL,
+      APP_URL: FIXTURE_APP_URL,
     },
   },
 });

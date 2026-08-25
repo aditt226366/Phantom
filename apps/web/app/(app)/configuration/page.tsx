@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { requireSession } from "@/lib/auth/session";
@@ -17,7 +18,14 @@ export default async function Page() {
         tone="rose"
         title="Nothing configured yet"
         description="Connect your WhatsApp Business number, set business hours, and choose who is notified when a conversation needs a person."
-          action={<Button>Connect WhatsApp</Button>}
+        /* The one part of this that exists. A dead button was fine while
+           nothing was built; now that Numbers is a page, not linking to it
+           would leave it reachable only by typing the URL. */
+        action={
+          <Button asChild>
+            <Link href="/configuration/numbers">WhatsApp numbers</Link>
+          </Button>
+        }
       />
     </SectionShell>
   );

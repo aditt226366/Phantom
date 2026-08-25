@@ -91,6 +91,7 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "meta-ads", path: "/meta-ads", audience: "tenant" },
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },
+  { name: "configuration-numbers", path: "/configuration/numbers", audience: "tenant" },
   { name: "profile-personal-details", path: "/profile/personal-details", audience: "tenant" },
   { name: "profile-documents", path: "/profile/documents", audience: "tenant" },
 

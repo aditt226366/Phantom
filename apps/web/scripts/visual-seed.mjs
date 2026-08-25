@@ -303,13 +303,20 @@ const MISSING_FROM_META_LIST = "absent_from_meta_list";
  *
  * Anita has a profile name and nothing else; Vikram has a display name
  * somebody here typed, which wins. Both branches of the name resolution.
+ *
+ * Anita's is long on purpose, and it is not padding. R4 names `profileName`
+ * and `lastMessagePreview` as the two automatic-minimum-size hazards in the
+ * inbox — customer-supplied strings of no bounded length, which is the exact
+ * shape of both faults this screenshot suite has ever caught. A fixture whose
+ * names all fit photographs a page where the mitigation was never needed and
+ * therefore never tested. People do put their shop in their WhatsApp profile.
  */
 const CONTACTS = [
   {
     id: "c000visualfixturecontact1",
     waId: "919812345690",
     phoneE164: "+919812345690",
-    profileName: "Anita Desai",
+    profileName: "Anita Desai — Sunrise Provision Stores, Andheri East",
     displayName: null,
   },
   {
@@ -403,7 +410,8 @@ const MESSAGES = [
     status: "DELIVERED",
     type: "text",
     wamid: "wamid.HBgMOTE5ODEyMzQ1NjkwFQIAEhggRjMwOEM2QTdEMTJCNEU4NQA=",
-    body: "And can you add two of the jaggery blocks?",
+    body:
+      "And can you add two of the jaggery blocks to the same order, the 500g ones if you have them in stock?",
     occurredAt: "2026-08-14T09:12:58Z", // 14/08/2026 14:42:58
     sentBy: null,
   },
@@ -792,7 +800,7 @@ try {
       CONTACTS[1].id,
       NUMBERS[0].id,
       "2026-08-14T09:12:58Z",
-      "And can you add two of the jaggery blocks?",
+      "And can you add two of the jaggery blocks to the same order, the 500g ones if you have them in stock?",
       "2026-08-09T05:30:00Z",
       "2026-08-11T06:15:00Z",
       "Dispatch is confirmed for Tuesday the 12th.",

@@ -276,9 +276,23 @@ test of a module that uses it. Scripts that import such a module run with
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
 **A worker fork dies occasionally in full runs, and it is not a false green.**
-Eight occurrences during Phase 4a, all identical: `Error: [vitest-pool]: Worker
+Many occurrences through Phase 4a, all identical: `Error: [vitest-pool]: Worker
 forks emitted error / Caused by: Error: Worker exited unexpectedly`, always the
-**db** project, always `auth-schema.test.ts`, always in a full `vitest run`.
+**db** project, always in a full `vitest run`.
+
+**It is not always `auth-schema.test.ts`, and that changed at the end of Phase
+4a.** Three consecutive crashes closing the phase were all
+`conversation-send.test.ts`, which passes in isolation at 21 tests. So the file
+identity is not a property of the crash — do not use it to diagnose. The
+signature is: a **db** file that never reports, **zero** tests failing, and a
+non-zero exit. Find the file by diffing the reported names against
+`packages/db/tests/*.test.ts` rather than assuming.
+
+**The rate rises with total suite size, not with the db suite's.** It was
+roughly one in five, then two in five as the db suite grew, and about three in
+four immediately after Phase 4a's last commits added ~60 web-server tests
+alongside — no db tests at all. Whatever the contention is, it counts work in
+the other projects too.
 
 What the investigation ruled out, so the fifth occurrence starts from here:
 
@@ -433,7 +447,8 @@ newline in a JS source file, so it did nothing and every multi-line anchor ever
 written matched nothing. Fixing that alone was not enough: this checkout holds
 CRLF files, LF files, and files carrying both where a tool edited part of one,
 which is exactly the region an anchor targets. `
-` now compiles to `?
+` now compiles to `
+?
 `
 and the match is a regex, with nothing normalised on disk.
 

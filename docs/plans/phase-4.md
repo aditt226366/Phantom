@@ -666,7 +666,8 @@ impossible: the documented `
 ` expansion was a no-op, and once that was fixed
 it still could not match a checkout holding CRLF, LF and mixed-ending files.
 `
-` now compiles to `?
+` now compiles to `
+?
 `. Both failed safe — "matched nothing" is a
 refusal — so no break had ever been silently unobserved.
 
@@ -687,9 +688,20 @@ convention.
 
 ## Still queued
 
-**The fork-crash investigation is stopped by agreement.** Nine-plus occurrences,
-always the db project, always `auth-schema.test.ts`, always full runs. It exits
-non-zero, so it fails loudly, and the retry absorbs it at a recorded rate.
+**The fork-crash investigation is stopped by agreement.** Many occurrences,
+always the db project, always full runs. It exits non-zero, so it fails loudly,
+and the retry absorbs it at a recorded rate — 13 retries logged by the end of
+the phase.
+
+**Two things about it changed while closing 4a, and both contradict what was
+written here.** It is no longer always `auth-schema.test.ts`: the three
+consecutive crashes at the end of the phase were all `conversation-send.test.ts`,
+which passes in isolation at 21 tests. And the rate rose to roughly three in
+four immediately after the last commits — which added about sixty *web-server*
+tests and no db tests at all. So the file identity is not a property of the
+crash and should not be used to diagnose it, and whatever the contention is, it
+counts work outside the db project. The signature to match on is a db file that
+never reports, zero tests failing, and a non-zero exit.
 
 Ruled out, each by measurement rather than argument:
 

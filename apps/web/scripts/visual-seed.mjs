@@ -330,6 +330,15 @@ const CONTACTS = [
 
 const MEDIA_ID = "c000visualfixturemedia001";
 
+/* The sentence the thread shows when nobody knows what happened. A literal
+   with a comment rather than an import, for the reason MISSING_FROM_META_LIST
+   above gives: reaching @whatsapp-os/db pulls in client.ts, which parses env,
+   and ESM evaluates that above the redirect at the top of this file. The
+   constant is DELIVERY_UNKNOWN_TITLE in packages/db/src/send.ts. */
+const DELIVERY_UNKNOWN_TITLE =
+  "Delivery unknown - Meta did not answer. Check WhatsApp before sending again; " +
+  "retrying may send this message twice.";
+
 /**
  * A real 1x1 PNG, not a placeholder blob.
  *
@@ -448,7 +457,13 @@ const MESSAGES = [
     direction: "OUTBOUND",
     status: "FAILED",
     type: "text",
-    wamid: "wamid.HBgMOTE5ODEyMzQ1NjkxFQIAERgSNkI4RDIwRTRDOTFBNzUzM0YA",
+    /*
+     * No wamid, and that is the whole difference between this and a message
+     * that failed downstream. Meta rejects a closed-window send on the POST
+     * itself, so recordSendRefused runs and never names the message - which is
+     * what makes non-delivery proven here and a retry safe to offer plainly.
+     */
+    wamid: null,
     body: "Dispatch is confirmed for Tuesday the 12th.",
     occurredAt: "2026-08-11T06:15:00Z", // 11/08/2026 11:45:00
     failedAt: "2026-08-11T06:15:03Z",
@@ -456,6 +471,27 @@ const MESSAGES = [
     errorCode: 131047,
     errorTitle:
       "Message failed to send because more than 24 hours have passed since the customer last replied to this number.",
+    sentBy: "c000visualfixtureuser001",
+  },
+  {
+    /*
+     * Meta never answered. Sent while the window was still open, between the
+     * customer's file and the reply that did land, so the thread stays
+     * coherent - and it puts the one status nothing can ever resolve on a page
+     * the suite photographs. Only a person can close this out; there is no
+     * wamid, so no callback can ever match the row.
+     */
+    id: "c000visualfixturemessage8",
+    conversationId: CONVERSATION.closed,
+    direction: "OUTBOUND",
+    status: "UNCONFIRMED",
+    type: "text",
+    wamid: null,
+    body: "Thanks — checking stock on those now.",
+    occurredAt: "2026-08-09T05:35:00Z", // 09/08/2026 11:05:00
+    /* error_source stays null: nobody refused this. A populated title beside a
+       null source is the shape that means "no verdict". */
+    errorTitle: DELIVERY_UNKNOWN_TITLE,
     sentBy: "c000visualfixtureuser001",
   },
 ];

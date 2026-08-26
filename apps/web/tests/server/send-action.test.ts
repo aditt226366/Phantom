@@ -44,18 +44,22 @@ vi.mock("@/lib/queue", () => ({ systemQueue: { add } }));
 /** What canSend will answer. Set per test. */
 let sendability: unknown = null;
 const create = vi.fn();
+const update = vi.fn();
+const findFirst = vi.fn();
 const advanceConversation = vi.fn();
 
 vi.mock("@whatsapp-os/db", () => ({
   /* The real one opens a transaction and passes a scoped client; the shape
      that matters to this test is that the callback receives (db, companyId). */
   withCompany: async (companyId: string, fn: (db: unknown, id: string) => unknown) =>
-    fn({ message: { create } }, companyId),
+    fn({ message: { create, update, findFirst } }, companyId),
   canSend: async () => sendability,
   advanceConversation,
 }));
 
-const { sendMessageAction } = await import("@/app/(app)/inbox/actions");
+const { retryMessageAction, sendMessageAction } = await import(
+  "@/app/(app)/inbox/actions"
+);
 
 function submission(body: string): FormData {
   const form = new FormData();
@@ -68,6 +72,8 @@ beforeEach(() => {
   add.mockReset();
   create.mockReset();
   advanceConversation.mockReset();
+  update.mockReset();
+  findFirst.mockReset();
   create.mockResolvedValue({ id: "message-1", sendAttempt: 0 });
 });
 
@@ -142,4 +148,105 @@ describe("sendMessageAction", () => {
     expect(create).not.toHaveBeenCalled();
     expect(add).not.toHaveBeenCalled();
   });
+});
+
+describe("retryMessageAction", () => {
+  function retrySubmission(): FormData {
+    const form = new FormData();
+    form.set("messageId", "message-1");
+    return form;
+  }
+
+  it("increments the attempt and puts it in the job id", async () => {
+    /* R2. BullMQ refuses a job whose id it already holds, silently, because
+       for every other job here that refusal IS the deduplication - so a retry
+       enqueued under the first attempt's id is dropped and the button looks
+       dead. The attempt number is the thing that makes the id new. */
+    findFirst.mockResolvedValue({
+      id: "message-1",
+      conversationId: "conversation-1",
+      status: "FAILED",
+      wamid: null,
+      sendAttempt: 0,
+    });
+    update.mockResolvedValue({
+      id: "message-1",
+      conversationId: "conversation-1",
+      sendAttempt: 1,
+    });
+
+    const state = await retryMessageAction({}, retrySubmission());
+
+    expect(state.error).toBeUndefined();
+    expect(update.mock.calls[0]?.[0]?.data?.sendAttempt).toEqual({ increment: 1 });
+    expect(add.mock.calls[0]?.[1]?.sendAttempt).toBe(1);
+    expect(add.mock.calls[0]?.[2]?.jobId).toBe(sendJobId("message-1", 1));
+  });
+
+  it("clears the previous attempt's reason", async () => {
+    /* A bubble that has gone back to Sending must not still carry last time's
+       failure underneath it. */
+    findFirst.mockResolvedValue({
+      id: "message-1",
+      conversationId: "conversation-1",
+      status: "FAILED",
+      wamid: null,
+      sendAttempt: 2,
+    });
+    update.mockResolvedValue({
+      id: "message-1",
+      conversationId: "conversation-1",
+      sendAttempt: 3,
+    });
+
+    await retryMessageAction({}, retrySubmission());
+
+    expect(update.mock.calls[0]?.[0]?.data).toMatchObject({
+      status: "PENDING",
+      errorSource: null,
+      errorCode: null,
+      errorTitle: null,
+    });
+  });
+
+  /*
+   * The dangerous one, and the reason the server asks again rather than
+   * trusting the button. Meta names a message when it accepts it; a second
+   * POST for a named message reaches a real customer twice and cannot be
+   * un-sent. A stale page or a hand-made form is all it would take.
+   */
+  it("refuses a message Meta has already named", async () => {
+    findFirst.mockResolvedValue({
+      id: "message-1",
+      conversationId: "conversation-1",
+      status: "FAILED",
+      wamid: "wamid.HBgMOTE5ODEyMzQ1Njkx",
+      sendAttempt: 0,
+    });
+
+    const state = await retryMessageAction({}, retrySubmission());
+
+    expect(state.error).toBeTruthy();
+    expect(update).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it.each(["SENT", "DELIVERED", "READ", "PENDING"])(
+    "refuses to re-send a %s message",
+    async (status) => {
+      findFirst.mockResolvedValue({
+        id: "message-1",
+        conversationId: "conversation-1",
+        status,
+        wamid: null,
+        sendAttempt: 0,
+      });
+
+      const state = await retryMessageAction({}, retrySubmission());
+
+      expect(state.error).toBeTruthy();
+      expect(update).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+    },
+  );
 });

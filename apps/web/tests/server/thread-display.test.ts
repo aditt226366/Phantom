@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_STATUSES } from "@whatsapp-os/core/whatsapp";
-import { refusalSentence, statusDisplay } from "../../lib/thread-display.ts";
+import {
+  refusalSentence,
+  retryOffer,
+  statusDisplay,
+} from "../../lib/thread-display.ts";
 
 describe("statusDisplay", () => {
   /*
@@ -59,4 +63,48 @@ describe("refusalSentence", () => {
   it("tells somebody what to do about a closed window", () => {
     expect(refusalSentence("window_closed")).toMatch(/template/i);
   });
+});
+
+describe("retryOffer", () => {
+  /*
+   * FAILED means Meta answered no, so non-delivery is proven and a retry
+   * cannot duplicate anything. Offered plainly, with nothing to warn about.
+   */
+  it("offers a plain retry for a proven failure", () => {
+    expect(retryOffer("FAILED", false)).toEqual({
+      label: "Send again",
+      warning: null,
+    });
+  });
+
+  /*
+   * UNCONFIRMED means Meta never answered. Nobody knows whether the customer
+   * got it, and a second send cannot be un-sent - so the warning is not
+   * optional decoration, it is the difference between the two offers.
+   */
+  it("never offers an unconfirmed retry without the warning", () => {
+    const offer = retryOffer("UNCONFIRMED", false);
+    expect(offer?.warning).toBeTruthy();
+    expect(offer?.warning).toMatch(/twice/i);
+  });
+
+  /*
+   * A wamid means Meta accepted and named the message, and the send worker
+   * refuses to post one that already carries a name. A button here would
+   * enqueue a job that does nothing - R2's dead-control failure by another
+   * route - so the offer is withdrawn rather than drawn and ignored.
+   */
+  it.each(["FAILED", "UNCONFIRMED"])(
+    "withdraws the offer for %s once Meta has named the message",
+    (status) => {
+      expect(retryOffer(status, true)).toBeNull();
+    },
+  );
+
+  it.each(["PENDING", "SENT", "DELIVERED", "READ", "HELD"])(
+    "does not offer %s",
+    (status) => {
+      expect(retryOffer(status, false)).toBeNull();
+    },
+  );
 });

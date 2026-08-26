@@ -89,3 +89,47 @@ const REFUSAL_SENTENCES: Record<SendRefusal, string> = {
 export function refusalSentence(reason: SendRefusal): string {
   return REFUSAL_SENTENCES[reason];
 }
+
+/**
+ * Whether this message may be sent again, and what to say about it first.
+ *
+ * The two retryable endings differ in exactly one way, and it is the only thing
+ * that matters here: whether non-delivery is *proven*.
+ *
+ *   FAILED       Meta answered no. The message was not sent, that is certain,
+ *                and a retry cannot duplicate anything. Offered plainly.
+ *   UNCONFIRMED  Meta never answered, so nobody knows. Retrying may deliver
+ *                the message a second time, and it cannot be un-sent. Offered
+ *                with the warning attached, never silently.
+ *
+ * A wamid withdraws the offer, for both. Meta names a message when it accepts
+ * it, so a row that has one was handed over - and the send worker refuses to
+ * post a message that already carries a wamid, which means a retry button here
+ * would enqueue a job that does nothing and read as a dead control. That state
+ * is a message Meta accepted and then reported failed downstream; sending it
+ * again means composing it again, which the composer above is for.
+ */
+export interface RetryOffer {
+  label: string;
+  /** Shown before the control, not after. Null when non-delivery is proven. */
+  warning: string | null;
+}
+
+export function retryOffer(status: string, hasWamid: boolean): RetryOffer | null {
+  if (hasWamid) return null;
+
+  if (status === "FAILED") {
+    return { label: "Send again", warning: null };
+  }
+
+  if (status === "UNCONFIRMED") {
+    return {
+      label: "Send again anyway",
+      /* Short, because the bubble above already carries the stored reason. What
+         this adds is the consequence of the click itself. */
+      warning: "Check WhatsApp first — sending again may deliver it twice.",
+    };
+  }
+
+  return null;
+}

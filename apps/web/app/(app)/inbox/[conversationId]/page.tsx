@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { JOB_NAMES, markReadJobId } from "@whatsapp-os/core/queues";
@@ -10,9 +11,14 @@ import { requireSession } from "@/lib/auth/session";
 import { formatTimestamp } from "@/lib/format";
 import { contactLabel, windowLabel, windowVariant } from "@/lib/inbox-display";
 import { systemQueue } from "@/lib/queue";
-import { refusalSentence, statusDisplay } from "@/lib/thread-display";
+import {
+  refusalSentence,
+  retryOffer,
+  statusDisplay,
+} from "@/lib/thread-display";
 import { SectionShell } from "../../_components/section";
 import { Composer } from "../_components/composer";
+import { RetryButton } from "../_components/retry-button";
 import { ThreadRefresh } from "../_components/thread-refresh";
 
 export const metadata: Metadata = { title: "Conversation" };
@@ -87,6 +93,10 @@ export default async function Page({
         errorSource: true,
         errorCode: true,
         errorTitle: true,
+        /* Only to decide whether a retry may be offered - never rendered.
+           Meta names a message when it accepts it, and the send worker refuses
+           to post one that already carries a name. */
+        wamid: true,
         occurredAt: true,
         media: {
           select: { id: true, mimeType: true, fileName: true, state: true },
@@ -160,7 +170,11 @@ export default async function Page({
 
       <ol className="flex flex-col gap-sm">
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+            <MessageBubble
+            key={message.id}
+            message={message}
+            csrf={<CsrfField />}
+          />
         ))}
       </ol>
 
@@ -184,6 +198,7 @@ interface ThreadMessage {
   errorSource: string | null;
   errorCode: number | null;
   errorTitle: string | null;
+  wamid: string | null;
   occurredAt: Date;
   media: {
     id: string;
@@ -202,9 +217,17 @@ const TONE_CLASS = {
   warning: "text-body-strong",
 } as const;
 
-function MessageBubble({ message }: { message: ThreadMessage }) {
+function MessageBubble({
+  message,
+  csrf,
+}: {
+  message: ThreadMessage;
+  csrf: ReactNode;
+}) {
   const outbound = message.direction === "OUTBOUND";
   const status = statusDisplay(message.status);
+  const retry = outbound ? retryOffer(message.status, message.wamid !== null) : null;
+  const explanation = message.errorTitle ?? status.detail ?? null;
 
   return (
     <li className={outbound ? "flex justify-end" : "flex justify-start"}>
@@ -242,21 +265,46 @@ function MessageBubble({ message }: { message: ThreadMessage }) {
           ) : null}
         </div>
 
-        {status.detail ? (
-          <p className="mt-xs text-caption text-body-strong">{status.detail}</p>
+        {/*
+         * One sentence, not three.
+         *
+         * The stored reason wins over the generic one, because it is what this
+         * row actually holds - and for UNCONFIRMED the two say the same thing,
+         * so rendering both stacked a near-identical warning twice above a
+         * retry button that warned a third time. statusDisplay's copy is the
+         * fallback for the case with no stored reason, which is HELD.
+         *
+         * Red only when somebody actually refused. errorSource is null on an
+         * UNCONFIRMED row on purpose - META would claim Meta refused it, which
+         * it did not, and POLICY would claim we declined, which we also did not
+         * - so colouring it as an error would assert a verdict nobody gave.
+         * A populated title beside a null source means "no verdict", and it
+         * should read as one.
+         *
+         * The code is only ever shown for META, so quoting a Graph code Meta
+         * never issued is not expressible here.
+         */}
+        {explanation ? (
+          <p
+            className={
+              message.errorSource !== null
+                ? "mt-xs text-caption text-error"
+                : "mt-xs text-caption text-body-strong"
+            }
+          >
+            {message.errorSource === "META" && message.errorCode !== null
+              ? `Meta ${message.errorCode}: ${explanation}`
+              : explanation}
+          </p>
         ) : null}
 
-        {/*
-         * Meta's own words, and only ever labelled as Meta's. errorSource keeps
-         * the two namespaces apart: a POLICY refusal is ours and carries no
-         * code, so quoting a Graph code Meta never issued is impossible here.
-         */}
-        {message.errorTitle ? (
-          <p className="mt-xs text-caption text-error">
-            {message.errorSource === "META" && message.errorCode !== null
-              ? `Meta ${message.errorCode}: ${message.errorTitle}`
-              : message.errorTitle}
-          </p>
+        {retry ? (
+          <RetryButton
+            messageId={message.id}
+            label={retry.label}
+            warning={retry.warning}
+            csrf={csrf}
+          />
         ) : null}
       </div>
     </li>

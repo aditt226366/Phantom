@@ -10,7 +10,7 @@ import { advanceConversation, canSend, withCompany } from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
 import { requireSession } from "@/lib/auth/session";
 import { systemQueue } from "@/lib/queue";
-import { refusalSentence } from "@/lib/thread-display";
+import { refusalSentence, retryOffer } from "@/lib/thread-display";
 
 /**
  * Write the message, then enqueue it. Nothing here talks to Meta.
@@ -143,6 +143,115 @@ export async function sendMessageAction(
 
   /* The action stays on the page, so nothing re-renders without this. */
   revalidatePath(`/inbox/${conversationId}`);
+  revalidatePath("/inbox");
+
+  return {};
+}
+
+/* ------------------------------------------------------------------------- *
+ * Retry
+ * ------------------------------------------------------------------------- */
+
+export interface RetryState {
+  error?: string;
+}
+
+/**
+ * Ask for one message to be handed to Meta again.
+ *
+ * R2 in one line: `sendAttempt` increments on the row AND rides in the job id.
+ * BullMQ keeps completed job ids for an hour and failed ones for a day and
+ * refuses a job whose id it already holds - silently, because for every other
+ * job here that refusal is the deduplication. Re-enqueueing under the first
+ * attempt's id would drop this on the floor and the button would appear dead.
+ *
+ * The increment and the enqueue are deliberately in that order. If the update
+ * lands and the enqueue fails, the operator presses again and gets a fresh
+ * attempt number and a fresh id; if the enqueue happened first it could be
+ * refused as a duplicate of an attempt the row never recorded.
+ *
+ * canSend is not re-run here. It runs in the worker immediately before the
+ * Graph call and that is the boundary - a retry that the window has closed on
+ * comes back as a POLICY failure with a sentence, which is the same answer the
+ * composer would have given a second earlier and one fewer place to disagree.
+ */
+export async function retryMessageAction(
+  _previous: RetryState,
+  formData: FormData,
+): Promise<RetryState> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+
+  const messageId = String(formData.get("messageId") ?? "");
+  if (!messageId) return { error: "Something went wrong. Try again." };
+
+  const outcome = await withCompany(session.companyId, async (db, companyId) => {
+    const message = await db.message.findFirst({
+      where: { id: messageId },
+      select: {
+        id: true,
+        conversationId: true,
+        status: true,
+        wamid: true,
+        sendAttempt: true,
+      },
+    });
+
+    /* Rule 6: not yours means it does not exist. */
+    if (!message) return { kind: "gone" } as const;
+
+    /*
+     * The same decision the bubble rendered, asked again on the server.
+     *
+     * The button is only drawn for a retryable message, so reaching here with
+     * anything else is a stale page or a hand-made POST - and the dangerous one
+     * is a message that has since been given a wamid, where a second POST would
+     * reach a real customer twice.
+     */
+    if (!retryOffer(message.status, message.wamid !== null)) {
+      return { kind: "not_retryable" } as const;
+    }
+
+    const updated = await db.message.update({
+      where: { id: message.id },
+      data: {
+        sendAttempt: { increment: 1 },
+        status: "PENDING",
+        /* Cleared, because they describe the previous attempt. A bubble that
+           has gone back to Sending must not still carry last time's reason. */
+        errorSource: null,
+        errorCode: null,
+        errorTitle: null,
+      },
+      select: { id: true, conversationId: true, sendAttempt: true },
+    });
+
+    return { kind: "queued", message: updated, companyId } as const;
+  });
+
+  if (outcome.kind === "gone") {
+    return { error: "That message is no longer available." };
+  }
+
+  if (outcome.kind === "not_retryable") {
+    return { error: "That message cannot be sent again." };
+  }
+
+  /* Outside the scope: Redis is not worth a held connection or a lost write. */
+  await systemQueue.add(
+    JOB_NAMES.WHATSAPP_MESSAGE_SEND,
+    {
+      companyId: session.companyId,
+      messageId: outcome.message.id,
+      sendAttempt: outcome.message.sendAttempt,
+    },
+    {
+      jobId: sendJobId(outcome.message.id, outcome.message.sendAttempt),
+      ...SEND_JOB_OPTIONS,
+    },
+  );
+
+  revalidatePath(`/inbox/${outcome.message.conversationId}`);
   revalidatePath("/inbox");
 
   return {};

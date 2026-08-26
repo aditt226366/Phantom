@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import {
   testAdminDatabaseUrl,
@@ -42,6 +44,9 @@ import {
  * baselines fails with "snapshot missing" and writes what it saw, which says
  * plainly what happened. It does not silently pass.
  */
+
+/* This directory, for the screenshot stylesheet below. */
+const here = dirname(fileURLToPath(import.meta.url));
 
 /*
  * Not 3000, so a dev server can stay up while this runs, and overridable
@@ -101,6 +106,21 @@ export default defineConfig({
   },
 
   expect: {
+    /*
+     * Headroom for the tallest page, and it has to live here rather than
+     * inside toHaveScreenshot - that object accepts threshold, ratios, scale
+     * and stylePath, and nothing about time.
+     *
+     * toHaveScreenshot captures repeatedly until two consecutive frames agree.
+     * With a diff budget two frames only had to land within it; at zero they
+     * have to be identical, and /styleguide is 21,848px and a couple of
+     * megabytes a frame. It ran out of the default five seconds once, on a
+     * loaded machine, before the sticky fix below made the frames settle.
+     *
+     * Time, not tolerance. Nothing here makes a difference easier to hide.
+     */
+    timeout: 30_000,
+
     toHaveScreenshot: {
       /*
        * Two knobs, and only one of them is allowed to absorb anything.
@@ -130,6 +150,9 @@ export default defineConfig({
        */
       threshold: 0.2,
       maxDiffPixelRatio: 0,
+      /* Neutralises sticky positioning and backdrop filters, both of which
+         make a fullPage capture disagree with itself. See the file. */
+      stylePath: join(here, "tests", "visual", "screenshot.css"),
       animations: "disabled",
       caret: "hide",
       scale: "css",

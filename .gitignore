@@ -43,3 +43,6 @@ coverage/
 apps/web/tests/visual/.auth/
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Measurement logs from the fork-crash investigation. Not part of the build.
+.gate-runs/

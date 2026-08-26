@@ -280,19 +280,38 @@ Many occurrences through Phase 4a, all identical: `Error: [vitest-pool]: Worker
 forks emitted error / Caused by: Error: Worker exited unexpectedly`, always the
 **db** project, always in a full `vitest run`.
 
-**It is not always `auth-schema.test.ts`, and that changed at the end of Phase
-4a.** Three consecutive crashes closing the phase were all
-`conversation-send.test.ts`, which passes in isolation at 21 tests. So the file
-identity is not a property of the crash — do not use it to diagnose. The
-signature is: a **db** file that never reports, **zero** tests failing, and a
-non-zero exit. Find the file by diffing the reported names against
-`packages/db/tests/*.test.ts` rather than assuming.
+**It is not always `auth-schema.test.ts`, and it is not always the db project.**
+Both claims were in these notes and both are false. Three consecutive crashes
+closing Phase 4a were `conversation-send.test.ts`; across ten measured gate runs
+afterwards, every worker that died belonged to **web-server** —
+`company-deactivation.test.ts` and `webhook-throttle.test.ts`. The signature is
+what to match on: **a file that never reports, zero tests failing, a non-zero
+exit.** Find it by diffing reported names against the files on disk, per
+project, rather than assuming which one.
 
-**The rate rises with total suite size, not with the db suite's.** It was
-roughly one in five, then two in five as the db suite grew, and about three in
-four immediately after Phase 4a's last commits added ~60 web-server tests
-alongside — no db tests at all. Whatever the contention is, it counts work in
-the other projects too.
+**Cross-project parallelism was most of it, and `fileParallelism: false` per
+project did not prevent it.** That option serialises files *within* a project;
+`db` and `web-server` still ran at the same time against the one shared test
+database. Hoisted to the root with `maxWorkers: 1`, measured over five full
+gates: **three in four down to one in five.** The gate roughly doubled in
+wall-clock, ~150s to ~300s, which is less than the retries it saves.
+
+**`pool: "threads"` on db was tried for five more and does not help** — three of
+five failed. It was the wrong project to switch: db has not lost a worker in ten
+runs. Left on forks.
+
+**It can also present as a named test failing with `read ECONNRESET`**, rather
+than as a file that silently never reports. Seen once, on
+`integrations-tab.test.ts`, in the same run as the usual worker death. Postgres
+was checked at the time and is not the cause — no FATAL, no termination, no
+restart, no OOM — so the reset is the worker dying and taking its socket down
+with it, not the database closing the connection. A symptom of the death, not a
+second bug: do not go looking for a connection leak on the strength of it.
+
+So the field is narrowed rather than closed. Not cross-project parallelism, not
+the db project, not Postgres; the surviving common factor is a forked worker on
+a file that talks to the shared test database. Still not being chased, by
+agreement.
 
 What the investigation ruled out, so the fifth occurrence starts from here:
 

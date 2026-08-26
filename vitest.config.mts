@@ -57,13 +57,55 @@ const GLOBAL_SETUP = fileURLToPath(
   new URL("./packages/db/tests/global-setup.ts", import.meta.url),
 );
 
+/**
+ * No cross-project parallelism, and the reason is the fork crash.
+ *
+ * `fileParallelism: false` was set on `db` and `web-server` individually, which
+ * serialises files *within* a project and does nothing between them - so the db
+ * project's workers and web-server's ran at the same time, against the one
+ * shared test database. That was the last remaining suspect for the worker that
+ * dies with no stack, and the evidence pointed at it twice: the crash never
+ * reproduces with `--project db` alone, and its rate rose sharply when Phase 4a
+ * added ~60 *web-server* tests and no db tests at all.
+ *
+ * Hoisted here with `maxWorkers: 1`, one file runs at a time across the whole
+ * run. The cost is wall-clock, and it is time already being spent on retries.
+ *
+ * Measured, twice over five full gates each.
+ *
+ * Sequential vs the old cross-project overlap: the crash rate fell from about
+ * three in four to one in five. A large improvement and not a cure, so this is
+ * a mitigation rather than the diagnosis. The cost is wall-clock - the gate
+ * roughly doubled, from ~150s to ~300s - which is still less than the retries
+ * it saves.
+ *
+ * `pool: "threads"` on the db project was then tried for five more and is NOT
+ * kept. It did not help, for a reason the first five had already hinted at:
+ * across all ten runs every worker that died belonged to **web-server**, never
+ * to db. "Always the db project" was simply never true, and switching db
+ * changed the pool of a project that was not crashing.
+ *
+ * What the ten runs do establish, and it is worth having:
+ *
+ *   - it is not cross-project parallelism, which is now gone;
+ *   - it is not the db project, which has not lost a worker in ten runs;
+ *   - the surviving common factor is a forked worker on a file that talks to
+ *     the shared test database, which describes web-server exactly.
+ *
+ * Still not being chased, by agreement. Recorded so the next attempt starts
+ * from here rather than from the db project.
+ */
 export default defineConfig({
   test: {
     globalSetup: [GLOBAL_SETUP],
+    fileParallelism: false,
+    maxWorkers: 1,
+    minWorkers: 1,
     projects: [
       {
         test: {
           name: "core",
+          fileParallelism: false,
           root: "./packages/core",
           environment: "node",
           include: ["tests/**/*.test.ts"],
@@ -80,6 +122,7 @@ export default defineConfig({
          */
         test: {
           name: "worker",
+          fileParallelism: false,
           root: "./apps/worker",
           environment: "node",
           include: ["tests/**/*.test.ts"],
@@ -159,6 +202,7 @@ export default defineConfig({
         },
         test: {
           name: "web",
+          fileParallelism: false,
           root: "./apps/web",
           environment: "jsdom",
           include: ["tests/*.test.tsx"],

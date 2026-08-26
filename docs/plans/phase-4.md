@@ -693,15 +693,28 @@ always the db project, always full runs. It exits non-zero, so it fails loudly,
 and the retry absorbs it at a recorded rate — 13 retries logged by the end of
 the phase.
 
-**Two things about it changed while closing 4a, and both contradict what was
-written here.** It is no longer always `auth-schema.test.ts`: the three
-consecutive crashes at the end of the phase were all `conversation-send.test.ts`,
-which passes in isolation at 21 tests. And the rate rose to roughly three in
-four immediately after the last commits — which added about sixty *web-server*
-tests and no db tests at all. So the file identity is not a property of the
-crash and should not be used to diagnose it, and whatever the contention is, it
-counts work outside the db project. The signature to match on is a db file that
-never reports, zero tests failing, and a non-zero exit.
+**Ten measured gate runs after the tag narrowed it, and falsified both
+identifying claims made here.**
+
+Cross-project parallelism was most of it. `fileParallelism: false` was set on
+`db` and `web-server` individually, which serialises files *within* a project
+and nothing between them — so both ran at once against the one shared test
+database. Hoisted to the root with `maxWorkers: 1`: **three in four down to one
+in five**, over five full gates. The gate roughly doubled in wall-clock, ~150s
+to ~300s, which is less than the retries it saves. Kept.
+
+`pool: "threads"` on the db project was then tried for five more and is **not**
+kept — three of five failed. It was the wrong project to switch, which the
+first five had already implied: across all ten runs every worker that died
+belonged to **web-server** (`company-deactivation.test.ts`,
+`webhook-throttle.test.ts`), and db lost none. "Always the db project" and
+"always `auth-schema.test.ts`" were both simply untrue.
+
+What the ten runs establish: not cross-project parallelism, and not the db
+project. The surviving common factor is a forked worker on a file that talks to
+the shared test database. The signature to match on is a file that never
+reports, zero tests failing, and a non-zero exit — found by diffing reported
+names against the files on disk, per project.
 
 Ruled out, each by measurement rather than argument:
 

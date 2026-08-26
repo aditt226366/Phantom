@@ -4,12 +4,12 @@ Working plan, updated as the phase runs. Written down because the decisions
 below cost more to re-derive than to record, and several of them reverse
 something that looked obvious.
 
-Status: **4a in progress.** Schema, core and worker are complete. The web layer
-has the webhook route, the media route, the visual fixture and the numbers page;
-the inbox, the thread and the retry action are not built.
+Status: **4a complete, tagged `phase-4a`.** Every layer ships: schema, core,
+worker, and a web layer carrying the webhook route, the media route, the visual
+fixture, the numbers page, the inbox, the thread and the retry action.
 
 **Screenshots are back in the gate** as of commit 24. `.githooks/SKIP_VISUAL` is
-deleted and every commit from here is photographed at 1440 and 390.
+deleted and every commit from there on is photographed at 1440 and 390.
 
 ---
 
@@ -324,6 +324,11 @@ work and were not planned, plus the docs commits that wrote the rest down.
 | 27 | `011f279` | `feat(web): serve a photo a customer sent` |
 | 24 | `84a41f7` | `test(web): seed a WhatsApp number, a contact and two threads` |
 | 28 | `8234da4` | `feat(web): the numbers behind your WhatsApp connection` |
+| — | `b73c756` | `test(web): stop the screenshot budget hiding structural change` |
+| 29 | `b703053` | `feat(web): a conversation list that says how long is left` |
+| 30 | `c082efa` | `feat(web): a thread, and a composer that closes with the window` |
+| — | `ba66751` | `test(web): stop a sticky nav making the tallest page disagree with itself` |
+| 31 | `5c18936` | `feat(web): retry a message that Meta refused` |
 
 **The batching.** Original commits 15–18 — payload parsing, `graphPost` and the
 adapters, usage kinds, job contracts — were delivered as one commit (`5299e4f`).
@@ -332,22 +337,21 @@ Both numberings appear below where it matters.
 
 ### Remaining — 4a
 
-**Every worker commit is done.** So is the fixture, and the numbers page —
-taken ahead of 26, which renders and therefore lands under screenshots when it
-comes.
+**One commit of the original 4a list is deliberately not in the tag.**
 
 | # (new) | # (orig) | Subject |
 | --- | --- | --- |
 | 26 | 29 | `feat(web): show an operator the deliveries that never landed` |
-| 29 | 32 | `feat(web): a conversation list that says how long is left` |
-| 30 | 33 | `feat(web): a thread, and a composer that closes with the window` |
-| 31 | 34 | `feat(web): retry a message that Meta refused` |
-| 32 | 35 | `chore: the third place a company id may come from` — tag `phase-4a` |
 
-**What the fixture already holds**, so these four do not have to extend it:
-three numbers across three states, two contacts, an open thread with two unread
-and a closed one, an inbound image behind `/api/media`, and an outbound Meta
-refused with 131047. The one constraint it imposes is C11 below.
+P6 said operator visibility is a commit rather than a claim, and it still is —
+this is the only thing in the phase that was planned and is not built. It is an
+admin-console read over counts that already exist in `unroutable_webhooks` and
+`whatsapp_webhook_events`; nothing depends on it, which is why the tag did not
+wait. It carries forward rather than being dropped.
+
+Two commits in the tag were not planned at all. Both are the screenshot suite
+telling the truth about itself once its budget was taken away, and both are
+recorded in C12.
 
 **Webhook-key rotation is deferred and unscheduled.** The schema comment has
 always put the control on Configuration > Numbers; commit 28 renders the URL and
@@ -397,6 +401,51 @@ helps against that - so detection at the start of the next run is the durable
 answer rather than prevention.
 
 ---
+
+### C12. The screenshot budget was hiding two things, and one was the suite
+
+`maxDiffPixelRatio` was 0.001, described in a comment as a tolerance for
+rasteriser noise. It was not. `threshold` — 0.2, per pixel, in YIQ space — is
+the knob that exists for noise; a ratio is a budget for pixels that got *past*
+it, and there is no number of those a screenshot suite should accept quietly.
+
+0.1% of a 1440x900 page is about 1,300 pixels, which is enough to hide a call
+to action. `/configuration`'s CTA was replaced during commit 28: the 390px shot
+failed and the 1440px shot **passed**, keeping a baseline that depicted a
+control the page no longer rendered. Measured afterwards, that change is 887
+pixels — it cleared the budget by about four hundred.
+
+Driven to zero in `b73c756`, with the floor measured rather than assumed: two
+consecutive full runs, 58 shots each, zero differing pixels anywhere including
+the 21,848px styleguide. Nothing was traded away; the two knobs had simply been
+doing each other's jobs. Verified in both directions at 1440 through
+break-once — CTA replaced (887px) now fails where it passed, CTA removed
+(5,922px) still fails.
+
+**And then the zero found the suite's own defect**, which is the part worth
+keeping. `/styleguide` started failing intermittently by 1,474 pixels in a
+twenty-row band. The rule for a noisy run is that `threshold` is wrong, not
+that the ratio should go back up — but measuring said it was neither: a max
+channel delta of 236 is not antialiasing, and a band the width of the content
+is a line moving.
+
+`position: sticky` cannot be photographed by `fullPage`. The capture scrolls
+and composites; a sticky element follows the scroll by definition and lands at
+an offset that depends on tile boundaries and timing. The styleguide is the
+tallest page here by an order of magnitude and carries the sticky top nav. It
+had been unstable since the suite was written and had never once failed,
+because 1,474 sat comfortably inside a budget of 31,460.
+
+Fixed in `ba66751` with a capture-time stylesheet through Playwright's own
+`stylePath`: `.sticky` becomes static, backdrop filters become none. At scroll
+zero the two look identical, so nothing about the page is lost.
+
+Two smaller things fell out of it. `toHaveScreenshot` has no `timeout` of its
+own — it lives at `expect.timeout`, and typecheck is what caught putting it in
+the wrong object, because Playwright ignores unknown keys in silence. And
+`--update-snapshots` rewrites only what *failed*, so a change small enough to
+fit inside the old budget left a stale baseline behind; `=all` forces it, and
+then rewrites every file whether it differed or not.
 
 ### C11. A screenshot fixture's rule is about *rendering*, not about the clock
 
@@ -603,6 +652,36 @@ data loss, money, auth, the send path. Not copy or formatting. Two corollaries
 learned the hard way — a deliberate break must prove it broke something (assert
 the anchor matched), and some breaks are provably unobservable and should be
 recorded as such rather than chased.
+
+Three breaks in this stretch, all on the send path:
+
+| Break | Caught by |
+| --- | --- |
+| delete the walker's `[id]` mapping | the unmapped-segment guard, naming the four company routes |
+| delete the composer's `canSend` refusal | `enqueues nothing when the policy refuses` |
+| delete the retry's wamid/status guard | four tests, including `refuses a message Meta has already named` |
+
+The tool itself needed two fixes first, and both had made structural breaks
+impossible: the documented `
+` expansion was a no-op, and once that was fixed
+it still could not match a checkout holding CRLF, LF and mixed-ending files.
+`
+` now compiles to `?
+`. Both failed safe — "matched nothing" is a
+refusal — so no break had ever been silently unobserved.
+
+**The destructive policy audit was re-run at the end of the phase**, which is
+what the conventions file asks for rather than only when the tests are written.
+RLS dropped on all 16 tenant tables, `rls-isolation.test.ts` run, policies
+restored, test database rebuilt afterwards.
+
+**33 of 38 tests failed. Exactly 5 survived, and they are the five in
+`NOT_POLICY_TESTS`** — the role-attribute checks, the fixture sanity check, the
+ownership catalog fact, and the TRUNCATE grant. No sixth, which is the finding
+the audit exists to produce. The count is unchanged from Phase 2 while the suite
+itself has grown, so every assertion Phase 4a added over conversations,
+messages, media and webhook events is proving the boundary rather than the
+convention.
 
 ---
 

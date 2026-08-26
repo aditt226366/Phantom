@@ -413,6 +413,30 @@ npm script, which also exists. Both work — verified — but npm eats a leading
 `--flag` under some versions, and that has already rebuilt the wrong database
 once in this repository. The direct form cannot be affected by it.
 
+**Two shells will corrupt an anchor before it reaches the script.**
+
+- **PowerShell 5.1 drops an empty string argument**, so `--replace ''` arrives
+  as nothing at all and the next flag is read as the replacement. Presents as
+  "could not read arguments". Use bash for break-once.
+- **Git Bash rewrites anything that looks like a Unix path.** MSYS turned
+  `"/configuration/numbers"` inside an anchor into
+  `"C:/Program Files/Git/configuration/numbers"`. Presents as "matched
+  nothing", which is safe but baffling. Prefix with `MSYS_NO_PATHCONV=1`
+  whenever the anchor contains a slash-leading path.
+
+**Multi-line anchors work, and did not until Phase 4a.** The documented `
+`
+expansion was `value.replaceAll("
+", "
+")` — both arguments are already a
+newline in a JS source file, so it did nothing and every multi-line anchor ever
+written matched nothing. Fixing that alone was not enough: this checkout holds
+CRLF files, LF files, and files carrying both where a tool edited part of one,
+which is exactly the region an anchor targets. `
+` now compiles to `?
+`
+and the match is a regex, with nothing normalised on disk.
+
 **Why git rather than a copy, and why the refusal is absolute.** The fork crash
 has now caused two separate incidents by killing a process mid-break:
 
@@ -617,6 +641,48 @@ Things worth knowing before touching it:
 
 Re-record with `npm run test:visual:update` — and then look at the images. A
 baseline nobody reviewed is a screenshot of a bug.
+
+**The comparison is `threshold` for noise and a budget of zero for everything
+else, and the two are not interchangeable.** `threshold` (0.2, per pixel, YIQ)
+exists for rasteriser noise — antialiasing on glyph edges, subpixel hinting.
+`maxDiffPixelRatio` is **0**: a pixel the threshold did not absorb is a pixel
+that genuinely changed.
+
+It used to be 0.001, which on a 1440x900 page is about 1,300 pixels — enough to
+hide a whole call to action. `/configuration`'s CTA was replaced, the 390px shot
+failed at 887 pixels, and the 1440px shot passed and kept a baseline depicting a
+control the page no longer rendered. A budget wide enough to swallow a button is
+a blind spot, not a tolerance.
+
+If a run goes noisy, **measure the pixels before touching either knob.** Deltas
+of one or two are the rasteriser and mean `threshold` is wrong. A large delta
+confined to a band is something moving, and the fix is neither knob:
+
+- **`position: sticky` cannot be photographed by `fullPage`.** The capture
+  scrolls and composites, a sticky element follows the scroll by definition, and
+  it lands at an offset that depends on tile boundaries and timing.
+  `/styleguide` is 21,848px tall and carries the sticky top nav; a twenty-row
+  band moved by a pixel between runs, 1,474 pixels — comfortably inside the old
+  budget, so it had been unstable since the suite was written and never once
+  failed. `tests/visual/screenshot.css` is applied at capture time through
+  `stylePath` and makes `.sticky` static and backdrop filters none. At scroll
+  zero the two look identical, so nothing is lost.
+- **`toHaveScreenshot` has no `timeout` of its own** — the option lives at
+  `expect.timeout`, and typecheck is what catches putting it in the wrong
+  object, because Playwright ignores unknown keys in silence. It matters at
+  ratio zero: the assertion captures until two consecutive frames *agree*, and
+  agreement used to mean "within the budget" and now means identical.
+
+**`--update-snapshots` only rewrites what actually failed.** A copy change small
+enough to fit inside the budget passes, so the baseline is never re-recorded and
+keeps depicting the old text. Force a deliberate change with
+`--update-snapshots=all` — and know that it rewrites *every* file whether it
+differed or not, so revert the ones that only moved by a delta of one.
+
+**A screenshot break needs a rebuild inside it.** The suite runs against
+`next start`, so editing a source file and re-running Playwright photographs the
+previous build and proves nothing. `--command 'cd apps/web && npm run build > b.log 2>&1 && npx playwright test ...'`.
+break-once catches this correctly — it reports the break as unobserved.
 
 **Never resolve a data file relative to `import.meta.url` in bundled code.**
 `denylist.ts` did `new URL("./data/…", import.meta.url)` and handed it to

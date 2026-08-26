@@ -50,8 +50,31 @@ pooled connection and times out after 5s.
 
 **Never pass a company id that came from the request.** `withCompany` sets the
 value RLS trusts, so `withCompany(searchParams.companyId, …)` is a total
-bypass. Company ids originate in exactly two places: the session row, and
-`resolveCompany()`.
+bypass. Company ids originate in exactly three places:
+
+| Origin | Trusted because |
+| --- | --- |
+| the session row | the cookie was resolved against `sessions` |
+| `resolveCompany()` | SECURITY DEFINER, and the only lookup with no scope |
+| **a job payload** | the producer put it there, and the producer is one of the two above |
+
+The third arrived with Phase 4a's worker and is the one worth being careful
+about, because it is the only one that has been *serialised*. Every job carries
+`companyId` and the worker opens `withCompany` with it, having never seen a
+request — so the guarantee is entirely about who enqueued.
+
+Two things hold it up. Only our own code writes to the queue: the webhook route
+enqueues after `resolveCompany()`, and a server action after `requireSession()`,
+so no company id reaches Redis without passing one of the first two rows first.
+And `parseJobPayload` validates against a registered Zod schema before a handler
+runs, so a malformed payload throws with the job name in it rather than opening
+a scope on whatever the string happened to be.
+
+What that does **not** survive is somebody with write access to Redis, who can
+name any company they like. The queue is a trust boundary in the same sense the
+database is: reachable only from inside, and everything downstream assumes so.
+Anything that ever accepts a job from outside this system has to re-derive the
+company id rather than read it.
 
 Raw SQL is confined to seven files in `packages/db/src` — `client.ts`,
 `with-company.ts`, `resolve-company.ts`, `company.ts`, `vault.ts`,

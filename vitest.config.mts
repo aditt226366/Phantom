@@ -69,31 +69,30 @@ const GLOBAL_SETUP = fileURLToPath(
  * added ~60 *web-server* tests and no db tests at all.
  *
  * Hoisted here with `maxWorkers: 1`, one file runs at a time across the whole
- * run. The cost is wall-clock, and it is time already being spent on retries.
+ * run. `web-server` is on threads for the other half of the reason.
  *
- * Measured, twice over five full gates each.
+ * Measured over fifteen full gates, five per configuration. Two levers, and
+ * **both are load-bearing** - neither alone gets to zero.
  *
- * Sequential vs the old cross-project overlap: the crash rate fell from about
- * three in four to one in five. A large improvement and not a cure, so this is
- * a mitigation rather than the diagnosis. The cost is wall-clock - the gate
- * roughly doubled, from ~150s to ~300s - which is still less than the retries
- * it saves.
+ *   sequential + all forks        1 in 5 crashed (web-server)   ~300s
+ *   sequential + ws on threads    0 in 5 crashed                ~140s
+ *   parallel  + ws on threads     1 in 5 crashed (db)           ~135s
  *
- * `pool: "threads"` on the db project was then tried for five more and is NOT
- * kept. It did not help, for a reason the first five had already hinted at:
- * across all ten runs every worker that died belonged to **web-server**, never
- * to db. "Always the db project" was simply never true, and switching db
- * changed the pool of a project that was not crashing.
+ * The third row is the one that settles it. Putting web-server on threads and
+ * letting the projects overlap again did not fix anything - the crash simply
+ * moved to `db`, the *other* forked project touching the same database. So the
+ * serialisation was never merely masking a pool problem, and the pool was never
+ * merely masking a concurrency problem. The crash needs a forked worker on a
+ * database-touching file AND cross-project overlap; remove either and it stops.
  *
- * What the ten runs do establish, and it is worth having:
+ * Hence both are kept. And the wall-clock argument for dropping the
+ * serialisation evaporated once it was measured: threads are enough faster than
+ * forks that row two costs ~5s against row three, not the ~165s that row one
+ * did. The gate is back to roughly where it was before any of this.
  *
- *   - it is not cross-project parallelism, which is now gone;
- *   - it is not the db project, which has not lost a worker in ten runs;
- *   - the surviving common factor is a forked worker on a file that talks to
- *     the shared test database, which describes web-server exactly.
- *
- * Still not being chased, by agreement. Recorded so the next attempt starts
- * from here rather than from the db project.
+ * `db` stays on forks deliberately. It is the project that has never crashed
+ * while web-server was forked, and changing a second thing at the same time
+ * would make the next measurement unreadable.
  */
 export default defineConfig({
   test: {
@@ -184,7 +183,7 @@ export default defineConfig({
           exclude: ["tests/server/setup.ts", "tests/server/server-only-stub.ts"],
           setupFiles: [SILENT_EXIT_GUARD, "./tests/server/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
-          pool: "forks",
+          pool: "threads",
           fileParallelism: false,
           hookTimeout: 120_000,
           testTimeout: 30_000,

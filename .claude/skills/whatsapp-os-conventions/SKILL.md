@@ -289,16 +289,31 @@ what to match on: **a file that never reports, zero tests failing, a non-zero
 exit.** Find it by diffing reported names against the files on disk, per
 project, rather than assuming which one.
 
-**Cross-project parallelism was most of it, and `fileParallelism: false` per
-project did not prevent it.** That option serialises files *within* a project;
-`db` and `web-server` still ran at the same time against the one shared test
-database. Hoisted to the root with `maxWorkers: 1`, measured over five full
-gates: **three in four down to one in five.** The gate roughly doubled in
-wall-clock, ~150s to ~300s, which is less than the retries it saves.
+**It takes two things, and removing either one stops it.** Measured over
+fifteen full gates, five per configuration:
 
-**`pool: "threads"` on db was tried for five more and does not help** — three of
-five failed. It was the wrong project to switch: db has not lost a worker in ten
-runs. Left on forks.
+| config | crashed | healthy wall |
+| --- | --- | --- |
+| sequential + all forks | 1 in 5 (web-server) | ~300s |
+| **sequential + web-server on threads** | **0 in 5** | **~140s** |
+| parallel + web-server on threads | 1 in 5 (db) | ~135s |
+
+The third row settles it. Moving web-server to threads and letting the projects
+overlap again did not fix anything — the crash moved to `db`, the *other* forked
+project on the same database. So the serialisation was never merely masking a
+pool problem, and the pool was never merely masking a concurrency problem. It
+needs **a forked worker on a database-touching file AND cross-project overlap**.
+
+Both are therefore kept, and the wall-clock objection went away when measured:
+threads are enough faster than forks that serialising costs about five seconds
+against the parallel configuration, not the ~165s it cost while everything was
+forked.
+
+Two notes for anyone changing this. `fileParallelism: false` **per project**
+does not serialise across projects — that was the original mistake, and it is
+why db and web-server ran together for months. And `db` is left on forks
+deliberately: it has never crashed while web-server was forked, so switching it
+too would make the next measurement unreadable.
 
 **It can also present as a named test failing with `read ECONNRESET`**, rather
 than as a file that silently never reports. Seen once, on
@@ -308,10 +323,8 @@ restart, no OOM — so the reset is the worker dying and taking its socket down
 with it, not the database closing the connection. A symptom of the death, not a
 second bug: do not go looking for a connection leak on the strength of it.
 
-So the field is narrowed rather than closed. Not cross-project parallelism, not
-the db project, not Postgres; the surviving common factor is a forked worker on
-a file that talks to the shared test database. Still not being chased, by
-agreement.
+Not cross-project parallelism alone, not the db project, not Postgres. Still
+not being chased further, by agreement.
 
 What the investigation ruled out, so the fifth occurrence starts from here:
 

@@ -696,25 +696,40 @@ the phase.
 **Ten measured gate runs after the tag narrowed it, and falsified both
 identifying claims made here.**
 
-Cross-project parallelism was most of it. `fileParallelism: false` was set on
-`db` and `web-server` individually, which serialises files *within* a project
-and nothing between them — so both ran at once against the one shared test
-database. Hoisted to the root with `maxWorkers: 1`: **three in four down to one
-in five**, over five full gates. The gate roughly doubled in wall-clock, ~150s
-to ~300s, which is less than the retries it saves. Kept.
+**It takes two things at once, and removing either stops it.** Fifteen full
+gates, five per configuration:
 
-`pool: "threads"` on the db project was then tried for five more and is **not**
-kept — three of five failed. It was the wrong project to switch, which the
-first five had already implied: across all ten runs every worker that died
-belonged to **web-server** (`company-deactivation.test.ts`,
-`webhook-throttle.test.ts`), and db lost none. "Always the db project" and
-"always `auth-schema.test.ts`" were both simply untrue.
+| config | crashed | healthy wall |
+| --- | --- | --- |
+| sequential + all forks | 1 in 5 (web-server) | ~300s |
+| **sequential + web-server on threads** | **0 in 5** | **~140s** |
+| parallel + web-server on threads | 1 in 5 (db) | ~135s |
 
-What the ten runs establish: not cross-project parallelism, and not the db
-project. The surviving common factor is a forked worker on a file that talks to
-the shared test database. The signature to match on is a file that never
-reports, zero tests failing, and a non-zero exit — found by diffing reported
-names against the files on disk, per project.
+`fileParallelism: false` had been set on `db` and `web-server` individually,
+which serialises files *within* a project and nothing between them — so both ran
+at once against the one shared test database for months. Hoisting it to the root
+with `maxWorkers: 1` took the rate from about three in four to one in five.
+Moving `web-server` to `pool: "threads"` took it to zero.
+
+The third row is what makes those two facts rather than one. With web-server on
+threads and the projects overlapping again, the crash came straight back — in
+`db`, the *other* forked project on the same database. So the serialisation was
+never merely masking a pool problem, and the pool was never merely masking a
+concurrency problem: it needs a forked worker on a database-touching file **and**
+cross-project overlap. Both are kept.
+
+The wall-clock objection to serialising went away when it was measured. Threads
+are enough faster than forks that row two costs about five seconds against row
+three — the ~165s penalty belonged to row one, where everything was still
+forked. The gate is back to roughly where it started.
+
+`db` is deliberately left on forks: it has never crashed while web-server was
+forked, and changing a second thing would make the next measurement unreadable.
+
+Both identifying claims once recorded here were untrue — not always
+`auth-schema.test.ts`, and not always the db project. The signature to match on
+is a file that never reports, zero tests failing, and a non-zero exit, found by
+diffing reported names against the files on disk per project.
 
 Ruled out, each by measurement rather than argument:
 

@@ -53,3 +53,23 @@ export type {
   SkippedChange,
   StatusUpdate,
 } from "./payload.ts";
+export {
+  buildComponents,
+  CATEGORY_NOTES,
+  CATEGORY_RECATEGORISATION_NOTE,
+  emptyDraft,
+  fillVariables,
+  slugifyTemplateName,
+  TEMPLATE_CATEGORIES,
+  TEMPLATE_LIMITS,
+  templateVariables,
+  validateTemplate,
+} from "./template.ts";
+export type {
+  HeaderFormat,
+  TemplateButton,
+  TemplateCategory,
+  TemplateComponent,
+  TemplateDraft,
+  TemplateIssue,
+} from "./template.ts";

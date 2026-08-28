@@ -39,6 +39,8 @@ function summary(over: Partial<IngestSummary> = {}): IngestSummary {
     skipped: [],
     media: [],
     numberQualityUpdates: 0,
+    templatesUpdated: 0,
+    templatesUnmatched: 0,
     ...over,
   };
 }

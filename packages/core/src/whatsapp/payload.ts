@@ -174,11 +174,38 @@ export interface NumberQualityUpdate {
   currentLimit: string | null;
 }
 
+/**
+ * Meta's verdict on a template, which is the only way review ever arrives.
+ *
+ * Unlike a quality update this IS the data rather than a trigger. There is no
+ * cheap way to ask "what happened to this one template", and the callback
+ * carries everything worth storing - so it is parsed and applied rather than
+ * used as a reason to go and look.
+ *
+ * `reason` is Meta's own token, and `NONE` is how they say there is no reason.
+ * Normalised to null here so no caller has to know that a rejection reason of
+ * "NONE" means there is no rejection.
+ */
+export interface TemplateStatusUpdate {
+  kind: "template";
+  /** Meta's template id. The only identifier both sides hold. */
+  metaTemplateId: string;
+  /** APPROVED, REJECTED, PAUSED, DISABLED, IN_APPEAL, and whatever is next. */
+  status: string;
+  name: string | null;
+  language: string | null;
+  reason: string | null;
+  /** Present when Meta has re-categorised. The price follows this. */
+  category: string | null;
+}
+
 export interface ParsedWebhook {
   messages: InboundMessage[];
   statuses: StatusUpdate[];
   /** Numbers Meta says have changed. A reason to refresh, not a source. */
   qualityUpdates: NumberQualityUpdate[];
+  /** What Meta decided about a template under review. */
+  templateUpdates: TemplateStatusUpdate[];
   /** Everything that could not be turned into one of the above, and why. */
   skipped: SkippedChange[];
 }
@@ -222,6 +249,7 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
     messages: [],
     statuses: [],
     qualityUpdates: [],
+    templateUpdates: [],
     skipped: [],
   };
 
@@ -248,11 +276,45 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
       const { field, value } = change.data;
 
       /*
-       * Everything we act on arrives under `messages`. Template status updates
-       * and quality notifications come under their own fields and are Phase 4b
-       * and the refresh job respectively - recorded as skipped rather than
-       * dropped, so the count is honest.
+       * Everything else arrives under `messages`. Template status updates and
+       * quality notifications come under their own fields, handled just above,
+       * and anything unrecognised is recorded as skipped rather than dropped so
+       * the count stays honest.
        */
+      if (field === "message_template_status_update") {
+        const raw = value as Record<string, unknown>;
+        const str = (v: unknown): string | null =>
+          typeof v === "string" && v.length > 0 ? v : null;
+
+        const metaTemplateId = str(raw["message_template_id"]);
+        const status = str(raw["event"]);
+
+        /*
+         * Without an id there is nothing to match, and without a status there
+         * is nothing to say. Skipped rather than half-applied: writing a status
+         * onto a template chosen by name would be a guess, and the templates
+         * this could guess wrong about are the ones a tenant is waiting on.
+         */
+        if (!metaTemplateId || !status) {
+          result.skipped.push({ reason: "unparseable_change", field });
+          continue;
+        }
+
+        const reason = str(raw["reason"]);
+
+        result.templateUpdates.push({
+          kind: "template",
+          metaTemplateId,
+          status,
+          name: str(raw["message_template_name"]),
+          language: str(raw["message_template_language"]),
+          /* Meta says NONE when there is nothing to report. */
+          reason: reason === "NONE" ? null : reason,
+          category: str(raw["new_category"]) ?? str(raw["category"]),
+        });
+        continue;
+      }
+
       if (field === "phone_number_quality_update") {
         /*
          * The third thing that triggers a numbers refresh, alongside a person

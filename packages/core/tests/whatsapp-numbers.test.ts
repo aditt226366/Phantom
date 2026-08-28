@@ -185,15 +185,15 @@ describe("the quality webhook", () => {
   });
 
   it("still records a field nothing handles", () => {
+    /* This named message_template_status_update until 4b started handling it.
+       The assertion is about the quality branch not swallowing its neighbours,
+       so it needs a field nothing reads - `account_update` is one Meta really
+       sends and this build really does not. */
     const parsed = parseWebhookPayload({
       object: "whatsapp_business_account",
-      entry: [
-        { id: "waba-1", changes: [{ field: "message_template_status_update", value: {} }] },
-      ],
+      entry: [{ id: "waba-1", changes: [{ field: "account_update", value: {} }] }],
     });
 
-    /* Phase 4b handles this one. Counted rather than dropped, so the number is
-       honest. */
     expect(parsed.qualityUpdates).toEqual([]);
     expect(parsed.skipped[0]?.reason).toBe("unhandled_field");
   });

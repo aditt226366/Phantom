@@ -52,6 +52,7 @@ export type {
   ParsedWebhook,
   SkippedChange,
   StatusUpdate,
+  TemplateStatusUpdate,
 } from "./payload.ts";
 export {
   buildComponents,

@@ -254,18 +254,125 @@ describe("what it pulls out", () => {
 
 describe("fields this phase does not handle", () => {
   it("records them rather than dropping them silently", () => {
-    /* Template status updates are 4b and quality updates feed the refresh job.
-       Counting them keeps the skipped total honest. */
+    /*
+     * `message_template_status_update` used to be the example here, because in
+     * 4a it genuinely was unhandled. It is handled now, so this uses a field
+     * Meta really does send and this build really does not read - the point
+     * being that an unrecognised field is counted rather than discarded, and
+     * that one unreadable change never costs the real messages beside it.
+     */
     const parsed = parseWebhookPayload(
       delivery([
-        { field: "message_template_status_update", value: {} },
+        { field: "account_update", value: {} },
         messageChange([TEXT_MESSAGE]),
       ]),
     );
 
     expect(parsed.messages).toHaveLength(1);
     expect(parsed.skipped).toEqual([
-      { reason: "unhandled_field", field: "message_template_status_update" },
+      { reason: "unhandled_field", field: "account_update" },
     ]);
+  });
+});
+
+describe("message_template_status_update", () => {
+  function change(value: Record<string, unknown>): unknown {
+    return {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [{ field: "message_template_status_update", value }],
+        },
+      ],
+    };
+  }
+
+  it("carries Meta's verdict rather than triggering a lookup", () => {
+    /* The contrast with phone_number_quality_update is the point: a quality
+       notification is a reason to re-read the account, because Meta will tell
+       us the whole truth about a number. There is no cheap equivalent for one
+       template, so this callback is the data. */
+    const parsed = parseWebhookPayload(
+      change({
+        event: "APPROVED",
+        message_template_id: "1234",
+        message_template_name: "order_update",
+        message_template_language: "en_US",
+        reason: "NONE",
+      }),
+    );
+
+    expect(parsed.templateUpdates).toEqual([
+      {
+        kind: "template",
+        metaTemplateId: "1234",
+        status: "APPROVED",
+        name: "order_update",
+        language: "en_US",
+        /* NONE is how Meta says there is no reason. */
+        reason: null,
+        category: null,
+      },
+    ]);
+  });
+
+  it("keeps a real rejection reason", () => {
+    const parsed = parseWebhookPayload(
+      change({
+        event: "REJECTED",
+        message_template_id: "1234",
+        reason: "INVALID_FORMAT",
+      }),
+    );
+
+    expect(parsed.templateUpdates[0]).toMatchObject({
+      status: "REJECTED",
+      reason: "INVALID_FORMAT",
+    });
+  });
+
+  /* Meta re-categorises on wording, and the price follows the category. */
+  it("reads a re-categorisation", () => {
+    const parsed = parseWebhookPayload(
+      change({
+        event: "APPROVED",
+        message_template_id: "1234",
+        new_category: "MARKETING",
+      }),
+    );
+
+    expect(parsed.templateUpdates[0]?.category).toBe("MARKETING");
+  });
+
+  /*
+   * Without an id there is nothing to match on. Skipped rather than applied by
+   * name: guessing which template a verdict belongs to would be worst exactly
+   * where it matters, on the ones a tenant is waiting for.
+   */
+  it("skips an update with no template id", () => {
+    const parsed = parseWebhookPayload(change({ event: "APPROVED" }));
+
+    expect(parsed.templateUpdates).toEqual([]);
+    expect(parsed.skipped).toEqual([
+      { reason: "unparseable_change", field: "message_template_status_update" },
+    ]);
+  });
+
+  it("skips an update with no status", () => {
+    const parsed = parseWebhookPayload(change({ message_template_id: "1234" }));
+
+    expect(parsed.templateUpdates).toEqual([]);
+    expect(parsed.skipped).toHaveLength(1);
+  });
+
+  /* Meta's vocabulary is theirs and they extend it. An unmodelled status must
+     survive to the row and render as itself. */
+  it("passes through a status this build has never seen", () => {
+    const parsed = parseWebhookPayload(
+      change({ event: "SOMETHING_NEW", message_template_id: "1234" }),
+    );
+
+    expect(parsed.templateUpdates[0]?.status).toBe("SOMETHING_NEW");
   });
 });

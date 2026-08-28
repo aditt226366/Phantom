@@ -10,6 +10,7 @@ import {
   applyStatusUpdate,
   type StatusOutcome,
 } from "./conversations.ts";
+import { applyTemplateStatus } from "./templates.ts";
 import { markWebhookProcessed } from "./webhook-events.ts";
 import { withCompany, type CompanyClient } from "./with-company.ts";
 
@@ -78,6 +79,21 @@ export interface IngestSummary {
    * media requests, once no scope is open.
    */
   numberQualityUpdates: number;
+  /**
+   * Template verdicts, applied rather than counted.
+   *
+   * The opposite of a quality update, and worth the contrast: that one is a
+   * trigger, because Meta will tell us the whole truth about a number if we
+   * ask. This one IS the truth - there is no cheap way to ask what happened to
+   * one template - so the callback is written into the row here and the number
+   * below is only how many landed on a template this system holds.
+   *
+   * A WABA also holds templates created in Business Manager that this system
+   * has never seen, and Meta sends callbacks for those too. `unmatched` counts
+   * them, and it is an ordinary number rather than an error.
+   */
+  templatesUpdated: number;
+  templatesUnmatched: number;
 }
 
 function emptySummary(status: IngestSummary["status"]): IngestSummary {
@@ -90,6 +106,8 @@ function emptySummary(status: IngestSummary["status"]): IngestSummary {
     skipped: [],
     media: [],
     numberQualityUpdates: 0,
+    templatesUpdated: 0,
+    templatesUnmatched: 0,
   };
 }
 
@@ -251,6 +269,29 @@ export async function ingestWebhookDelivery(
   }
 
   /*
+   * Template verdicts. Applied here rather than enqueued, because unlike a
+   * quality update this callback carries everything worth storing and there is
+   * no cheap way to ask Meta about one template.
+   */
+  let templatesUpdated = 0;
+  let templatesUnmatched = 0;
+
+  for (const update of parsed.templateUpdates) {
+    const applied = await withCompany(companyId, (db, scoped) =>
+      applyTemplateStatus(db, scoped, {
+        metaTemplateId: update.metaTemplateId,
+        status: update.status,
+        rejectedReason: update.reason,
+        category: update.category,
+        at: new Date(),
+      }),
+    );
+
+    if (applied) templatesUpdated++;
+    else templatesUnmatched++;
+  }
+
+  /*
    * Last, and only now. Every message in this delivery has been written or has
    * thrown; a throw leaves processedAt null and the whole delivery is re-run,
    * which the wamid unique makes safe.
@@ -278,6 +319,8 @@ export async function ingestWebhookDelivery(
     skipped,
     media,
     numberQualityUpdates: parsed.qualityUpdates.length,
+    templatesUpdated,
+    templatesUnmatched,
   };
 }
 

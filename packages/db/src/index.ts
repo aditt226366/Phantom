@@ -49,6 +49,14 @@ export {
 } from "./send.ts";
 export type { SendAcceptance } from "./send.ts";
 export { applyNumberRefresh, MISSING_FROM_META_LIST } from "./numbers.ts";
+export {
+  applyTemplateStatus,
+  recordTemplateEdit,
+  TEMPLATE_EDIT_LIMIT,
+  TEMPLATE_EDIT_WINDOW_DAYS,
+  templateEditQuota,
+} from "./templates.ts";
+export type { TemplateEditQuota } from "./templates.ts";
 export type { NumberRefreshCounts } from "./numbers.ts";
 export { ingestWebhookDelivery } from "./webhook-ingest.ts";
 export type { IngestSummary, MediaFetchRequest } from "./webhook-ingest.ts";

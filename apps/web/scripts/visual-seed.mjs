@@ -497,6 +497,82 @@ const MESSAGES = [
 ];
 
 /* ------------------------------------------------------------------ */
+/* Templates                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One approved and one rejected, and the rejected one is the point.
+ *
+ * Meta's rejection reason is the copy in this product most likely to be wrong
+ * and least likely to be looked at: it arrives as a machine token, it appears
+ * on a screen nobody visits until something has already gone wrong, and by then
+ * the person reading it is trying to fix something. So it is in the fixture,
+ * photographed, with a real token rather than a sentence somebody invented.
+ *
+ * The rejection is also internally true. `weekend_offer` opens on a variable,
+ * which is one of the three rules validateTemplate enforces and one of the
+ * things Meta actually rejects for — so INVALID_FORMAT is the reason its own
+ * body earns. The fixture and the validator describe the same rule from
+ * opposite ends.
+ *
+ * The approved one carries {{1}} and {{2}} deliberately. Any approved template
+ * with variables needs values typed at send time, so a fixture whose only
+ * template is variable-free would photograph a picker with nothing to fill in.
+ */
+const TEMPLATES = [
+  {
+    id: FIXTURE.approvedTemplateId,
+    name: "order_shipped",
+    language: "en_US",
+    category: "UTILITY",
+    status: "APPROVED",
+    metaTemplateId: "1094857362019283",
+    rejectedReason: null,
+    statusUpdatedAt: "2026-08-12T06:15:00Z", // 12/08/2026 11:45:00
+    components: [
+      { type: "HEADER", format: "TEXT", text: "Your order is on its way" },
+      {
+        type: "BODY",
+        text: "Hi {{1}}, order {{2}} has left our warehouse and should reach you in two working days.",
+        example: { body_text: [["Anita", "NW-2291"]] },
+      },
+      { type: "FOOTER", text: "Reply STOP to opt out" },
+      {
+        type: "BUTTONS",
+        buttons: [
+          { type: "QUICK_REPLY", text: "Track it" },
+          { type: "QUICK_REPLY", text: "Talk to us" },
+        ],
+      },
+    ],
+    /* Two edits, so the quota renders a number rather than a zero - and a
+       number well under the limit, so the "edits made here" label is doing its
+       job rather than sitting beside an exhausted allowance. */
+    edits: 2,
+  },
+  {
+    id: FIXTURE.rejectedTemplateId,
+    name: "weekend_offer",
+    language: "en_US",
+    category: "MARKETING",
+    status: "REJECTED",
+    metaTemplateId: "1094857362019284",
+    /* Meta's own token. Rendered verbatim beside a plain-English explanation -
+       never replaced by one, because the token is what their support asks for. */
+    rejectedReason: "INVALID_FORMAT",
+    statusUpdatedAt: "2026-08-13T07:40:00Z", // 13/08/2026 13:10:00
+    components: [
+      {
+        type: "BODY",
+        text: "{{1}}, this weekend only: 20% off everything in store.",
+        example: { body_text: [["Anita"]] },
+      },
+    ],
+    edits: 1,
+  },
+];
+
+/* ------------------------------------------------------------------ */
 /* Writing it                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -517,6 +593,8 @@ try {
   );
   const tables = new Set(present.map((row) => row.tablename));
   const missing = [
+    "whatsapp_templates",
+    "whatsapp_template_edits",
     "companies",
     "integrations",
     "usage_events",
@@ -881,12 +959,65 @@ try {
     );
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Templates                                                         */
+  /* ---------------------------------------------------------------- */
+
+  let templateEditId = 0;
+  for (const template of TEMPLATES) {
+    await client.query(
+      `INSERT INTO whatsapp_templates
+         (id, company_id, integration_id, name, language, category, components,
+          status, meta_template_id, rejected_reason, status_updated_at,
+          created_by_user_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13)`,
+      [
+        template.id,
+        COMPANY.active,
+        INTEGRATION.whatsapp,
+        template.name,
+        template.language,
+        template.category,
+        JSON.stringify(template.components),
+        template.status,
+        template.metaTemplateId,
+        template.rejectedReason,
+        template.statusUpdatedAt,
+        "c000visualfixtureuser001",
+        T.companyCreated,
+      ],
+    );
+
+    /*
+     * The edit log. Stamped `now()` minus a few days, which is the one place
+     * this file lets the clock decide something and the rule at the top still
+     * applies: the quota is a COUNT, never a rendered instant. A literal here
+     * would age out of Meta's rolling thirty-day window and the count would
+     * silently fall to zero on a date nobody wrote down.
+     */
+    for (let n = 0; n < template.edits; n++) {
+      await client.query(
+        `INSERT INTO whatsapp_template_edits
+           (id, company_id, template_id, components, edited_by_user_id, created_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5, now() - ($6 || ' days')::interval)`,
+        [
+          `c000visualfixturetedit${String(++templateEditId).padStart(2, "0")}`,
+          COMPANY.active,
+          template.id,
+          JSON.stringify(template.components),
+          "c000visualfixtureuser001",
+          String(n + 1),
+        ],
+      );
+    }
+  }
+
   console.log(
     `Seeded ${TEST_DATABASE_NAME}: 3 companies, ${users.length} users, ` +
       `4 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
       `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
-      `1 media row.`,
+      `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits.`,
   );
 } finally {
   await client.end();

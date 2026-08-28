@@ -34,6 +34,23 @@ export const FIXTURE = {
    */
   closedConversationId: "c000visualfixtureconvo02",
   /**
+   * An approved template, carrying variables on purpose.
+   *
+   * Any approved template with {{n}} needs values typed at send time, so a
+   * fixture whose only template is variable-free photographs a picker with
+   * nothing to fill in — which is the half of that screen most likely to be
+   * wrong.
+   */
+  approvedTemplateId: "c000visualfixturetmpl001",
+  /**
+   * A rejected one, carrying a real Meta rejection reason.
+   *
+   * Rejected for the reason its own body demonstrates: it opens on a variable,
+   * which is one of the three rules validateTemplate enforces. The fixture and
+   * the validator describe the same rule from opposite ends.
+   */
+  rejectedTemplateId: "c000visualfixturetmpl002",
+  /**
    * The owner's last sign-in, as the console renders it.
    *
    * Here rather than only in the seed because signing in overwrites it, and

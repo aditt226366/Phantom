@@ -123,6 +123,7 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
+  { name: "template-studio-new", path: "/template-messaging/new", audience: "tenant" },
   { name: "meta-ads", path: "/meta-ads", audience: "tenant" },
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },

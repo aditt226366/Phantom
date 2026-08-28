@@ -35,6 +35,7 @@ export const JOB_NAMES = {
   WHATSAPP_MARK_READ: "whatsapp.mark.read",
   WHATSAPP_MEDIA_FETCH: "whatsapp.media.fetch",
   WHATSAPP_NUMBERS_REFRESH: "whatsapp.numbers.refresh",
+  WHATSAPP_TEMPLATE_SUBMIT: "whatsapp.template.submit",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -162,6 +163,32 @@ export const whatsappMediaFetchJobSchema = z.object({
 
 export type WhatsAppMediaFetchJob = z.infer<typeof whatsappMediaFetchJobSchema>;
 
+/** Hand one already-persisted template to Meta. */
+export const whatsappTemplateSubmitJobSchema = z.object({
+  companyId: z.string().min(1),
+  templateId: z.string().min(1),
+});
+
+export type WhatsAppTemplateSubmitJob = z.infer<
+  typeof whatsappTemplateSubmitJobSchema
+>;
+
+/**
+ * The job id for a submission, naming the attempt.
+ *
+ * The same reasoning as sendJobId (R2): BullMQ keeps completed ids for an hour
+ * and refuses a job whose id it already holds, silently. A resubmit after a
+ * rejection re-enqueued under the first attempt's id would be dropped and the
+ * Fix-and-resubmit button would look dead.
+ *
+ * Unlike a send, a repeat here is safe - Meta refuses a duplicate name rather
+ * than creating a second template - so this is about the button working, not
+ * about a message reaching a customer twice.
+ */
+export function templateSubmitJobId(templateId: string, attempt: number): string {
+  return `template:${templateId}:${attempt}`;
+}
+
 export const whatsappNumbersRefreshJobSchema = z.object({
   companyId: z.string().min(1),
 });
@@ -209,6 +236,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.WHATSAPP_MARK_READ]: whatsappMarkReadJobSchema,
   [JOB_NAMES.WHATSAPP_MEDIA_FETCH]: whatsappMediaFetchJobSchema,
   [JOB_NAMES.WHATSAPP_NUMBERS_REFRESH]: whatsappNumbersRefreshJobSchema,
+  [JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT]: whatsappTemplateSubmitJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

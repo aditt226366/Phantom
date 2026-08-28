@@ -14,6 +14,7 @@ import { handleIntegrationVerify } from "./jobs/integration-verify.ts";
 import { handleVaultReseal } from "./jobs/vault-reseal.ts";
 import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
 import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
+import { handleWhatsAppTemplateSubmit } from "./jobs/whatsapp-template-submit.ts";
 import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
@@ -85,6 +86,11 @@ async function processJob(job: Job): Promise<unknown> {
       return handleWhatsAppNumbersRefresh(
         parseJobPayload(JOB_NAMES.WHATSAPP_NUMBERS_REFRESH, job.data),
         job.id ?? `${job.name}:${job.timestamp}`,
+      );
+
+    case JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT:
+      return handleWhatsAppTemplateSubmit(
+        parseJobPayload(JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT, job.data),
       );
 
     default:

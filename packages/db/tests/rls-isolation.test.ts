@@ -704,6 +704,106 @@ describe("stored media", () => {
   });
 });
 
+describe("templates and their edit log", () => {
+  async function seedTemplate(
+    company: SeededCompany,
+    name: string,
+  ): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: name },
+        select: { id: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name,
+          language: "en_US",
+          category: "MARKETING",
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+        select: { id: true },
+      });
+
+      await db.whatsAppTemplateEdit.create({
+        data: {
+          companyId,
+          templateId: template.id,
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+      });
+
+      return template.id;
+    });
+  }
+
+  it("does not show one company's templates to another", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+    await seedTemplate(beta, "beta_offer");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM whatsapp_templates ORDER BY name`,
+    );
+
+    expect(rows.map((r) => r.name)).toEqual(["beta_offer"]);
+  });
+
+  /*
+   * The edit log is what the quota is counted from, so a leak here is not only
+   * a disclosure - it would let one company's edits consume another's allowance
+   * and lock them out of fixing a rejected template.
+   */
+  it("does not count one company's edits against another", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+    await seedTemplate(beta, "beta_offer");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) AS count FROM whatsapp_template_edits`,
+    );
+
+    expect(Number(rows[0]?.count)).toBe(1);
+  });
+
+  /* A fixture, deliberately outside any `it`: seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  async function seedIntegration(company: SeededCompany): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const row = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "smuggle" },
+        select: { id: true },
+      });
+      return row.id;
+    });
+  }
+
+  it("refuses to write a template into another company", async () => {
+    const integrationId = await seedIntegration(alpha);
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_templates
+            (id, company_id, integration_id, name, language, category,
+             components, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${integrationId}, 'smuggled',
+                  'en_US', 'MARKETING', '[]'::jsonb, now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides templates from the table's own owner", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_templates");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

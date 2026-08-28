@@ -105,6 +105,8 @@ model Company {
   whatsappMedia          WhatsAppMedia[]
   webhookEvents          WhatsAppWebhookEvent[]
   unroutableWebhooks     UnroutableWebhook[]
+  whatsappTemplates      WhatsAppTemplate[]
+  templateEdits          WhatsAppTemplateEdit[]
 
   @@map("companies")
 }
@@ -162,6 +164,8 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   auditLogs               AuditLog[]
   conversationsAssigned   Conversation[]           @relation("ConversationsAssigned")
+  templatesCreated        WhatsAppTemplate[]       @relation("TemplatesCreated")
+  templateEdits           WhatsAppTemplateEdit[]   @relation("TemplateEdits")
   messagesSent            Message[]                @relation("MessagesSent")
 
   @@index([companyId, createdAt])
@@ -352,6 +356,7 @@ model Integration {
   verifications   IntegrationVerification[]
   whatsappNumbers WhatsAppNumber[]
   webhookEvents   WhatsAppWebhookEvent[]
+  templates       WhatsAppTemplate[]
 
   /// One per provider per company, for now. This relaxes in Phase 4/6, when a
   /// company gets several numbers and several sheet bindings - which is why
@@ -1076,6 +1081,114 @@ model UnroutableWebhook {
 /// (kind, currency, version), so a kind that nothing has priced does not
 /// compile. A second list in the database could only disagree with it. Every
 /// write goes through recordUsage(), which takes the union.
+/// A message template, in the exact shape Meta was given.
+///
+/// -----------------------------------------------------------------------
+/// `components` is jsonb and is the submission, not a rendering of it
+/// -----------------------------------------------------------------------
+///
+/// Decision 10. The Studio's preview and the Graph POST read this one value,
+/// so what a tenant approved on screen cannot drift from what Meta received.
+/// Storing a normalised header/body/footer/buttons split instead would mean
+/// two assemblies of the same thing - one for the preview, one for the wire -
+/// and the day they disagree is the day somebody's customer gets a message
+/// nobody reviewed.
+///
+/// It is Meta's schema, not ours, which is the other half of the argument: the
+/// component vocabulary is theirs to extend, and a column per field would need
+/// a migration every time they add one.
+model WhatsAppTemplate {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  /// Which WABA it lives under. Meta scopes templates to the business account.
+  integrationId String @map("integration_id")
+
+  /// lowercase_snake_case, as Meta requires. Slugified in the Studio, not here.
+  name     String
+  /// Meta's locale code, e.g. en_US. Text: the list is long and theirs.
+  language String
+
+  /// MARKETING, UTILITY or AUTHENTICATION - and text rather than an enum for
+  /// the usual reason, plus a sharper one. Meta RE-CATEGORISES templates whose
+  /// wording it reads as promotional, so the value here can change to something
+  /// the tenant did not choose, and the price changes with it. A write that
+  /// rejected an unfamiliar category would drop exactly that news.
+  category String
+
+  /// The components array, byte-for-byte what was POSTed.
+  components Json
+
+  /// Meta's vocabulary: PENDING, APPROVED, REJECTED, PAUSED, DISABLED,
+  /// IN_APPEAL - and whatever they add next, which must render as itself.
+  status String @default("PENDING")
+
+  /// Meta's id, once it accepts the submission. Null until then, which is what
+  /// distinguishes "never submitted" from "submitted and waiting".
+  metaTemplateId String? @map("meta_template_id")
+
+  /// Meta's own words for why it said no, stored verbatim. Paraphrasing it
+  /// would put our sentence in front of the person who has to act on theirs.
+  rejectedReason String? @map("rejected_reason")
+
+  /// When Meta last told us anything about this template.
+  statusUpdatedAt DateTime? @db.Timestamptz(3) @map("status_updated_at")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  /// SetNull, like every other authorship column here: deleting an employee
+  /// must not delete the template their colleagues are sending.
+  createdBy   User?       @relation("TemplatesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  edits       WhatsAppTemplateEdit[]
+
+  /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
+  @@unique([companyId, name, language])
+  @@index([companyId, updatedAt(sort: Desc)])
+  @@index([companyId, status])
+  @@map("whatsapp_templates")
+}
+
+/// One edit, appended. Never updated, never deleted.
+///
+/// -----------------------------------------------------------------------
+/// The quota is DERIVED from these rows, and there is no counter column
+/// -----------------------------------------------------------------------
+///
+/// A counter is a second source of truth for something the rows already say,
+/// and it is wrong the first time a write half-fails. Counting is cheap at this
+/// cardinality - a template is edited a handful of times in a month, and the
+/// index below makes the window a seek.
+///
+/// R8: what that count produces is a FLOOR, not the quota. Meta counts edits
+/// made in Business Manager too, and those never reach this table. The Studio
+/// labels it "edits made here" for that reason, and the Edit button is never
+/// the enforcement - submitting attempts it and decodes Meta's refusal.
+model WhatsAppTemplateEdit {
+  id         String @id @default(cuid())
+  companyId  String @map("company_id")
+  templateId String @map("template_id")
+
+  /// The components as submitted by THIS edit, so the log is a history of what
+  /// was actually sent rather than a list of timestamps.
+  components Json
+
+  editedByUserId String? @map("edited_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template WhatsAppTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  editedBy User?            @relation("TemplateEdits", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  /// The window count: every read is "edits to this template since T".
+  @@index([companyId, templateId, createdAt(sort: Desc)])
+  @@map("whatsapp_template_edits")
+}
+
 model UsageEvent {
   id        String @id @default(cuid())
   companyId String @map("company_id")

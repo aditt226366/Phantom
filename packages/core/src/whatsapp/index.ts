@@ -73,3 +73,14 @@ export type {
   TemplateDraft,
   TemplateIssue,
 } from "./template.ts";
+export {
+  createWhatsAppTemplate,
+  listWhatsAppTemplates,
+} from "./template-graph.ts";
+export type {
+  MetaTemplate,
+  TemplateAccepted,
+  TemplateCreateOutcome,
+  TemplateListOutcome,
+  TemplateRefused,
+} from "./template-graph.ts";

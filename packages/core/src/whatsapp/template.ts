@@ -407,3 +407,86 @@ function validateButtons(draft: TemplateDraft): TemplateIssue[] {
 
   return issues;
 }
+
+/* -------------------------------------------------------------------------- *
+ * The inverse, for editing
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Components back into a draft, so a stored template can be edited.
+ *
+ * ---------------------------------------------------------------------------
+ * This is not a second assembly, and the round-trip test is what proves it
+ * ---------------------------------------------------------------------------
+ *
+ * Decision 10 forbids a second *forward* path — two functions that each turn
+ * intent into a submission. This is the inverse of the one forward path, which
+ * is a different thing, and it exists because editing has to start somewhere.
+ *
+ * The danger is different too, and worth naming: if this loses a field, opening
+ * a template and pressing submit without touching anything would silently
+ * change it. A footer that did not survive the round trip would simply vanish
+ * from an approved template on its next edit.
+ *
+ * So the property that matters is not "this is correct" but
+ * `buildComponents(draftFrom(buildComponents(d)))` equalling
+ * `buildComponents(d)` — and that is asserted rather than described.
+ *
+ * Samples come back out of the BODY's example block, which is where
+ * buildComponents put them.
+ */
+export function draftFromComponents(
+  components: TemplateComponent[],
+  meta: { name: string; language: string; category: TemplateCategory },
+): TemplateDraft {
+  const draft = emptyDraft();
+  draft.name = meta.name;
+  draft.language = meta.language;
+  draft.category = meta.category;
+
+  for (const component of components) {
+    if (component.type === "HEADER") {
+      draft.headerFormat = component.format;
+      if (component.format === "TEXT") draft.headerText = component.text;
+      continue;
+    }
+
+    if (component.type === "BODY") {
+      draft.body = component.text;
+      draft.samples = component.example?.body_text[0] ?? [];
+      continue;
+    }
+
+    if (component.type === "FOOTER") {
+      draft.footer = component.text;
+      continue;
+    }
+
+    if (component.type === "BUTTONS") {
+      const quick = component.buttons.filter((b) => b.type === "QUICK_REPLY");
+
+      if (quick.length > 0) {
+        draft.buttonKind = "QUICK_REPLY";
+        draft.quickReplies = quick.map((b) => b.text);
+        continue;
+      }
+
+      /*
+       * Anything not a quick reply is a call to action. Meta does not mix the
+       * two on one template, so the first kind found decides — and treating an
+       * unrecognised button type as a call to action rather than dropping it
+       * keeps the round trip honest about there being buttons at all.
+       */
+      draft.buttonKind = "CALL_TO_ACTION";
+      for (const button of component.buttons) {
+        if (button.type === "URL") {
+          draft.urlButton = { text: button.text, url: button.url };
+        } else if (button.type === "PHONE_NUMBER") {
+          draft.phoneButton = { text: button.text, phone: button.phone_number };
+        }
+      }
+    }
+  }
+
+  return draft;
+}

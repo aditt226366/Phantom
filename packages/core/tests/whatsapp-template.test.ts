@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildComponents,
+  draftFromComponents,
   emptyDraft,
   fillVariables,
   slugifyTemplateName,
@@ -219,5 +220,63 @@ describe("validateTemplate", () => {
       "buttons",
     );
     expect(fieldsOf(valid({ buttonKind: "CALL_TO_ACTION" }))).toContain("buttons");
+  });
+});
+
+describe("draftFromComponents", () => {
+  /*
+   * The property that matters, and the only one worth asserting.
+   *
+   * This is the inverse of the one forward path, not a second forward path -
+   * decision 10 forbids the latter and says nothing about the former. But the
+   * danger it carries is its own: if the inverse loses a field, opening a
+   * template and pressing submit without touching anything silently changes it.
+   * A footer that did not survive would simply vanish from an approved template
+   * on its next edit, and nothing would report it.
+   */
+  const CASES: Array<[string, TemplateDraft]> = [
+    ["body only", valid()],
+    [
+      "every part",
+      valid({
+        headerFormat: "TEXT",
+        headerText: "Your order",
+        footer: "Reply STOP to opt out",
+        buttonKind: "QUICK_REPLY",
+        quickReplies: ["Track it", "Talk to us"],
+      }),
+    ],
+    ["a media header", valid({ headerFormat: "IMAGE" })],
+    [
+      "a call to action",
+      valid({
+        buttonKind: "CALL_TO_ACTION",
+        urlButton: { text: "Shop", url: "https://example.com" },
+        phoneButton: { text: "Call", phone: "+919812345670" },
+      }),
+    ],
+    ["no variables", valid({ body: "We are closed Monday.", samples: [] })],
+  ];
+
+  it.each(CASES)("round-trips %s", (_label, draft) => {
+    const components = buildComponents(draft);
+    const back = draftFromComponents(components, {
+      name: draft.name,
+      language: draft.language,
+      category: draft.category,
+    });
+
+    expect(buildComponents(back)).toEqual(components);
+  });
+
+  it("recovers the samples Meta was given", () => {
+    const components = buildComponents(valid());
+    const back = draftFromComponents(components, {
+      name: "order_update",
+      language: "en_US",
+      category: "UTILITY",
+    });
+
+    expect(back.samples).toEqual(["Anita", "NW-2291"]);
   });
 });

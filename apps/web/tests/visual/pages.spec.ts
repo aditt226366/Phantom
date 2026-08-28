@@ -130,6 +130,7 @@ test.describe("coverage", () => {
         "[conversationId]",
         [FIXTURE.conversationId, FIXTURE.closedConversationId],
       ],
+      ["[templateId]", [FIXTURE.rejectedTemplateId]],
     ]);
 
     const found: string[] = [];

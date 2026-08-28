@@ -110,3 +110,86 @@ export async function createTemplateAction(formData: FormData): Promise<void> {
   revalidatePath("/template-messaging");
   redirect(`/template-messaging/${created}`);
 }
+
+/**
+ * Fix and resubmit.
+ *
+ * The Edit button is never gated on the quota (R8) — this attempts the change
+ * and lets Meta refuse it. The count the Studio shows is a floor, because Meta
+ * counts edits made in Business Manager and those never reach our table, so a
+ * disabled button would be this app telling somebody they have no edits left
+ * on the strength of a number it cannot know.
+ *
+ * The row goes back to PENDING with its previous reason cleared, because it is
+ * genuinely under review again and a stale rejection sitting under a PENDING
+ * badge reads as a new one.
+ */
+export async function resubmitTemplateAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+
+  const templateId = String(formData.get("templateId") ?? "");
+  const draft = parseDraft(String(formData.get("draft") ?? ""));
+
+  if (!templateId || !draft) redirect("/template-messaging?error=malformed");
+  if (validateTemplate(draft).length > 0) {
+    redirect(`/template-messaging/${templateId}?error=invalid`);
+  }
+
+  const components = buildComponents(draft);
+
+  const attempt = await withCompany(session.companyId, async (db, companyId) => {
+    const existing = await db.whatsAppTemplate.findFirst({
+      where: { id: templateId },
+      select: { id: true },
+    });
+
+    /* Rule 6: not yours means it does not exist. */
+    if (!existing) return null;
+
+    await db.whatsAppTemplate.updateMany({
+      where: { id: templateId },
+      data: {
+        name: draft.name,
+        language: draft.language,
+        category: draft.category,
+        components: components as never,
+        status: "PENDING",
+        /*
+         * Cleared with the resubmission, and cleared for the same reason the
+         * message retry clears a failure's error columns: a row that is under
+         * review again must not still carry last time's verdict.
+         *
+         * metaTemplateId goes too. Meta treats an edit as a new submission and
+         * answers with an id; keeping the old one would make the submit job
+         * refuse this as already-named and the button would do nothing.
+         */
+        metaTemplateId: null,
+        rejectedReason: null,
+        statusUpdatedAt: null,
+      },
+    });
+
+    await recordTemplateEdit(db, companyId, {
+      templateId,
+      components,
+      editedByUserId: session.userId,
+    });
+
+    /* The attempt number for the job id (R2), counted from the log rather than
+       kept anywhere - the same reasoning as the quota it is derived from. */
+    return db.whatsAppTemplateEdit.count({ where: { companyId, templateId } });
+  });
+
+  if (attempt === null) redirect("/template-messaging?error=gone");
+
+  await systemQueue.add(
+    JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT,
+    { companyId: session.companyId, templateId },
+    { jobId: templateSubmitJobId(templateId, attempt) },
+  );
+
+  revalidatePath("/template-messaging");
+  revalidatePath(`/template-messaging/${templateId}`);
+  redirect(`/template-messaging/${templateId}`);
+}

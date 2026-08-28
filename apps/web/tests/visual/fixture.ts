@@ -124,6 +124,12 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
   { name: "template-studio-new", path: "/template-messaging/new", audience: "tenant" },
+  {
+    /* The rejected one: Meta's reason, the explanation, and the quota. */
+    name: "template-rejected",
+    path: `/template-messaging/${FIXTURE.rejectedTemplateId}`,
+    audience: "tenant",
+  },
   { name: "meta-ads", path: "/meta-ads", audience: "tenant" },
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },

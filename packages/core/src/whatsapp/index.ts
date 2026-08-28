@@ -57,6 +57,7 @@ export type {
 export {
   buildComponents,
   CATEGORY_NOTES,
+  draftFromComponents,
   CATEGORY_RECATEGORISATION_NOTE,
   emptyDraft,
   fillVariables,

@@ -36,6 +36,7 @@ export const JOB_NAMES = {
   WHATSAPP_MEDIA_FETCH: "whatsapp.media.fetch",
   WHATSAPP_NUMBERS_REFRESH: "whatsapp.numbers.refresh",
   WHATSAPP_TEMPLATE_SUBMIT: "whatsapp.template.submit",
+  WHATSAPP_TEMPLATE_SYNC: "whatsapp.template.sync",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -163,6 +164,13 @@ export const whatsappMediaFetchJobSchema = z.object({
 
 export type WhatsAppMediaFetchJob = z.infer<typeof whatsappMediaFetchJobSchema>;
 
+/** Read every template Meta holds for this WABA and adopt the unknown ones. */
+export const whatsappTemplateSyncJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type WhatsAppTemplateSyncJob = z.infer<typeof whatsappTemplateSyncJobSchema>;
+
 /** Hand one already-persisted template to Meta. */
 export const whatsappTemplateSubmitJobSchema = z.object({
   companyId: z.string().min(1),
@@ -237,6 +245,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.WHATSAPP_MEDIA_FETCH]: whatsappMediaFetchJobSchema,
   [JOB_NAMES.WHATSAPP_NUMBERS_REFRESH]: whatsappNumbersRefreshJobSchema,
   [JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT]: whatsappTemplateSubmitJobSchema,
+  [JOB_NAMES.WHATSAPP_TEMPLATE_SYNC]: whatsappTemplateSyncJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

@@ -123,6 +123,11 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
+  {
+    name: "template-library",
+    path: "/template-messaging?view=library",
+    audience: "tenant",
+  },
   { name: "template-studio-new", path: "/template-messaging/new", audience: "tenant" },
   {
     /* The rejected one: Meta's reason, the explanation, and the quota. */

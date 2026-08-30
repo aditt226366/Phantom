@@ -5,6 +5,7 @@ import { withCompany } from "@whatsapp-os/db";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { requireSession } from "@/lib/auth/session";
+import { EMPTY_COPY } from "@/lib/empty-copy";
 import { formatTimestamp } from "@/lib/format";
 import {
   contactLabel,
@@ -102,7 +103,7 @@ export default async function Page() {
         <EmptyState
           tone="mint"
           title="Nothing in the inbox"
-          description="Replies from your contacts arrive here. Conversations Verse cannot answer are handed over with the history attached."
+          description={EMPTY_COPY.inbox}
         />
       )}
     </SectionShell>

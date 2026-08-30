@@ -15,6 +15,7 @@ import { handleVaultReseal } from "./jobs/vault-reseal.ts";
 import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
 import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
 import { handleWhatsAppTemplateSubmit } from "./jobs/whatsapp-template-submit.ts";
+import { handleWhatsAppTemplateSync } from "./jobs/whatsapp-template-sync.ts";
 import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
@@ -91,6 +92,11 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT:
       return handleWhatsAppTemplateSubmit(
         parseJobPayload(JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_TEMPLATE_SYNC:
+      return handleWhatsAppTemplateSync(
+        parseJobPayload(JOB_NAMES.WHATSAPP_TEMPLATE_SYNC, job.data),
       );
 
     default:

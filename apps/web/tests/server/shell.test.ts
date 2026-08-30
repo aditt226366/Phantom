@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { signUpSchema } from "@whatsapp-os/core";
+import { EMPTY_COPY } from "@/lib/empty-copy";
 import { NAV_SECTIONS, PROFILE_LINKS, PROTECTED_PREFIXES } from "@/lib/nav";
 import { revokeSessionByToken, resolveSessionByToken } from "@/lib/auth/session-store";
 import { signUp } from "@/lib/auth/signup";
@@ -116,30 +117,46 @@ describe("Billing", () => {
 });
 
 describe("empty states", () => {
+  /*
+   * "A designed empty state, not a spinner" means the copy is the work, and a
+   * shared string across sections would be the component instance this is meant
+   * to avoid.
+   *
+   * This used to read each page's source for `description="..."`, which worked
+   * for exactly as long as every description was a string literal. Template
+   * Messaging grew a second one - the tab changes what "empty" means - so the
+   * description became a JSX expression, the regex matched nothing, and the
+   * test failed because it could no longer see what it was checking.
+   *
+   * Now it compares values, per the rule that cost this repository the same
+   * lesson twice: assert a value, not a substring. A seventh section sharing a
+   * sentence is a failing equality rather than a pattern that happens to match.
+   */
   it("gives every section its own copy", () => {
-    /*
-     * "A designed empty state, not a spinner" means the copy is the work. A
-     * shared string across sections would be the component instance this is
-     * meant to avoid.
-     */
-    const sections = ["ai-messaging", "template-messaging", "bulk-messaging", "meta-ads", "configuration", "inbox"];
+    const values = Object.values(EMPTY_COPY);
 
-    const descriptions = sections.map((section) => {
-      const match = /description="([^"]+)"/.exec(pageCode(section));
-      return match?.[1];
-    });
+    expect(values.every((copy) => copy.trim().length > 0)).toBe(true);
+    expect(new Set(values).size).toBe(values.length);
+  });
 
-    expect(descriptions.every(Boolean)).toBe(true);
-    expect(new Set(descriptions).size).toBe(descriptions.length);
+  /*
+   * The other half, and the reason the module is not simply a constants file:
+   * a section could still be given copy that nothing renders. Every key must be
+   * reachable from the page it names.
+   */
+  it("is used by the page it names", () => {
+    for (const key of Object.keys(EMPTY_COPY)) {
+      const section = key.replace(/-library$/, "");
+      expect(pageCode(section), `${key} is not rendered`).toContain("EMPTY_COPY");
+    }
   });
 
   it("says something specific rather than generic", () => {
-    /* A description that does not name the feature is a component instance. */
-    for (const section of ["ai-messaging", "bulk-messaging", "meta-ads"]) {
-      const [, description] = /description="([^"]+)"/.exec(
-        pageCode(section),
-      ) ?? [];
-      expect(description!.length, section).toBeGreaterThan(60);
+    /* A description that does not name the feature is a component instance.
+       Read from the values for the same reason as the check above - this one
+       grepped for the same literal and expired at the same moment. */
+    for (const section of ["ai-messaging", "bulk-messaging", "meta-ads"] as const) {
+      expect(EMPTY_COPY[section].length, section).toBeGreaterThan(60);
     }
   });
 

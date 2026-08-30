@@ -193,3 +193,23 @@ export async function resubmitTemplateAction(formData: FormData): Promise<void> 
   revalidatePath(`/template-messaging/${templateId}`);
   redirect(`/template-messaging/${templateId}`);
 }
+
+/**
+ * Ask the worker to read what Meta holds.
+ *
+ * A job rather than a Graph call in the request, and for the same reason the
+ * numbers page refuses to fetch on render: a provider round trip inside a page
+ * load is a page that fails when Meta is slow. The button enqueues; the tab
+ * shows what the last sync found.
+ */
+export async function syncTemplatesAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+
+  await systemQueue.add(JOB_NAMES.WHATSAPP_TEMPLATE_SYNC, {
+    companyId: session.companyId,
+  });
+
+  revalidatePath("/template-messaging");
+  redirect("/template-messaging?view=library");
+}

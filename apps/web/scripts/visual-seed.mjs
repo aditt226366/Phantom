@@ -570,6 +570,30 @@ const TEMPLATES = [
     ],
     edits: 1,
   },
+  {
+    /*
+     * Adopted from Meta rather than built here, which is what the Library tab
+     * shows. createdBy stays null - that is the marker, and it is also the
+     * truth: nobody in this workspace wrote it.
+     */
+    id: "c000visualfixturetmpl003",
+    name: "appointment_reminder",
+    language: "en_US",
+    category: "UTILITY",
+    status: "APPROVED",
+    metaTemplateId: "1094857362019285",
+    rejectedReason: null,
+    statusUpdatedAt: "2026-08-10T09:00:00Z", // 10/08/2026 14:30:00
+    components: [
+      {
+        type: "BODY",
+        text: "Reminder: your appointment with us is on {{1}} at {{2}}. Reply RESCHEDULE if you need a different time.",
+        example: { body_text: [["Thursday", "3pm"]] },
+      },
+    ],
+    createdBy: null,
+    edits: 0,
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -983,7 +1007,7 @@ try {
         template.metaTemplateId,
         template.rejectedReason,
         template.statusUpdatedAt,
-        "c000visualfixtureuser001",
+        template.createdBy === null ? null : "c000visualfixtureuser001",
         T.companyCreated,
       ],
     );

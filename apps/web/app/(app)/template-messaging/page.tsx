@@ -5,9 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { requireSession } from "@/lib/auth/session";
+import { EMPTY_COPY } from "@/lib/empty-copy";
 import { formatTimestamp } from "@/lib/format";
 import { rejectionExplanation, templateTone } from "@/lib/template-display";
+import { CsrfField } from "@/components/ui/csrf-field";
 import { SectionHeader, SectionShell } from "../_components/section";
+import { syncTemplatesAction } from "./actions";
 
 export const metadata: Metadata = { title: "Template Messaging" };
 
@@ -19,12 +22,27 @@ export const metadata: Metadata = { title: "Template Messaging" };
  * to do something, and it needs them to read Meta's reason before they do it —
  * so the reason renders on the row, not one click away behind an "edit".
  */
-export default async function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   /* Not the layout. Layouts are cached per segment; this is the boundary. */
   const session = await requireSession();
 
+  const query = await searchParams;
+  const view = query["view"] === "library" ? "library" : "yours";
+
   const templates = await withCompany(session.companyId, (db) =>
     db.whatsAppTemplate.findMany({
+      /*
+       * The tab is a filter on authorship, which is also the truth about
+       * where each template came from: a null createdByUserId means the sync
+       * job adopted it from Meta rather than somebody building it here.
+       */
+      where: view === "library"
+        ? { createdByUserId: null }
+        : { createdByUserId: { not: null } },
       /* The index is (company_id, updated_at DESC). Tie-broken on id. */
       orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
       take: 100,
@@ -47,11 +65,43 @@ export default async function Page() {
         lede="Templates are how you start a conversation, or continue one after the 24-hour window has closed. Meta reviews each one."
       />
 
+      <nav aria-label="Template views" className="mb-base flex items-center gap-base">
+        <Tab href="/template-messaging" active={view === "yours"}>
+          Yours
+        </Tab>
+        <Tab href="/template-messaging?view=library" active={view === "library"}>
+          From Meta
+        </Tab>
+      </nav>
+
       <div className="mb-lg flex flex-wrap items-center gap-sm">
-        <Button asChild>
-          <Link href="/template-messaging/new">New template</Link>
-        </Button>
+        {view === "yours" ? (
+          <Button asChild>
+            <Link href="/template-messaging/new">New template</Link>
+          </Button>
+        ) : (
+          <form action={syncTemplatesAction}>
+            <CsrfField />
+            <Button type="submit" variant="outline">
+              Sync from Meta
+            </Button>
+          </form>
+        )}
       </div>
+
+      {view === "library" ? (
+        /*
+         * Said plainly, because the alternative is a tenant assuming this is
+         * Meta's pre-written catalogue. It is not - it is their own WABA's
+         * templates, including ones made in Business Manager, which need no
+         * review here only because they have already had it.
+         */
+        <p className="mb-base max-w-2xl text-body-sm text-body">
+          Templates already on your WhatsApp Business Account that were not
+          created here — usually made in Meta Business Manager. They are
+          approved already, so they can be sent without waiting for review.
+        </p>
+      ) : null}
 
       {templates.length > 0 ? (
         <ul className="flex flex-col gap-sm">
@@ -103,10 +153,36 @@ export default async function Page() {
       ) : (
         <EmptyState
           tone="lavender"
-          title="No templates yet"
-          description="A template is a message Meta has approved in advance. You need one to reach somebody who has not written to you in the last 24 hours."
+          title={view === "library" ? "Nothing from Meta yet" : "No templates yet"}
+          description={
+            view === "library"
+              ? EMPTY_COPY["template-messaging-library"]
+              : EMPTY_COPY["template-messaging"]
+          }
         />
       )}
     </SectionShell>
+  );
+}
+
+function Tab({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={`text-nav-link transition-colors ${
+        active ? "text-ink" : "text-muted hover:text-ink"
+      }`}
+    >
+      {children}
+    </Link>
   );
 }

@@ -94,6 +94,7 @@ export type {
   WhatsAppMedia,
   WhatsAppWebhookEvent,
   UnroutableWebhook,
+  KycDocument,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -113,4 +114,6 @@ export {
   ConversationSource,
   MediaState,
   UnroutableReason,
+  KycDocumentKind,
+  KycDocumentStatus,
 } from "./generated/prisma/enums.ts";

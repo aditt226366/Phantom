@@ -107,6 +107,7 @@ model Company {
   unroutableWebhooks     UnroutableWebhook[]
   whatsappTemplates      WhatsAppTemplate[]
   templateEdits          WhatsAppTemplateEdit[]
+  kycDocuments           KycDocument[]
 
   @@map("companies")
 }
@@ -1189,6 +1190,117 @@ model WhatsAppTemplateEdit {
   @@map("whatsapp_template_edits")
 }
 
+/// Which of the three documents a row carries.
+///
+/// Fixed, and short by design: KYC here is the Indian business-verification
+/// set, so the vocabulary is ours rather than a provider's and an enum is
+/// right where whatsapp_numbers.status is text. A fourth kind would be a
+/// migration AND a product decision about what an account must produce before
+/// it is allowed to work, which is the review moment an enum forces and a text
+/// column would skip.
+enum KycDocumentKind {
+  GST
+  PAN
+  AADHAAR
+
+  @@map("kyc_document_kind")
+}
+
+/// Where one upload stands with the platform operator.
+///
+/// REJECTED covers a revoked approval as well as a first refusal. Both mean
+/// "this document is not accepted, here is why, upload another", which is the
+/// only distinction the tenant can act on - and the two are told apart in
+/// admin_audit_log, where the difference actually matters. Adding a REVOKED
+/// member would give the gate two ways to spell the same closed door.
+enum KycDocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("kyc_document_status")
+}
+
+/// One upload attempt. Append-only: a re-upload supersedes, never overwrites.
+///
+/// -------------------------------------------------------------------------
+/// The current state of a kind is the newest row for it
+/// -------------------------------------------------------------------------
+///
+/// Following whatsapp_template_edits. A rejected document whose replacement is
+/// approved leaves both rows behind, so "what did the operator actually look
+/// at when they let this company in" has an answer a year later. Overwriting
+/// would destroy exactly the record that identity documents need, and it is
+/// not recoverable once done.
+///
+/// The consequence for every reader: there is no "the GST document" row. There
+/// is the newest row of kind GST, and currentKycDocuments() in src/kyc.ts is
+/// the only place that ordering is written down.
+///
+/// -------------------------------------------------------------------------
+/// Why this is not whatsapp_media
+/// -------------------------------------------------------------------------
+///
+/// whatsapp_media is unique on (company_id, sha256) and upserts onto it, which
+/// is right for a photo forwarded to fifty contacts and wrong for this: two
+/// companies filing the same PDF must never meet in one row, and even one
+/// company re-uploading identical bytes after a rejection is a new attempt
+/// with its own verdict. The MediaStore *pattern* is reused - bytea, STORAGE
+/// EXTERNAL, a CHECK on length, chunked reads - and the table is not.
+model KycDocument {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  kind KycDocumentKind
+
+  /// The file. NOT NULL, unlike whatsapp_media.bytes: there is no equivalent
+  /// of a skipped download here, because nothing creates a row except an
+  /// upload that already arrived intact.
+  ///
+  /// STORAGE EXTERNAL is set in the migration and is load-bearing for the same
+  /// reason it is there - the read path slices this column with substring() to
+  /// stream it, and under the default EXTENDED every slice decompresses from
+  /// the start.
+  ///
+  /// Three CHECK constraints in the migration: the 5 MiB cap, byte_size
+  /// agreeing with the content, and the first five bytes being %PDF-. All
+  /// three are backstops for checks the upload path already makes, in the
+  /// spirit of validating a file by its magic bytes rather than its name.
+  bytes Bytes
+
+  byteSize Int    @map("byte_size")
+  sha256   String
+
+  /// What the browser called it. Recorded, never trusted: the download route
+  /// sanitises it into Content-Disposition the way the media route does.
+  mimeType         String @map("mime_type")
+  originalFilename String @map("original_filename")
+
+  status KycDocumentStatus @default(PENDING)
+
+  /// Who decided, when, and why. Null until somebody has.
+  ///
+  /// SetNull rather than Cascade: an operator leaving the company must not
+  /// delete the record of the approval that let a tenant start trading. The
+  /// verdict outlives the person who gave it.
+  reviewedByAdminId String?   @map("reviewed_by_admin_id")
+  reviewedAt        DateTime? @db.Timestamptz(3) @map("reviewed_at")
+
+  /// Required on a rejection and on a revocation, because it is the only thing
+  /// the tenant is shown about either. An empty reason is a dead end wearing a
+  /// status chip.
+  reviewNote String? @map("review_note")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewedByAdmin AdminUser? @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+
+  /// The only read there is: the newest row of a kind, for one company.
+  @@index([companyId, kind, createdAt(sort: Desc)])
+  @@map("kyc_documents")
+}
+
 model UsageEvent {
   id        String @id @default(cuid())
   companyId String @map("company_id")
@@ -1334,6 +1446,7 @@ model AdminUser {
   sessions AdminSession[]
   auditLogs AdminAuditLog[]
   repairRuns AdminRepairRun[]
+  kycReviews KycDocument[]
 
   @@map("admin_users")
 }

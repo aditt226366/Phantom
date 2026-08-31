@@ -123,6 +123,18 @@ export const OUT_OF_BAND_DDL = new Set([
   /* 64 KiB on a stored webhook body. The route truncates and flags; this is
      the backstop that does not depend on it having done so. */
   "check:whatsapp_webhook_events.whatsapp_webhook_events_payload_within_cap",
+  /* The same three for a KYC document, and one more. The upload path already
+     enforces the cap while streaming and the file type from the bytes in hand;
+     these are what a second upload path added later inherits without knowing
+     they exist. */
+  "check:kyc_documents.kyc_documents_bytes_within_cap",
+  "check:kyc_documents.kyc_documents_byte_size_matches",
+  /* First five bytes are %PDF-. A file type is what its content says it is,
+     never its name or the Content-Type the browser volunteered. */
+  "check:kyc_documents.kyc_documents_bytes_are_pdf",
+  /* EXTERNAL for the same reason whatsapp_media.bytes is: the download route
+     slices this column to stream it. */
+  "storage:kyc_documents.bytes=e",
 ]);
 
 /**

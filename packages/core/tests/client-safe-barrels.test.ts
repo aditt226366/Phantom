@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nothing reachable from `@whatsapp-os/core/whatsapp` may need Node.
+ * Nothing reachable from a client-safe barrel may need Node.
  *
  * ---------------------------------------------------------------------------
  * Why this is a test and not a comment
@@ -26,10 +26,41 @@ import { describe, expect, it } from "vitest";
  * node:crypto, so it is published as `@whatsapp-os/core/whatsapp-server` and is
  * deliberately absent from the barrel below. This test is what stops it, or
  * anything like it, drifting back in.
+ *
+ * Phase 6 added the second instance, which is why this is now a table rather
+ * than one entry point. `leads/hash.ts` computes a row hash with node:crypto
+ * and the mapping screen's preview is a client component that imports the rest
+ * of that directory - the same hazard, one directory over, found by writing the
+ * module rather than by a build failing later.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ENTRY = resolve(here, "..", "src", "whatsapp", "index.ts");
+
+/**
+ * Every barrel a "use client" component is allowed to import, and the module
+ * each one is proving it does not reach.
+ *
+ * `forbidden` is named per barrel rather than derived, because the generic
+ * assertions below would already catch it - naming it makes deleting the
+ * arrangement a visible choice instead of a test that quietly stops asserting
+ * anything in particular.
+ */
+const BARRELS = [
+  {
+    name: "whatsapp",
+    entry: resolve(here, "..", "src", "whatsapp", "index.ts"),
+    serverSubpath: "whatsapp-server",
+    forbidden: "signature.ts",
+    minFiles: 5,
+  },
+  {
+    name: "leads",
+    entry: resolve(here, "..", "src", "leads", "index.ts"),
+    serverSubpath: "leads-server",
+    forbidden: "hash.ts",
+    minFiles: 2,
+  },
+] as const;
 
 /** Bare specifiers that are known browser-safe. Anything else is a finding. */
 const ALLOWED_BARE = new Set(["zod"]);
@@ -71,13 +102,13 @@ function walk(entry: string): { files: string[]; bare: string[] } {
   return { files: [...seen], bare: [...bare] };
 }
 
-describe("the client-safe whatsapp barrel", () => {
-  const graph = walk(ENTRY);
+describe.each(BARRELS)("the client-safe $name barrel", (barrel) => {
+  const graph = walk(barrel.entry);
 
   it("reaches more than the entry file", () => {
     /* A resolution bug that silently found nothing would make every assertion
        below vacuously true, which is the way this kind of test usually rots. */
-    expect(graph.files.length).toBeGreaterThan(5);
+    expect(graph.files.length).toBeGreaterThan(barrel.minFiles);
   });
 
   it("imports no Node builtin", () => {
@@ -100,14 +131,16 @@ describe("the client-safe whatsapp barrel", () => {
     const unknown = graph.bare.filter((s) => !ALLOWED_BARE.has(s));
     expect(
       unknown.sort(),
-      "add it to ALLOWED_BARE with a reason, or move the importer to whatsapp-server",
+      `add it to ALLOWED_BARE with a reason, or move the importer to ${barrel.serverSubpath}`,
     ).toEqual([]);
   });
 
-  it("does not reach the signature module, which needs node:crypto", () => {
+  it("does not reach the module that needs node:crypto", () => {
     /* The concrete case the arrangement exists for. Named rather than left to
        the generic assertions, so deleting it is a visible choice. */
-    const reached = graph.files.some((f) => f.endsWith("signature.ts"));
-    expect(reached, "signature.ts belongs to whatsapp-server").toBe(false);
+    const reached = graph.files.some((f) => f.endsWith(barrel.forbidden));
+    expect(reached, `${barrel.forbidden} belongs to ${barrel.serverSubpath}`).toBe(
+      false,
+    );
   });
 });

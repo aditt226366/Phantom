@@ -55,6 +55,14 @@ export const COLUMN_GRANTS = new Set([
   "integrations.webhook_key:app_resolver:SELECT",
   "integrations.company_id:app_resolver:SELECT",
   "integrations.provider:app_resolver:SELECT",
+  /* app_resolve_company's 'lead_source' kind: the key it matches and the id it
+     returns, and deliberately nothing else. The resolver has no business
+     reading a spreadsheet id, a mapping or a cursor - and the next column added
+     to lead_sources must not become visible to it for free, which is exactly
+     how deactivated_at became readable on another table before anyone decided
+     to grant it. */
+  "lead_sources.webhook_key:app_resolver:SELECT",
+  "lead_sources.company_id:app_resolver:SELECT",
   /* The tenant runtime writes unroutable_webhooks but must not enumerate it.
      These three are forced by the upsert - RETURNING needs id, ON CONFLICT
      reads its arbiter column, and the increment reads what it writes. What is

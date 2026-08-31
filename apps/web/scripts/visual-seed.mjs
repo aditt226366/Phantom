@@ -1569,6 +1569,14 @@ try {
    * one that would rescan its whole sheet on the next poll, and a fixture that
    * quietly describes a state the product tries to avoid is a fixture that
    * teaches the wrong thing to whoever reads it next.
+   *
+   * webhook_key is literal for the reason the conventions record about this
+   * exact column on integrations: it DEFAULTS to a database expression, so
+   * leaving it out writes a fresh random value on every run. Nothing renders it
+   * today - the Apps Script panel is collapsed, so the URL is not in the DOM -
+   * and that is precisely the trap. The first change that opens that panel by
+   * default would produce a baseline that never matched twice, and it would be
+   * diagnosed as a flaky suite rather than as a fixture.
    */
   await client.query(
     `INSERT INTO lead_sources
@@ -1576,10 +1584,12 @@ try {
         action_config, template_id, whatsapp_number_id, status,
         poll_interval_seconds, cursor_count, cursor_anchor, rows_seen,
         rows_sent, rows_skipped, rows_rejected, rows_duplicate, reject_reasons,
-        last_polled_at, last_sent_at, created_by_user_id, created_at, updated_at)
+        last_polled_at, last_sent_at, webhook_key, created_by_user_id,
+        created_at, updated_at)
      VALUES ($1, $2, 'Website enquiries', '1NorthwindLeadsSheetFixture0001',
              'Leads', 0, 'TEMPLATE', $3::jsonb, $4, $5, 'ACTIVE', 30,
              184, $6, 184, 171, 6, 7, 0, $7::jsonb, $8, $9,
+             'fixtureleadhook00000000000000001',
              'c000visualfixtureuser001', $10, $10)`,
     [
       LEAD_SOURCE.healthy,
@@ -1614,11 +1624,12 @@ try {
         action_config, template_id, whatsapp_number_id, status,
         poll_interval_seconds, cursor_count, cursor_anchor, rows_seen,
         rows_sent, rows_skipped, rows_rejected, rows_duplicate, reject_reasons,
-        last_polled_at, last_error, last_error_at, created_by_user_id,
-        created_at, updated_at)
+        last_polled_at, last_error, last_error_at, webhook_key,
+        created_by_user_id, created_at, updated_at)
      VALUES ($1, $2, 'Trade show sign-ups', '1NorthwindTradeShowFixture0002',
              'Sheet1', 0, 'TEMPLATE', $3::jsonb, $4, $5, 'ERROR', 30,
              0, NULL, 0, 0, 0, 0, 0, '{}'::jsonb, $6, $7, $8,
+             'fixtureleadhook00000000000000002',
              'c000visualfixtureuser001', $9, $9)`,
     [
       LEAD_SOURCE.lost,

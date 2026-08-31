@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { appsScriptSource, leadSourceWebhookUrl } from "@whatsapp-os/core/leads";
 import { recentLeadRows, withCompany } from "@whatsapp-os/db";
 import { FeatureBlocked } from "@/components/brand/feature-blocked";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { CsrfField } from "@/components/ui/csrf-field";
 import { getFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 import { formatTimestamp } from "@/lib/format";
 import {
   leadRowOutcome,
@@ -20,6 +22,7 @@ import {
 } from "@/lib/lead-source-display";
 import { serviceAccountEmail } from "@/lib/lead-sources/credentials";
 import { SectionHeader, SectionShell } from "../../../_components/section";
+import { AppsScriptPanel } from "../_components/apps-script-panel";
 import { BindingControls } from "../_components/binding-controls";
 import { ServiceAccountPanel } from "../_components/service-account-panel";
 
@@ -62,6 +65,7 @@ export default async function Page({
         sheetGid: true,
         status: true,
         pollIntervalSeconds: true,
+        webhookKey: true,
         rowsSeen: true,
         rowsSent: true,
         rowsSkipped: true,
@@ -100,6 +104,11 @@ export default async function Page({
    * done and nobody is going to re-share a sheet that is working.
    */
   const email = status === "ERROR" ? await serviceAccountEmail(session.companyId) : null;
+
+  /* Per binding, so deleting this lead source revokes exactly its own script -
+     and so rotating it cannot silently break the WhatsApp webhook, which lives
+     in a different column entirely. */
+  const webhookUrl = leadSourceWebhookUrl(env.APP_URL, binding.webhookKey);
 
   return (
     <SectionShell>
@@ -158,6 +167,11 @@ export default async function Page({
         </section>
 
         {status === "ERROR" ? <ServiceAccountPanel email={email} /> : null}
+
+        <AppsScriptPanel
+          source={appsScriptSource(webhookUrl)}
+          url={webhookUrl}
+        />
 
         <section className="grid gap-sm tablet:grid-cols-2 desktop:grid-cols-4">
           <Stat label="Rows read" value={binding.rowsSeen} />

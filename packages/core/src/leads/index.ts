@@ -32,5 +32,10 @@ export type {
   SheetRefResult,
   TemplateAction,
 } from "./binding.ts";
+export {
+  APPS_SCRIPT_TIMEOUT_SECONDS,
+  appsScriptSource,
+  leadSourceWebhookUrl,
+} from "./apps-script.ts";
 export { PREVIEW_ROWS, toRecords } from "./rows.ts";
 export type { SheetContent } from "./rows.ts";

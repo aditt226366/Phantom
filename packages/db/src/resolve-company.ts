@@ -48,6 +48,17 @@ import { prisma } from "./client.ts";
  * the right company and then fail looking for credentials never stored.
  *
  * See 20260815120000_resolve_company_by_webhook.
+ *
+ * "lead_source" is the seventh kind and the opposite of that one on the very
+ * point above: it DOES refuse a deactivated company. The asymmetry is
+ * deliberate both times. A WhatsApp webhook resolves for a suspended tenant
+ * because refusing costs them their Meta subscription and every message that
+ * arrived while they were suspended - evidence, which suspension should not
+ * discard. A lead-source ping only ever causes us to SEND, a suspended
+ * workspace must not send, and Google Apps Script has no subscription to lose:
+ * it rings again the moment the sheet is next edited.
+ *
+ * See 20260903090000_lead_source_webhook_key.
  */
 export type ResolveKind =
   | "username"
@@ -55,7 +66,8 @@ export type ResolveKind =
   | "session"
   | "verification"
   | "password_reset"
-  | "webhook";
+  | "webhook"
+  | "lead_source";
 
 export async function resolveCompany(
   kind: ResolveKind,

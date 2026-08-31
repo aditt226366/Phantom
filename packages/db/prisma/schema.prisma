@@ -1628,6 +1628,17 @@ model LeadSource {
   /// and so the binding's page can say why nothing is happening.
   backoffUntil DateTime? @db.Timestamptz(3) @map("backoff_until")
 
+  /// The unguessable segment of this binding's optional Apps Script URL.
+  ///
+  /// Per binding rather than reusing the integration's, so deleting a binding
+  /// revokes exactly its own script - and so rotating it cannot silently break
+  /// the WhatsApp webhook, which lives in that other column.
+  ///
+  /// Resolved by app_resolve_company's `lead_source` kind, because a request
+  /// from Apps Script carries no session and a company id may never come from
+  /// a request body.
+  webhookKey String @unique @default(dbgenerated("replace((gen_random_uuid())::text, '-'::text, ''::text)")) @map("webhook_key")
+
   createdByUserId String? @map("created_by_user_id")
 
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")

@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { AppShell } from "@/components/app-shell/app-shell";
+import { VerificationBanner } from "@/components/brand/verification-banner";
 import { CsrfField } from "@/components/ui/csrf-field";
+import { getFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
+import { blockedCopy } from "@/lib/kyc-display";
 import { resendVerificationAction, signOutAction } from "./actions";
 
 /**
@@ -24,6 +27,18 @@ export default async function AppLayout({
 }) {
   const session = await requireSession();
 
+  /*
+   * The banner only. This is NOT where the gate is enforced - see rule 4 and
+   * the note in lib/auth/feature-gate.ts: a layout is cached per segment and
+   * is not guaranteed to re-execute on every navigation within it, so a
+   * refusal here would be one a tenant can navigate around. Every page and
+   * every action does its own check.
+   *
+   * React cache() makes this call free for the page that is about to repeat
+   * it.
+   */
+  const access = await getFeatureAccess();
+
   return (
     <AppShell
       companyName={session.company.name}
@@ -36,6 +51,16 @@ export default async function AppLayout({
       /* Two instances: a form may only carry one field of a given name. */
       csrf={<CsrfField />}
       resendCsrf={<CsrfField />}
+      verificationBanner={
+        access.allowed ? null : (
+          <VerificationBanner
+            /* The gate's own reason, so the banner and the blocked page a
+               click away cannot describe different situations. */
+            message={blockedCopy(access.reason).banner}
+            className="mb-lg"
+          />
+        )
+      }
     >
       {children}
     </AppShell>

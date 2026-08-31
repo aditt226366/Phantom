@@ -428,6 +428,50 @@ const KYC_DOCUMENTS = [
   },
 ];
 
+/**
+ * The unverified workspace, in the three states a tenant can be in at once.
+ *
+ * This is the fixture for the blocked shell, and it is deliberately NOT "no
+ * documents at all". Every branch the documents page has is on screen in one
+ * picture: an approved row with its upload control hidden, a rejected row
+ * carrying the reason a tenant has to read, and a kind never sent - which is
+ * the only one of the three that renders an empty upload control.
+ *
+ * The mix also drives the gate to `documents_rejected` rather than
+ * `documents_missing`, which is the reason ordering worth photographing: a
+ * tenant who has filed two of three and been refused one is the person most
+ * likely to think they are simply waiting.
+ *
+ * Ashgrove Logistics rather than the deactivated company, because a suspended
+ * workspace would report `company_deactivated` and photograph the one blocked
+ * state that has nothing to do with documents.
+ */
+const BLOCKED_KYC_DOCUMENTS = [
+  {
+    id: "c000visualfixturekyc00011",
+    kind: "GST",
+    filename: "ashgrove-gst-certificate.pdf",
+    status: "APPROVED",
+    uploadedAt: "2026-08-20T05:10:00Z", // 20/08/2026 10:40:00
+    reviewedAt: "2026-08-21T06:20:00Z", // 21/08/2026 11:50:00
+    reviewNote: null,
+  },
+  {
+    id: "c000visualfixturekyc00012",
+    kind: "PAN",
+    filename: "ashgrove-pan-scan.pdf",
+    status: "REJECTED",
+    uploadedAt: "2026-08-20T05:12:00Z", // 20/08/2026 10:42:00
+    reviewedAt: "2026-08-21T06:24:00Z", // 21/08/2026 11:54:00
+    /* A real reason, saying what to do next. A fixture whose rejection note
+       reads "rejected" would photograph the failure this page exists to
+       prevent - a refusal the tenant cannot act on. */
+    reviewNote:
+      "The bottom edge of the card is cut off, so the number is not fully readable. Please send a scan of the whole card.",
+  },
+  /* AADHAAR is deliberately absent: the not-uploaded branch. */
+];
+
 const CONVERSATION = {
   /* The open one. FIXTURE.conversationId, because the walker in pages.spec.ts
      substitutes it for [conversationId] and the thread page will be its URL. */
@@ -1133,6 +1177,31 @@ try {
     );
   }
 
+  for (const document of BLOCKED_KYC_DOCUMENTS) {
+    await client.query(
+      `INSERT INTO kyc_documents
+         (id, company_id, kind, bytes, byte_size, sha256, mime_type,
+          original_filename, status, reviewed_by_admin_id, reviewed_at,
+          review_note, created_at)
+       VALUES ($1, $2, $3::kyc_document_kind, $4, $5, $6, 'application/pdf',
+               $7, $8::kyc_document_status, 'c000visualfixtureadmin01', $9,
+               $10, $11)`,
+      [
+        document.id,
+        COMPANY.enterprise,
+        document.kind,
+        KYC_PDF_BYTES,
+        KYC_PDF_BYTES.byteLength,
+        createHash("sha256").update(KYC_PDF_BYTES).digest("hex"),
+        document.filename,
+        document.status,
+        document.reviewedAt,
+        document.reviewNote,
+        document.uploadedAt,
+      ],
+    );
+  }
+
   /*
    * Unroutable deliveries, so the operator card photographs a real reading
    * rather than three zeroes. One of each reason, because they are different
@@ -1167,7 +1236,8 @@ try {
       `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +
-      `${KYC_DOCUMENTS.length} approved KYC documents.`,
+      `${KYC_DOCUMENTS.length} approved KYC documents, ` +
+      `${BLOCKED_KYC_DOCUMENTS.length} for the unverified workspace.`,
   );
 } finally {
   await client.end();

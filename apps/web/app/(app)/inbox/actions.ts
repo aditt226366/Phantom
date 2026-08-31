@@ -12,6 +12,7 @@ import {
 } from "@whatsapp-os/core/whatsapp";
 import { advanceConversation, canSend, withCompany } from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
+import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
 import { systemQueue } from "@/lib/queue";
 import { refusalSentence, retryOffer } from "@/lib/thread-display";
@@ -43,6 +44,13 @@ export async function sendMessageAction(
   /* Its own check, not the layout's — rule 4. */
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   const conversationId = String(formData.get("conversationId") ?? "");
   const body = String(formData.get("body") ?? "").trim();
@@ -185,6 +193,13 @@ export async function retryMessageAction(
 ): Promise<RetryState> {
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   const messageId = String(formData.get("messageId") ?? "");
   if (!messageId) return { error: "Something went wrong. Try again." };
@@ -278,6 +293,13 @@ export async function retryMessageAction(
 export async function sendTemplateAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   const conversationId = String(formData.get("conversationId") ?? "");
   const templateId = String(formData.get("templateId") ?? "");

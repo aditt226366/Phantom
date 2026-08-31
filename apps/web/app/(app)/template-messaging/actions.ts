@@ -13,6 +13,7 @@ import {
 } from "@whatsapp-os/core/whatsapp";
 import { recordTemplateEdit, withCompany } from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
+import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
 import { systemQueue } from "@/lib/queue";
 
@@ -48,6 +49,13 @@ function parseDraft(raw: string): TemplateDraft | null {
 export async function createTemplateAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   const draft = parseDraft(String(formData.get("draft") ?? ""));
   if (!draft) redirect("/template-messaging?error=malformed");
@@ -127,6 +135,13 @@ export async function createTemplateAction(formData: FormData): Promise<void> {
 export async function resubmitTemplateAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   const templateId = String(formData.get("templateId") ?? "");
   const draft = parseDraft(String(formData.get("draft") ?? ""));
@@ -205,6 +220,13 @@ export async function resubmitTemplateAction(formData: FormData): Promise<void> 
 export async function syncTemplatesAction(formData: FormData): Promise<void> {
   const session = await requireSession();
   await assertCsrf(formData, session);
+  /*
+   * A4: no feature section is open to an unverified workspace, and a
+   * server action is reachable by its id whether or not a page rendered
+   * a control for it. This throws rather than returning a verdict -
+   * there is no way to call it and carry on by mistake.
+   */
+  await assertFeatureAccess();
 
   await systemQueue.add(JOB_NAMES.WHATSAPP_TEMPLATE_SYNC, {
     companyId: session.companyId,

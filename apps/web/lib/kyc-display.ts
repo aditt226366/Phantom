@@ -95,6 +95,15 @@ export function canReplace(status: KycStatus | null): boolean {
 export interface BlockedCopy {
   title: string;
   description: string;
+  /**
+   * The shell banner's line, deliberately shorter than the description.
+   *
+   * The two are on screen together on every blocked page - the banner at the
+   * top of the shell, the description in the middle of the section - and an
+   * identical sentence twice reads as a rendering bug. The banner says what is
+   * true and where to go; the page says what to do about it.
+   */
+  banner: string;
   /** Whether Profile > Documents is worth offering. Not for a suspension. */
   showDocumentsLink: boolean;
 }
@@ -104,6 +113,7 @@ const BLOCKED_COPY: Record<FeatureBlock, BlockedCopy> = {
     title: "This workspace is suspended",
     description:
       "Nothing can be sent or changed while a workspace is suspended. Your data is intact. Contact support to discuss reactivating it.",
+    banner: "It is suspended, so nothing can be sent or changed.",
     /* Documents are irrelevant here, and pointing at them would send somebody
        to upload paperwork that will not lift the suspension. */
     showDocumentsLink: false,
@@ -112,18 +122,21 @@ const BLOCKED_COPY: Record<FeatureBlock, BlockedCopy> = {
     title: "Verify your business to continue",
     description:
       "We need your GST certificate, PAN card and Aadhaar before this workspace can send messages or run campaigns. Upload all three and we will review them.",
+    banner: "Upload your GST certificate, PAN card and Aadhaar to get started.",
     showDocumentsLink: true,
   },
   documents_rejected: {
     title: "One of your documents needs replacing",
     description:
       "We could not accept one of the documents you sent. The reason is on the Documents page, along with a way to upload a new one.",
+    banner: "One of your documents was not accepted and needs replacing.",
     showDocumentsLink: true,
   },
   documents_pending: {
     title: "Your documents are being reviewed",
     description:
       "All three are with us and nothing more is needed from you. We will email you as soon as the review is finished, usually within one working day.",
+    banner: "Your documents are being reviewed. Nothing more is needed from you.",
     showDocumentsLink: true,
   },
 };

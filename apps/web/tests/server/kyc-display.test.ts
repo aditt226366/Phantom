@@ -104,6 +104,30 @@ describe("the blocked state's copy", () => {
 
       expect(copy.title, `no title for ${reason}`).toBeTruthy();
       expect(copy.description, `no description for ${reason}`).toBeTruthy();
+      expect(copy.banner, `no banner line for ${reason}`).toBeTruthy();
+    }
+  });
+
+  it("does not print the same sentence twice on one screen", () => {
+    /*
+     * The banner and the blocked state are both on screen on every blocked
+     * page - one at the top of the shell, one in the middle of the section -
+     * and the first version of this rendered the identical sentence in both,
+     * which reads as a rendering bug rather than as emphasis. Caught by
+     * photographing the page, kept honest here.
+     */
+    for (const reason of EVERY_REASON) {
+      const copy = blockedCopy(reason);
+
+      expect(copy.banner, `${reason} repeats its description`).not.toBe(
+        copy.description,
+      );
+      /* And the banner is the shorter of the two, which is the distinction
+         that makes them worth having separately. */
+      expect(
+        copy.banner.length,
+        `${reason}'s banner is not shorter than its description`,
+      ).toBeLessThan(copy.description.length);
     }
   });
 

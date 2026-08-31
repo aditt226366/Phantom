@@ -241,6 +241,7 @@ export async function handleLeadSourcePoll(
         claimLeadRow(db, scoped, {
           leadSourceId,
           spreadsheetId: binding.spreadsheetId,
+          tab: binding.tab,
           rowHash: hash,
           whatsappNumberId: binding.whatsappNumberId,
           phoneE164: recipient.phoneE164,

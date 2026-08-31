@@ -1682,6 +1682,13 @@ model LeadSourceRow {
 
   /// Denormalised from the binding, because a join cannot carry a unique index.
   spreadsheetId String @map("spreadsheet_id")
+  /// Which tab of it, for the same reason.
+  ///
+  /// Part of the key since 20260904090000. Two bindings on different tabs of
+  /// one workbook is an ordinary setup - separate sheets of enquiries feeding
+  /// separate templates - and without this the second one is permanently dead:
+  /// every row it reads collides with a hash the first already claimed.
+  tab String
 
   /// sha256 over the E.164 number and the template's variable values.
   ///
@@ -1705,11 +1712,16 @@ model LeadSourceRow {
   leadSource LeadSource @relation(fields: [leadSourceId], references: [id], onDelete: Cascade)
   message    Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
 
-  /// The guarantee. Per SPREADSHEET rather than per binding: two bindings on
-  /// one sheet would otherwise both message every row, and the customer hears
-  /// from the business twice for one enquiry. The binding that loses counts it
-  /// as a duplicate and its page says so, so it is not silent.
-  @@unique([companyId, spreadsheetId, rowHash])
+  /// The guarantee. Per (spreadsheet, tab) rather than per binding: two
+  /// bindings on the SAME tab would otherwise both message every row, and the
+  /// customer hears from the business twice for one enquiry. The binding that
+  /// loses counts it as a duplicate and its page says so, so it is not silent.
+  ///
+  /// The tab is in the index rather than in rowHash because a hash input cannot
+  /// be added to hashes already written - and re-hashing every stored row makes
+  /// all of them look new, which is a message to every customer a tenant has
+  /// ever imported.
+  @@unique([companyId, spreadsheetId, tab, rowHash])
   /// The binding's live feed: its most recent rows, newest first.
   @@index([companyId, leadSourceId, createdAt(sort: Desc)])
   @@map("lead_source_rows")

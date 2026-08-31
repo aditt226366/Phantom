@@ -970,11 +970,16 @@ only its own bookkeeping. A third producer writes a caller, never a copy.
 Five things follow, each with a test:
 
 - **Idempotency is a unique index, checked inside the transaction that writes
-  the message.** `UNIQUE (company_id, spreadsheet_id, row_hash)`. Never a
+  the message.** `UNIQUE (company_id, spreadsheet_id, tab, row_hash)`. Never a
   check-then-send: a poll running every thirty seconds beside a retrying job
   will find the window between the question and the answer, and what comes out
   of it is a real customer messaged twice. The row insert goes **first** in the
   transaction, so a duplicate is refused before any message exists.
+  The **tab** is in that key and was not at first: keyed per file, a second
+  binding on another tab of the same workbook was permanently dead - every row
+  it read collided with a hash the first had claimed, and nothing it saw was
+  ever contacted. Two bindings on the SAME tab still collide, which is the case
+  worth protecting.
 - **The cursor is a count AND an anchor, and the count alone is wrong twice.** A
   deletion puts it past the end of the sheet and the binding never sends again;
   a mid-sheet insert shifts an already-sent row into its place while the new one
@@ -985,7 +990,10 @@ Five things follow, each with a test:
   A position-sensitive hash re-sends the whole sheet to everybody on it after one
   insert at the top. It is length-prefixed rather than joined on a separator, and
   version-tagged: changing what is hashed makes every stored row look new, which
-  is a message to every customer a tenant has ever imported, with no undo.
+  is a message to every customer a tenant has ever imported, with no undo. That
+  last property is why the tab went into the INDEX rather than the hash - a
+  column can be added to an index, and a field cannot be added to digests that
+  are already written.
 - **Activation starts the cursor at the END of the sheet.** Switching on a
   binding must not contact the rows already in it. Bulk messaging is where a
   decision to contact five thousand people belongs — it has the counts, the
@@ -1024,6 +1032,18 @@ two viewports every run and photographs an error state, so the screen most worth
 looking at becomes the one screen never looked at. The module states what the
 hook can and cannot reach; the worker has its own call and does not import it.
 Prefer this shape to storing a copy of the tenant's rows.
+
+**And guard that variable at boot, on production mode AND the database.**
+`webEnvSchema` refuses to parse when `LEAD_SHEET_FIXTURE` is set outside the test
+database in production mode, so an inherited value does not come up rather than
+quietly showing a real tenant a fictional preview to map their columns against.
+The second half of the condition is not optional and was found by writing the
+first: `next start` IS production mode, so a guard on `NODE_ENV` alone refuses
+the screenshot suite - the only legitimate consumer - which is how a check gets
+deleted rather than fixed. Parse the database name out of the URL rather than
+matching a substring, or `whatsapp_os_testing` passes. Keep it OUT of
+`.env.example`: that file is what a fresh clone copies, so documenting the flag
+hands it to every developer.
 
 **`webhook_key` defaults to a database expression, and the seed must write a
 literal one — for the second time.** The conventions already record this about

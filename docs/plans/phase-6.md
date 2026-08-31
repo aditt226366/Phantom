@@ -23,7 +23,7 @@ twice. That cannot be un-sent and no apology undoes it. The guarantee is one
 unique index, checked inside the transaction that writes the message:
 
 ```
-UNIQUE (company_id, spreadsheet_id, row_hash)
+UNIQUE (company_id, spreadsheet_id, tab, row_hash)
 ```
 
 **Nothing here is a second send path.** A claimed lead goes to the same
@@ -39,7 +39,7 @@ The poll decides *who*; it has no opinion about *how*.
 | Decision | Resolution |
 | --- | --- |
 | Idempotency | A unique index, in the claim transaction. Never a check-then-send. |
-| Scope of that index | Per **spreadsheet**, not per binding. See below. |
+| Scope of that index | Per **(spreadsheet, tab)**, not per binding. See below. |
 | The cursor | A count **and** an anchor hash. The count alone is wrong twice. |
 | Scheduling | One BullMQ job scheduler per binding, carrying its `companyId`. |
 | The action | A discriminated enum column from day one, with one member. |
@@ -86,7 +86,7 @@ watches for.
 | --- | --- |
 | the row's **position** | an insert at the top shifts every row below it, and a position-sensitive hash re-sends the whole sheet to everybody on it |
 | the **unmapped cells** | a Notes column somebody types in is not a new lead |
-| the **tab** | a row moved between tabs of one spreadsheet is the same person |
+| the **tab** | not because two tabs are one list — they are not, and the tab is in the unique *index* for exactly that reason. It stays out of the *hash* because a field cannot be added to digests already written |
 
 It is length-prefixed rather than joined on a separator, because `["a:b","c"]`
 and `["a","b:c"]` join identically and these are cells out of a spreadsheet — a
@@ -99,21 +99,41 @@ tenant has ever imported, with no migration and no undo. The prefix does not
 prevent that; it makes the cause legible in a table rather than inferred from
 thousands of duplicates.
 
-### 3. The unique is per spreadsheet, and that is a decision with a cost
+### 3. The unique is per tab, and it took two goes to get right
 
-Two bindings on one sheet with different templates would each want to message
-every row, and the customer hears from the business twice for one enquiry.
-Keyed per spreadsheet, the second binding sends nothing — which is wrong in the
-other direction.
+It shipped as `(company_id, spreadsheet_id, row_hash)`, on the argument that two
+bindings on one spreadsheet are more likely a mistake than an intent. That is
+true of two bindings on the same **tab** and false of two on different tabs,
+which is an ordinary setup: a workbook with "Website enquiries" and "Trade show"
+as separate sheets, each feeding a different template.
 
-It is the direction a person can fix rather than the direction that needs an
-apology, and it is not silent: the losing binding counts a duplicate and its
-page says "already sent from this spreadsheet".
+Under the file-scoped key the second of those was **permanently dead**. Every
+row it read collided with a hash the first binding had already claimed, it
+counted duplicates for ever, and nothing it saw was ever contacted. Silent, and
+the page's only account of it was a rising "already sent from this spreadsheet"
+count that reads like a coincidence. It also collapsed two genuinely different
+leads: the same person typed into two tabs hashes identically, and one of them
+was never messaged.
+
+`20260904090000` put the tab in the key. Two bindings on the same tab still
+collide, which is the case worth protecting — that really is one list read
+twice.
+
+The tab is in the **index**, not in `rowHash`, and that is the load-bearing
+half. A column can be added to an index; a field cannot be added to digests
+already written, and re-hashing every stored row makes all of them look new —
+a message to every customer a tenant has ever imported. The version prefix
+exists to make that visible, not to make it cheap.
+
+The cost, stated because it is a real change: a row **moved** between tabs is
+now a new lead and will be contacted again. Moving a row between tabs is a
+deliberate act on a list somebody is curating, and treating two tabs as two
+lists is what makes the common setup work at all.
 
 `company_id` leads the index, so two tenants whose sheets hold the same customer
-never suppress each other. Both halves have a test, and the second one matters
-because a unique violation is raised *before* a row is checked against a policy
-— RLS alone would not catch it.
+never suppress each other. Every one of these has a test, and the cross-tenant
+one matters because a unique violation is raised *before* a row is checked
+against a policy — RLS alone would not catch it.
 
 ### 4. Activation starts at the end of the sheet, not the beginning
 
@@ -127,7 +147,14 @@ hidden form field a browser could change. The backlog has its own tool: bulk
 messaging shows the counts, asks for a typed confirmation and paces the send,
 which is the screen a decision to contact five thousand people deserves.
 
-The mapping screen states it with the actual number in it.
+**The behaviour is right and the silence was the bug.** A tenant who binds a
+sheet holding five thousand leads, presses Save and start and sees nothing
+happen concludes the feature is broken — and they are not being unreasonable,
+because the page says "every new row becomes a lead" and to them five thousand
+rows are new. The mapping screen now states it in its own plate, with the count
+of rows already present, and points at Bulk messaging for those. It renders
+whether or not the mapping is finished, so somebody reading the screen for the
+first time learns it before they have committed to anything.
 
 ### 5. One repeatable job per binding, because a sweeping poller is unavailable
 
@@ -213,6 +240,26 @@ literal when `LEAD_SHEET_FIXTURE` is set — by `playwright.config.ts` and nothi
 else. Without it the gate spends the full ten-second provider timeout twice a
 run and photographs an error state, so the screen most worth looking at would be
 the one screen never looked at.
+
+**That variable is a boot-time check, not a comment.** `webEnvSchema` refuses to
+parse when it is set on a production deploy, and `parseEnv` exits non-zero, so
+an environment that inherited it — a copied `.env`, a shared compose file, a CI
+runner promoted to a deploy — does not come up. The failure it prevents is
+quiet: a real tenant mapping their columns against five rows of a fixture, a
+mapping that is structurally valid, and messages filled from the wrong columns.
+
+The condition is **production mode *and* not serving the test database**, and
+the second half was discovered by writing the first. `next start` is production
+mode, so a guard on `NODE_ENV` alone refuses the screenshot suite — the only
+legitimate consumer of the variable — which is how a check gets deleted rather
+than fixed. An application serving `whatsapp_os_test` is not serving tenants.
+The database name is parsed out of the URL rather than matched as a substring,
+so `whatsapp_os_testing` is correctly treated as production.
+
+It is deliberately **absent from `.env.example`**, which is the one exclusion
+there that is a decision rather than an accommodation: that file is what a fresh
+clone copies, so documenting the flag would hand it to every developer — the
+exact inheritance the guard exists to stop.
 
 ---
 

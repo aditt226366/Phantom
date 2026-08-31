@@ -1110,6 +1110,7 @@ describe("lead sources and the rows they have claimed", () => {
           companyId,
           leadSourceId: source.id,
           spreadsheetId: `${label}-spreadsheet`,
+          tab: "Leads",
           rowHash: `${label}-hash`,
           phoneE164: `+9198765432${label === "alpha" ? "10" : "11"}`,
           state: "SKIPPED",
@@ -1181,9 +1182,9 @@ describe("lead sources and the rows they have claimed", () => {
       withCompany(alpha.id, (db) =>
         db.$executeRaw`
           INSERT INTO lead_source_rows
-            (id, company_id, lead_source_id, spreadsheet_id, row_hash,
+            (id, company_id, lead_source_id, spreadsheet_id, tab, row_hash,
              phone_e164, state, skip_reason)
-          VALUES ('smuggled', ${beta.id}, ${seeded.id}, 'sheet', 'h',
+          VALUES ('smuggled', ${beta.id}, ${seeded.id}, 'sheet', 'Leads', 'h',
                   '+919999999999', 'SKIPPED', 'smuggled')`,
       ),
     ).rejects.toThrow(/row-level security/i);

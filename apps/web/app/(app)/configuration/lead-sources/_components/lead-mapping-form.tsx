@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   POLL_INTERVAL_DEFAULT_SECONDS,
   POLL_INTERVAL_MIN_SECONDS,
@@ -238,6 +239,53 @@ export function LeadMappingForm({
           </div>
         </div>
 
+        {/*
+          Stated where the decision is taken, in its own plate rather than as a
+          caption beside the button.
+
+          A tenant who binds a sheet holding five thousand leads, presses Save
+          and start, and sees nothing happen concludes the feature is broken -
+          and they are not being unreasonable, because the page above says
+          "every new row becomes a lead" and five thousand rows are, to them,
+          new. The behaviour is right; the silence is the bug.
+
+          Rendered whether or not the mapping is finished, because somebody
+          reading this screen for the first time should learn it before they
+          have committed to anything.
+        */}
+        <section className="rounded-lg border border-hairline-strong bg-surface-strong px-base py-base">
+          {totalRows > 0 ? (
+            <>
+              <p className="text-body-strong text-ink">
+                The {totalRows.toLocaleString()}{" "}
+                {totalRows === 1 ? "row" : "rows"} already in this tab will not
+                be contacted.
+              </p>
+              <p className="mt-xs max-w-2xl text-body-sm text-body">
+                A lead source picks up rows added from the moment you start it.
+                Nothing that is in the sheet today is messaged, so binding a
+                sheet cannot surprise a list of people who enquired months ago.
+              </p>
+              <p className="mt-xs max-w-2xl text-body-sm text-body">
+                To message the ones already there,{" "}
+                <Link
+                  href="/bulk-messaging"
+                  className="text-ink underline underline-offset-2"
+                >
+                  use Bulk messaging
+                </Link>{" "}
+                &mdash; it shows you who is on the list and what it will cost
+                before anything is sent.
+              </p>
+            </>
+          ) : (
+            <p className="max-w-2xl text-body-sm text-body">
+              This tab has no rows yet, so there is no backlog to skip. Every
+              row added from now on becomes a lead.
+            </p>
+          )}
+        </section>
+
         <div className="flex flex-wrap items-center gap-sm">
           <Button type="submit" disabled={missing.length > 0}>
             Save and start
@@ -246,17 +294,7 @@ export function LeadMappingForm({
             <p className="text-body-sm text-body">
               Still to map: {missing.join(", ")}.
             </p>
-          ) : (
-            <p className="max-w-2xl text-body-sm text-body">
-              {/* The behaviour, stated where the decision is made. Saving
-                  records where the sheet is now, so the rows already in it are
-                  left alone - contacting a backlog of five thousand people is
-                  a decision that belongs on the bulk messaging screen, which
-                  shows the counts and asks for a typed confirmation. */}
-              Rows added from now on are contacted. The{" "}
-              {totalRows.toLocaleString()} already in this tab are left alone.
-            </p>
-          )}
+          ) : null}
         </div>
       </form>
     </div>

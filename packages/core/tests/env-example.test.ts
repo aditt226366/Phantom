@@ -77,7 +77,19 @@ describe(".env.example", () => {
       /* Optional by design: the app boots without an admin panel. */
       .filter((name) => name !== "DATABASE_URL_ADMIN")
       /* Set by the platform, not by a developer's .env. */
-      .filter((name) => name !== "NODE_ENV");
+      .filter((name) => name !== "NODE_ENV")
+      /*
+       * Deliberately undocumented, and this is the one exclusion that is a
+       * decision rather than an accommodation.
+       *
+       * .env.example is what `cp .env.example .env` produces on a fresh clone,
+       * so listing LEAD_SHEET_FIXTURE there would put the screenshot suite's
+       * fixture flag into every developer's environment - which is the exact
+       * inheritance the production guard in webEnvSchema exists to stop, handed
+       * out by the documentation. It is set by playwright.config.ts and must be
+       * set nowhere else.
+       */
+      .filter((name) => name !== "LEAD_SHEET_FIXTURE");
 
     expect(undocumented.sort()).toEqual([]);
   });

@@ -21,6 +21,12 @@ import { Prisma } from "./generated/prisma/client.ts";
  * is a real customer receiving the same WhatsApp message twice. There is no
  * apology for that and no undo.
  *
+ * The key is (company_id, spreadsheet_id, tab, row_hash). The tab is in it
+ * because two bindings on different tabs of one workbook is an ordinary setup,
+ * and keying per file made the second one permanently dead - see
+ * 20260904090000. Two bindings on the same tab still collide, which is the case
+ * worth protecting.
+ *
  * So: one withCompany scope, which is one transaction. The insert goes FIRST,
  * so the unique refuses a duplicate before any message exists. Then the
  * message. If either fails the whole thing rolls back and the lead is
@@ -39,6 +45,8 @@ export type LeadClaimOutcome =
 export interface LeadClaimInput {
   leadSourceId: string;
   spreadsheetId: string;
+  /** Which tab it came from. Part of the unique key since 20260904090000. */
+  tab: string;
   rowHash: string;
   whatsappNumberId: string;
   phoneE164: string;
@@ -82,6 +90,7 @@ export async function claimLeadRow(
       companyId,
       leadSourceId: input.leadSourceId,
       spreadsheetId: input.spreadsheetId,
+      tab: input.tab,
       rowHash: input.rowHash,
       phoneE164: input.phoneE164,
       /* SKIPPED until a message exists. A crash between here and the update

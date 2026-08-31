@@ -1,5 +1,6 @@
 import "server-only";
 import { readSheetValues, type ValuesOutcome } from "@whatsapp-os/core";
+import { env } from "@/lib/env";
 
 /**
  * Reading a bound sheet for a page to render.
@@ -22,6 +23,11 @@ import { readSheetValues, type ValuesOutcome } from "@whatsapp-os/core";
  * So the read goes through here, and when LEAD_SHEET_FIXTURE is set it answers
  * from a literal instead. The variable is set by playwright.config.ts and by
  * nothing else - not .env, not the Dockerfile, not any deployment.
+ *
+ * It is read through lib/env rather than straight from process.env, which is
+ * what makes that last sentence a check rather than a hope: webEnvSchema
+ * refuses to parse when NODE_ENV is production and this is set, and parseEnv
+ * exits non-zero, so an environment that inherited it does not boot.
  *
  * ---------------------------------------------------------------------------
  * What this can and cannot do, because a test hook in production code earns
@@ -61,9 +67,16 @@ const FIXTURE_ROWS: string[][] = [
   ["Fatima Sheikh", "98765 43213", "NW-2280"],
 ];
 
-/** True when this process is rendering for the screenshot suite. */
+/**
+ * True when this process is rendering for the screenshot suite.
+ *
+ * Through the validated env, so production cannot reach this branch at all -
+ * it would have failed to boot. The sentinel comparison is the second gate: an
+ * inherited variable holding anything else reads Google, which is the correct
+ * behaviour rather than a fixture nobody asked for.
+ */
 export function usingSheetFixture(): boolean {
-  return process.env["LEAD_SHEET_FIXTURE"] === FIXTURE_SENTINEL;
+  return env.LEAD_SHEET_FIXTURE === FIXTURE_SENTINEL;
 }
 
 /**

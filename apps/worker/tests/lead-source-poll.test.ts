@@ -51,7 +51,13 @@ type Claim =
 
 const leadSourceForPoll = vi.fn<() => Promise<unknown>>();
 const claimLeadRow =
-  vi.fn<(db: unknown, companyId: string, input: { rowHash: string }) => Promise<Claim>>();
+  vi.fn<
+    (
+      db: unknown,
+      companyId: string,
+      input: { rowHash: string; tab: string; spreadsheetId: string },
+    ) => Promise<Claim>
+  >();
 const recordPoll =
   vi.fn<
     (
@@ -89,8 +95,11 @@ vi.mock("@whatsapp-os/db", () => ({
     callback: (db: unknown, id: string) => unknown,
   ) => callback({ integration: { findFirst: findFirstIntegration } }, companyId),
   leadSourceForPoll: () => leadSourceForPoll(),
-  claimLeadRow: (db: unknown, companyId: string, input: { rowHash: string }) =>
-    claimLeadRow(db, companyId, input),
+  claimLeadRow: (
+    db: unknown,
+    companyId: string,
+    input: { rowHash: string; tab: string; spreadsheetId: string },
+  ) => claimLeadRow(db, companyId, input),
   recordPoll: (
     db: unknown,
     companyId: string,
@@ -192,6 +201,21 @@ describe("a healthy poll", () => {
     expect(data).toEqual({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
     expect(options.jobId).toBe("send:m1:0");
     expect(options.attempts).toBe(1);
+  });
+
+  it("claims against the tab it read, not just the spreadsheet", async () => {
+    /*
+     * The tab is part of the unique key. Without it here, two bindings on
+     * different tabs of one workbook collide and the second is permanently
+     * dead - every row it reads counts as a duplicate and nothing it sees is
+     * ever contacted.
+     */
+    await handleLeadSourcePoll(PAYLOAD);
+
+    expect(claimLeadRow.mock.calls[0]![2]).toMatchObject({
+      spreadsheetId: "sheet-1",
+      tab: "Leads",
+    });
   });
 
   it("cleans numbers with the same pipeline a bulk import uses", async () => {

@@ -108,6 +108,7 @@ function claimInput(
   return {
     leadSourceId,
     spreadsheetId: "sheet-1",
+    tab: "Leads",
     rowHash: rowHash(phoneE164, variables),
     whatsappNumberId: sendables.numberId,
     phoneE164,
@@ -231,22 +232,87 @@ describe("claiming a lead", () => {
     expect(messages).toBe(1);
   });
 
-  it("refuses a lead a different binding on the same sheet already claimed", async () => {
+  it("refuses a lead a different binding on the same TAB already claimed", async () => {
     /*
-     * Per spreadsheet, not per binding, and this is the decision made visible.
-     * Two bindings on one sheet would otherwise both message every row, and
-     * the customer hears from the business twice for one enquiry.
+     * The case worth protecting. Two bindings reading one tab really is one
+     * list read twice, and the customer hears from the business twice for one
+     * enquiry.
      */
     const first = await seedBinding(company, fixture, "shared-sheet");
     const second = await seedBinding(company, fixture, "shared-sheet");
 
-    const input = claimInput(first, fixture, { spreadsheetId: "shared-sheet" });
+    const input = claimInput(first, fixture, {
+      spreadsheetId: "shared-sheet",
+      tab: "Leads",
+    });
 
     await claim(company, input);
 
     await expect(
       claim(company, { ...input, leadSourceId: second }),
     ).rejects.toSatisfy(isDuplicateLead);
+  });
+
+  it("lets two bindings on different TABS of one workbook both send", async () => {
+    /*
+     * The bug 20260904090000 fixed, and the reason the tab is in the key.
+     *
+     * A workbook with "Website enquiries" and "Trade show" as separate sheets,
+     * each feeding a different template, is an ordinary setup. Keyed per file
+     * the second binding was permanently dead: every row it read collided with
+     * a hash the first had already claimed, it counted duplicates for ever, and
+     * nothing it saw was ever contacted. Nothing errored.
+     */
+    const enquiries = await seedBinding(company, fixture, "one-workbook");
+    const tradeShow = await seedBinding(company, fixture, "one-workbook");
+
+    await claim(
+      company,
+      claimInput(enquiries, fixture, {
+        spreadsheetId: "one-workbook",
+        tab: "Website enquiries",
+      }),
+    );
+
+    const second = await claim(
+      company,
+      claimInput(tradeShow, fixture, {
+        spreadsheetId: "one-workbook",
+        tab: "Trade show",
+      }),
+    );
+
+    expect(second.kind).toBe("sent");
+  });
+
+  it("treats identical rows in two tabs as two leads", async () => {
+    /*
+     * The same person typed into two tabs hashes identically - rowHash covers
+     * the mapped cells and nothing else. Under the old key one of them was
+     * silently never messaged.
+     */
+    const binding = await seedBinding(company, fixture, "one-workbook");
+
+    const base = claimInput(binding, fixture, { spreadsheetId: "one-workbook" });
+
+    await claim(company, { ...base, tab: "Tab A" });
+    const second = await claim(company, { ...base, tab: "Tab B" });
+
+    expect(second.kind).toBe("sent");
+  });
+
+  it("still refuses the same lead on the same tab of the same sheet", async () => {
+    /* The guarantee, restated after widening the key: adding the tab must not
+       have made the ordinary re-poll case sendable. */
+    const binding = await seedBinding(company, fixture, "one-workbook");
+    const input = claimInput(binding, fixture, {
+      spreadsheetId: "one-workbook",
+      tab: "Leads",
+    });
+
+    await claim(company, input);
+
+    await expect(claim(company, input)).rejects.toSatisfy(isDuplicateLead);
   });
 
   it("lets the same person be claimed from two different spreadsheets", async () => {

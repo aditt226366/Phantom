@@ -1728,9 +1728,9 @@ try {
 
     await client.query(
       `INSERT INTO lead_source_rows
-         (id, company_id, lead_source_id, spreadsheet_id, row_hash, phone_e164,
-          state, skip_reason, message_id, created_at)
-       VALUES ($1, $2, $3, '1NorthwindLeadsSheetFixture0001', $4, $5,
+         (id, company_id, lead_source_id, spreadsheet_id, tab, row_hash,
+          phone_e164, state, skip_reason, message_id, created_at)
+       VALUES ($1, $2, $3, '1NorthwindLeadsSheetFixture0001', 'Leads', $4, $5,
                $6::lead_source_row_state, $7, $8, $9)`,
       [
         rowId,

@@ -48,7 +48,27 @@ export type SendRefusal =
    * apart. What the operator sees on the blocked page and what the worker
    * writes onto a failed message come from one owner.
    */
-  | "company_not_verified";
+  | "company_not_verified"
+  /**
+   * Meta has told us this handset cannot receive WhatsApp at all - 131026,
+   * remembered on the contact.
+   *
+   * Deliberately not folded into contact_opted_out, though both stop the send.
+   * An opt-out is the customer's decision; this is a fact about a number. A
+   * report that called them the same thing would tell a business its own
+   * customers had unsubscribed when what actually happened is somebody typed a
+   * landline into a spreadsheet.
+   */
+  | "contact_undeliverable"
+  /**
+   * The broadcast this message belongs to was cancelled before the queue
+   * reached it.
+   *
+   * A refusal rather than a silent drop, because the row exists and somebody
+   * will look at it: a message with no status and no reason is the shape of a
+   * bug, and "the campaign was cancelled" is the shape of an answer.
+   */
+  | "broadcast_cancelled";
 
 export type SendIntent =
   | { kind: "freeform" }
@@ -102,6 +122,8 @@ export interface SendFacts {
   numberStatus: string;
   companyDeactivated: boolean;
   contactOptedOut: boolean;
+  /** contacts.undeliverable_at is set. Kept separate from the opt-out. */
+  contactUndeliverable?: boolean;
 }
 
 /**
@@ -119,6 +141,16 @@ export function sendPolicy(facts: SendFacts, intent: SendIntent): SendDecision {
 
   if (facts.contactOptedOut) {
     return { allowed: false, reason: "contact_opted_out" };
+  }
+
+  /*
+   * After the opt-out and before everything else, for the same reason the
+   * opt-out is where it is: no retry and no template fixes a handset that
+   * cannot receive WhatsApp, so saying "the window has closed, send a
+   * template" would be advice toward a second failure.
+   */
+  if (facts.contactUndeliverable) {
+    return { allowed: false, reason: "contact_undeliverable" };
   }
 
   if (!SENDABLE_NUMBER_STATUSES.has(facts.numberStatus)) {

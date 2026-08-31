@@ -98,6 +98,16 @@ export {
   waIdForE164,
   RECIPIENT_BATCH,
 } from "./broadcasts.ts";
+export {
+  broadcastForRun,
+  completeBroadcastIfDone,
+  materialiseRecipient,
+  pendingRecipients,
+} from "./broadcast-run.ts";
+export type {
+  MaterialisedRecipient,
+  TemplateForSend,
+} from "./broadcast-run.ts";
 export type {
   BroadcastProgress,
   ResolvedAudience,

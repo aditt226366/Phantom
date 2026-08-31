@@ -9,6 +9,7 @@ import {
   sendWhatsAppText,
 } from "@whatsapp-os/core/whatsapp";
 import {
+  broadcastRunState,
   canSend,
   recordSendAccepted,
   recordSendDeclined,
@@ -45,7 +46,9 @@ export type SendResult =
   | "refused"
   | "unconfirmed"
   | "already_sent"
-  | "unknown_message";
+  | "unknown_message"
+  /** Part of a broadcast that is paused. The row stays PENDING for a resume. */
+  | "broadcast_paused";
 
 export async function handleWhatsAppMessageSend(
   payload: WhatsAppMessageSendJob,
@@ -64,6 +67,9 @@ export async function handleWhatsAppMessageSend(
         /* Present means this row is a template send. The payload holds the
            name, language and the parameter values chosen at send time. */
         templatePayload: true,
+        /* Present means this row is one recipient of a broadcast, and that the
+           run's status has to be consulted before anything is sent. */
+        broadcastId: true,
         conversation: {
           select: {
             contact: { select: { id: true, waId: true } },
@@ -94,6 +100,57 @@ export async function handleWhatsAppMessageSend(
       messageId,
     });
     return { result: "already_sent" };
+  }
+
+  /*
+   * The pause check, and it is why pause is immediate.
+   *
+   * Thousands of sends may be sitting in Redis with their delays already
+   * computed. Removing them on a pause would be a slow, racy sweep of a
+   * structure being consumed at the same time; letting every job wake up and
+   * ask costs one indexed read and is exact.
+   *
+   * Before the decrypt and before canSend deliberately - a paused broadcast
+   * should not be doing key material work, and a cancelled one should not be
+   * reading credentials at all.
+   */
+  if (loaded.broadcastId) {
+    const state = await withCompany(companyId, (db, scoped) =>
+      broadcastRunState(db, scoped, loaded.broadcastId!),
+    );
+
+    if (state === "paused") {
+      /*
+       * The row stays PENDING and nothing is written. Resume re-enqueues it
+       * with a fresh delay, so a paused broadcast keeps its place rather than
+       * losing the recipients that happened to be mid-flight.
+       */
+      log.info("send deferred: broadcast paused", {
+        companyId,
+        messageId,
+        broadcastId: loaded.broadcastId,
+      });
+      return { result: "broadcast_paused" };
+    }
+
+    if (state === "stopped") {
+      /*
+       * Cancelled, completed or gone. Recorded as a refusal rather than
+       * dropped silently: the message row exists and somebody will look at it,
+       * and a row with no status and no reason is the shape of a bug where
+       * "the campaign was cancelled" is the shape of an answer.
+       */
+      await withCompany(companyId, (db, scoped) =>
+        recordSendDeclined(db, scoped, messageId, "broadcast_cancelled", new Date()),
+      );
+
+      log.info("send declined: broadcast stopped", {
+        companyId,
+        messageId,
+        broadcastId: loaded.broadcastId,
+      });
+      return { result: "declined" };
+    }
   }
 
   const number = loaded.conversation.whatsappNumber;

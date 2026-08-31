@@ -222,5 +222,9 @@ export function describeRefusal(reason: SendRefusal): string {
        * state on a screen that a customer-facing operator shares.
        */
       return "This workspace is not verified yet, so nothing can be sent from it. Profile > Documents has the details.";
+    case "contact_undeliverable":
+      return "This number cannot receive WhatsApp messages.";
+    case "broadcast_cancelled":
+      return "The broadcast was cancelled before this message was sent.";
   }
 }

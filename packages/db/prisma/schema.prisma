@@ -86,6 +86,18 @@ model Company {
   /// in requireSession() exists to render a message, not to be the boundary.
   deactivatedAt DateTime? @db.Timestamptz(3) @map("deactivated_at")
 
+  /// Milliseconds between two sends of one broadcast. Admin-configurable.
+  ///
+  /// A tenant-level setting rather than a constant, because the right pace
+  /// depends on a number's throughput level and on how much a business is
+  /// willing to have its quality rating watched. 800ms is roughly 75 messages
+  /// a minute, which is slow enough that a bad template shows up in the
+  /// quality rating before the whole list has received it.
+  ///
+  /// It is pacing, NOT the limit. The messaging tier caps unique recipients
+  /// per rolling 24 hours and is the real ceiling - see broadcastTierHeadroom.
+  broadcastGapMs Int @default(800) @map("broadcast_gap_ms")
+
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
   updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
@@ -108,6 +120,8 @@ model Company {
   whatsappTemplates      WhatsAppTemplate[]
   templateEdits          WhatsAppTemplateEdit[]
   kycDocuments           KycDocument[]
+  broadcasts             Broadcast[]
+  broadcastRecipients    BroadcastRecipient[]
 
   @@map("companies")
 }
@@ -168,6 +182,7 @@ model User {
   templatesCreated        WhatsAppTemplate[]       @relation("TemplatesCreated")
   templateEdits           WhatsAppTemplateEdit[]   @relation("TemplateEdits")
   messagesSent            Message[]                @relation("MessagesSent")
+  broadcastsCreated       Broadcast[]              @relation("BroadcastsCreated")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -555,6 +570,7 @@ model WhatsAppNumber {
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration   Integration    @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  broadcasts    Broadcast[]
 
   /// The natural key. Meta's phone_number_id is globally unique, but scoping it
   /// per company keeps the uniqueness a tenant fact rather than a global one -
@@ -658,6 +674,14 @@ model Contact {
   /// here now because Phase 5's send queue filters on it, and adding it later
   /// is a backfill on what will by then be the largest table in the schema.
   optedOutAt DateTime? @db.Timestamptz(3) @map("opted_out_at")
+
+  /// Set when Meta reports 131026 - this number cannot receive WhatsApp at all.
+  ///
+  /// Distinct from opting out, and the difference matters to a person reading
+  /// the report: an opt-out is the customer's decision and must be honoured
+  /// for ever, while this is a fact about the handset. Both exclude the
+  /// contact from future broadcasts; only one of them is a choice.
+  undeliverableAt DateTime? @db.Timestamptz(3) @map("undeliverable_at")
 
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
   updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
@@ -791,6 +815,17 @@ model Message {
   /// Who pressed send. Null for inbound and for anything a job originated.
   sentByUserId String? @map("sent_by_user_id")
 
+  /// The broadcast this message went out as part of, if any.
+  ///
+  /// A bulk recipient is an ordinary message row and nothing else: same status
+  /// ladder, same retry path, same thread, same usage row. This column is the
+  /// only thing that distinguishes one, which is what keeps bulk from becoming
+  /// a parallel world with its own idea of what "delivered" means.
+  ///
+  /// SetNull rather than Cascade: deleting a broadcast's bookkeeping must not
+  /// delete messages a customer has already received.
+  broadcastId String? @map("broadcast_id")
+
   /// The one column the thread orders by, and the reason createdAt is not it.
   ///
   /// Inbound carries Meta's own unix-seconds timestamp; outbound is stamped
@@ -813,6 +848,7 @@ model Message {
   company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   media        WhatsAppMedia? @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+  broadcast    Broadcast?     @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
   /// SetNull for the same reason as Conversation.assignedUser: deleting an
   /// employee must not delete the messages they sent to customers.
   sentBy       User?          @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
@@ -824,6 +860,8 @@ model Message {
   @@index([companyId, conversationId, occurredAt(sort: Desc), id])
   /// The send worker claims rows by status.
   @@index([companyId, status])
+  /// The broadcast report: every recipient of one broadcast, grouped by status.
+  @@index([companyId, broadcastId, status])
   @@map("messages")
 }
 
@@ -1145,6 +1183,7 @@ model WhatsAppTemplate {
   /// must not delete the template their colleagues are sending.
   createdBy   User?       @relation("TemplatesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
   edits       WhatsAppTemplateEdit[]
+  broadcasts  Broadcast[]
 
   /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
   @@unique([companyId, name, language])
@@ -1299,6 +1338,163 @@ model KycDocument {
   /// The only read there is: the newest row of a kind, for one company.
   @@index([companyId, kind, createdAt(sort: Desc)])
   @@map("kyc_documents")
+}
+
+/// Where one bulk send has got to.
+///
+/// DRAFT is the audience without a decision attached, which is why it exists
+/// at all: an imported list has to survive the mapping and confirm steps, and
+/// a browser refresh in the middle of them, before anybody has said send.
+///
+/// PAUSED and CANCELLED are read by every send job as it runs, which is what
+/// makes them immediate without touching the delayed jobs already in Redis.
+/// CANCELLED is terminal; PAUSED is not.
+enum BroadcastStatus {
+  DRAFT
+  RUNNING
+  PAUSED
+  CANCELLED
+  COMPLETED
+
+  @@map("broadcast_status")
+}
+
+/// What happened to one row of the imported list.
+///
+/// SKIPPED is not a failure and carries its own reason - opted out since
+/// import, undeliverable, or the broadcast was cancelled before reaching it.
+/// A row that became a message is SENT here regardless of what Meta then said;
+/// the message's own status ladder is what says whether it arrived.
+enum BroadcastRecipientState {
+  PENDING
+  SENT
+  SKIPPED
+
+  @@map("broadcast_recipient_state")
+}
+
+/// One bulk send: an audience, a template, and a pace.
+model Broadcast {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// What the tenant called it. Defaults to the uploaded filename.
+  name String
+
+  /// The approved template every recipient receives.
+  ///
+  /// Required and never null: a bulk recipient is cold, there is no open
+  /// 24-hour window, and only a template may be sent. That is Meta's rule
+  /// rather than ours, and sendPolicy already enforces it - this column is the
+  /// schema saying the same thing, so a free-form broadcast is not merely
+  /// disabled but unrepresentable.
+  templateId String @map("template_id")
+
+  /// The number it sends from. Its messaging tier is the real ceiling.
+  whatsappNumberId String @map("whatsapp_number_id")
+
+  status BroadcastStatus @default(DRAFT)
+
+  /// Which CSV column feeds the phone number and each template variable.
+  ///
+  /// jsonb because the shape is `{ phone: "Mobile", variables: { "1": "Name" } }`
+  /// and the variable count comes from the template, not from us. Kept after
+  /// the send so the report can say what a recipient was actually told.
+  columnMapping Json? @map("column_mapping")
+
+  /// Milliseconds between sends, copied from the company at start.
+  ///
+  /// Copied rather than read live, so that changing the tenant setting does
+  /// not silently re-pace a broadcast already running - and so the report can
+  /// say what pace this one actually ran at.
+  gapMs Int @map("gap_ms")
+
+  /// The cleaning pipeline's counts, frozen at import.
+  ///
+  /// Stored rather than recomputed because they describe a file that no longer
+  /// exists: "1,204 parsed, 11 unparseable, 38 duplicates, 92 already
+  /// contacts, 4 opted out" is the audit of one upload and cannot be derived
+  /// from the recipients that survived it.
+  sourceFilename String? @map("source_filename")
+  parsedCount    Int     @default(0) @map("parsed_count")
+  invalidCount   Int     @default(0) @map("invalid_count")
+  duplicateCount Int     @default(0) @map("duplicate_count")
+  existingCount  Int     @default(0) @map("existing_count")
+  optedOutCount  Int     @default(0) @map("opted_out_count")
+  /// What is left, and what the confirm screen counts.
+  recipientCount Int     @default(0) @map("recipient_count")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  startedAt  DateTime? @db.Timestamptz(3) @map("started_at")
+  finishedAt DateTime? @db.Timestamptz(3) @map("finished_at")
+  createdAt  DateTime  @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt  DateTime  @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company        Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template       WhatsAppTemplate     @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  whatsappNumber WhatsAppNumber       @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
+  createdBy      User?                @relation("BroadcastsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  recipients     BroadcastRecipient[]
+  messages       Message[]
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([companyId, status])
+  @@map("broadcasts")
+}
+
+/// One row of the imported list, after cleaning.
+///
+/// -------------------------------------------------------------------------
+/// Why this exists when a recipient is supposed to be a message row
+/// -------------------------------------------------------------------------
+///
+/// A SENT recipient is an ordinary message row and nothing else - that is the
+/// rule, and message_id below is where the two meet. What this table holds is
+/// the audience BEFORE anybody has decided to send it.
+///
+/// Message rows cannot do that job. PENDING is the status the send worker
+/// claims by, so a draft's recipients sitting in `messages` would be sent by
+/// the first worker that looked, with nobody having pressed anything. Adding a
+/// pre-send status to the ladder would put a state into the one enum every
+/// delivery callback and every retry already reasons about, to describe rows
+/// that are not messages yet.
+///
+/// So the audience lives here until it is sent, and then it is a message.
+model BroadcastRecipient {
+  id          String @id @default(cuid())
+  companyId   String @map("company_id")
+  broadcastId String @map("broadcast_id")
+
+  /// E.164, from parsePhone with the India default. Cleaned at import.
+  phoneE164 String @map("phone_e164")
+
+  /// The template's parameters for this row, in Meta's positional order.
+  ///
+  /// A JSON array, not an object: Meta matches {{1}}, {{2}} by position, and
+  /// storing them keyed would need the mapping re-read to put them back in
+  /// order at send time.
+  variables Json
+
+  state      BroadcastRecipientState @default(PENDING)
+  /// Why this row was not sent. Null unless state is SKIPPED.
+  skipReason String?                 @map("skip_reason")
+
+  /// The message this became. Null until the send job created one.
+  messageId String? @map("message_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  broadcast Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+
+  /// The drip walks this: one broadcast's pending rows, in a stable order.
+  @@index([companyId, broadcastId, state])
+  /// Deduping within one import is done in memory before the insert; this
+  /// makes a second import of the same file into the same broadcast a
+  /// constraint violation rather than a doubled send.
+  @@unique([broadcastId, phoneE164])
+  @@map("broadcast_recipients")
 }
 
 model UsageEvent {

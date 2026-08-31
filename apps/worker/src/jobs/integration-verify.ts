@@ -9,8 +9,10 @@ import {
   type VerificationOutcome,
 } from "@whatsapp-os/core";
 import { recordUsage, withCompany, type Prisma } from "@whatsapp-os/db";
+import { applyVerificationEffects } from "@whatsapp-os/core";
 import { keyring } from "../keyring.ts";
 import { log } from "../logger.ts";
+import { systemQueue } from "../queue.ts";
 
 /**
  * Check a company's integrations against the real providers.
@@ -107,6 +109,22 @@ export async function handleIntegrationVerify(
     checked: loaded.length,
     ok,
   });
+
+  /*
+   * Everything that follows a successful verification lives in one place, so
+   * this path and the admin panel's inline one cannot drift. They did: commit
+   * 21 put the refresh here only, and Save & Verify - the button an operator
+   * actually presses - never triggered it.
+   *
+   * The job id is unique per verification, not per company (R2).
+   */
+  await applyVerificationEffects(
+    { companyId, verified: ok > 0, token: jobId },
+    {
+      enqueue: (name, data, options) => systemQueue.add(name, data, options),
+      onWarn: (message, fields) => log.warn(message, fields),
+    },
+  );
 
   return { checked: loaded.length, ok };
 }

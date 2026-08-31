@@ -18,6 +18,39 @@ export const FIXTURE = {
   /** Literal, so every admin URL below is a constant. */
   companyId: "c000visualfixturecompany1",
   /**
+   * The open-window thread, which is the one a `[conversationId]` route gets.
+   *
+   * Here before any page renders it, so that adding the thread page is one
+   * entry in ROUTES and nothing else — the walker in pages.spec.ts already
+   * substitutes this segment. See DYNAMIC_SEGMENTS there.
+   */
+  conversationId: "c000visualfixtureconvo01",
+  /**
+   * The closed-window thread, and the more interesting of the two to look at.
+   *
+   * It carries everything the open one cannot: a composer disabled with its
+   * reason, the template picker disabled beside it, an inbound image served
+   * through /api/media, and an outbound message Meta refused.
+   */
+  closedConversationId: "c000visualfixtureconvo02",
+  /**
+   * An approved template, carrying variables on purpose.
+   *
+   * Any approved template with {{n}} needs values typed at send time, so a
+   * fixture whose only template is variable-free photographs a picker with
+   * nothing to fill in — which is the half of that screen most likely to be
+   * wrong.
+   */
+  approvedTemplateId: "c000visualfixturetmpl001",
+  /**
+   * A rejected one, carrying a real Meta rejection reason.
+   *
+   * Rejected for the reason its own body demonstrates: it opens on a variable,
+   * which is one of the three rules validateTemplate enforces. The fixture and
+   * the validator describe the same rule from opposite ends.
+   */
+  rejectedTemplateId: "c000visualfixturetmpl002",
+  /**
    * The owner's last sign-in, as the console renders it.
    *
    * Here rather than only in the seed because signing in overwrites it, and
@@ -77,12 +110,35 @@ export const ROUTES: readonly VisualRoute[] = [
 
   { name: "dashboard", path: "/dashboard", audience: "tenant" },
   { name: "inbox", path: "/inbox", audience: "tenant" },
+  {
+    name: "inbox-thread-open",
+    path: `/inbox/${FIXTURE.conversationId}`,
+    audience: "tenant",
+  },
+  {
+    name: "inbox-thread-closed",
+    path: `/inbox/${FIXTURE.closedConversationId}`,
+    audience: "tenant",
+  },
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
+  {
+    name: "template-library",
+    path: "/template-messaging?view=library",
+    audience: "tenant",
+  },
+  { name: "template-studio-new", path: "/template-messaging/new", audience: "tenant" },
+  {
+    /* The rejected one: Meta's reason, the explanation, and the quota. */
+    name: "template-rejected",
+    path: `/template-messaging/${FIXTURE.rejectedTemplateId}`,
+    audience: "tenant",
+  },
   { name: "meta-ads", path: "/meta-ads", audience: "tenant" },
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },
+  { name: "configuration-numbers", path: "/configuration/numbers", audience: "tenant" },
   { name: "profile-personal-details", path: "/profile/personal-details", audience: "tenant" },
   { name: "profile-documents", path: "/profile/documents", audience: "tenant" },
 

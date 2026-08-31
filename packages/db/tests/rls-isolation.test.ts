@@ -425,6 +425,385 @@ describe("usage events", () => {
   });
 });
 
+describe("whatsapp numbers", () => {
+  /**
+   * A number needs an integration to hang off, so this seeds both.
+   *
+   * Through the ORM and outside any `it`, deliberately: seeding is not the
+   * claim. no-orm-in-isolation.test.ts scans the bodies below, not this.
+   */
+  async function seedIntegration(company: SeededCompany): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+      });
+      return integration.id;
+    });
+  }
+
+  async function seedNumber(
+    company: SeededCompany,
+    phoneNumberId: string,
+  ): Promise<string> {
+    const integrationId = await seedIntegration(company);
+
+    return withCompany(company.id, async (db, companyId) => {
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId,
+          phoneNumberId,
+          displayNumber: "+91 98765 43210",
+          status: "CONNECTED",
+        },
+      });
+
+      return number.id;
+    });
+  }
+
+  it("does not show one company's numbers to another", async () => {
+    await seedNumber(alpha, "alpha-phone-1");
+    await seedNumber(beta, "beta-phone-1");
+
+    /*
+     * Raw, inside beta's context. Through the ORM the extension would add the
+     * company filter itself and this would pass with the policy dropped.
+     */
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<
+        Array<{ phone_number_id: string }>
+      >`SELECT phone_number_id FROM whatsapp_numbers ORDER BY phone_number_id`,
+    );
+
+    expect(rows.map((r) => r.phone_number_id)).toEqual(["beta-phone-1"]);
+  });
+
+  it("refuses to write a number into another company", async () => {
+    const integrationId = await seedIntegration(alpha);
+
+    /*
+     * The WITH CHECK half. A policy with only USING would let a caller holding
+     * alpha's context insert a row stamped beta, which reads back as beta's
+     * data and is invisible to alpha for ever after.
+     */
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_numbers
+            (id, company_id, integration_id, phone_number_id, display_number, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${integrationId}, 'beta-phone-2', '+91 90000 00000', now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides a seeded number from the table's own owner", async () => {
+    /*
+     * Seeded first, on purpose. whatsapp_numbers is empty in beforeEach, so an
+     * owner reading it would return zero rows whether FORCE were in effect or
+     * not — the same vacuous pass this suite exists to avoid. With a row in the
+     * table, an empty result is only explicable by FORCE.
+     */
+    await seedNumber(alpha, "alpha-phone-2");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_numbers");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
+describe("conversations and messages", () => {
+  /** A contact, a conversation and one message, through the real path. */
+  async function seedThread(
+    company: SeededCompany,
+    label: string,
+  ): Promise<{ conversationId: string; wamid: string }> {
+    const integrationId = await withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "Primary" },
+      });
+      return integration.id;
+    });
+
+    return withCompany(company.id, async (db, companyId) => {
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId,
+          phoneNumberId: `${label}-pn`,
+          displayNumber: "+91 98765 43210",
+        },
+      });
+      const contact = await db.contact.create({
+        data: { companyId, waId: `${label}-wa`, profileName: `${label} person` },
+      });
+      const conversation = await db.conversation.create({
+        data: {
+          companyId,
+          contactId: contact.id,
+          whatsappNumberId: number.id,
+          lastMessageAt: new Date(),
+        },
+      });
+      const wamid = `${label}-wamid`;
+      await db.message.create({
+        data: {
+          companyId,
+          conversationId: conversation.id,
+          direction: "INBOUND",
+          type: "text",
+          status: "DELIVERED",
+          wamid,
+          body: `${label} said something`,
+          occurredAt: new Date(),
+        },
+      });
+
+      return { conversationId: conversation.id, wamid };
+    });
+  }
+
+  it("does not show one company's messages to another", async () => {
+    await seedThread(alpha, "alpha");
+    await seedThread(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ wamid: string }>>`SELECT wamid FROM messages ORDER BY wamid`,
+    );
+
+    expect(rows.map((r) => r.wamid)).toEqual(["beta-wamid"]);
+  });
+
+  it("does not show one company's contacts or conversations to another", async () => {
+    await seedThread(alpha, "alpha");
+    await seedThread(beta, "beta");
+
+    const rows = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ wa_id: string; n: bigint }>>`
+        SELECT c.wa_id, count(v.id) AS n
+          FROM contacts c LEFT JOIN conversations v ON v.contact_id = c.id
+         GROUP BY c.wa_id ORDER BY c.wa_id`,
+    );
+
+    /* A join is the shape that leaks a whole installation while looking
+       plausible - one row per contact, and every count still correct. */
+    expect(rows.map((r) => r.wa_id)).toEqual(["alpha-wa"]);
+    expect(Number(rows[0]!.n)).toBe(1);
+  });
+
+  it("refuses to write a message into another company", async () => {
+    const { conversationId } = await seedThread(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO messages
+            (id, company_id, conversation_id, direction, status, type, occurred_at, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${conversationId}, 'OUTBOUND', 'PENDING', 'text', now(), now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("does not let the raw window advance reach another company's thread", async () => {
+    const { conversationId } = await seedThread(alpha, "alpha");
+
+    /*
+     * advanceConversation is raw SQL, so the extension's where-merging does not
+     * apply to it: the RLS policy is the whole boundary, and the explicit
+     * company_id predicate is the second, visible half.
+     *
+     * Written out here rather than called through the function on purpose. This
+     * file's rule is raw SQL only - a call that went through a model in
+     * COMPANY_SCOPED_MODELS would have its filter injected and would pass with
+     * every policy dropped - and stating the statement makes it obvious that
+     * what is under test is the UPDATE reaching zero rows rather than an
+     * argument being checked somewhere.
+     */
+    const affected = await withCompany(beta.id, (db) =>
+      db.$executeRaw`
+        UPDATE conversations
+           SET window_expires_at = now() AT TIME ZONE 'UTC',
+               unread_count = unread_count + 1
+         WHERE id = ${conversationId}`,
+    );
+
+    expect(affected, "beta's scope advanced alpha's window").toBe(0);
+
+    const [row] = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ window_expires_at: Date | null; unread_count: number }>>`
+        SELECT window_expires_at, unread_count FROM conversations WHERE id = ${conversationId}`,
+    );
+
+    expect(row?.window_expires_at).toBeNull();
+    expect(Number(row?.unread_count)).toBe(0);
+  });
+
+  it("hides a seeded thread from the table's own owner", async () => {
+    await seedThread(alpha, "alpha");
+
+    const contacts = await owner.query("SELECT * FROM contacts");
+    const conversations = await owner.query("SELECT * FROM conversations");
+    const messages = await owner.query("SELECT * FROM messages");
+
+    expect(
+      [contacts.rows, conversations.rows, messages.rows],
+      "FORCE ROW LEVEL SECURITY is not in effect",
+    ).toEqual([[], [], []]);
+  });
+});
+
+describe("stored media", () => {
+  async function storeMedia(company: SeededCompany, label: string): Promise<void> {
+    await withCompany(company.id, async (db, companyId) => {
+      await db.whatsAppMedia.create({
+        data: {
+          companyId,
+          sha256: `${label}-sha`,
+          mimeType: "image/jpeg",
+          byteSize: 3,
+          state: "STORED",
+          bytes: new TextEncoder().encode("abc"),
+        },
+      });
+    });
+  }
+
+  it("does not serve one company's media to another", async () => {
+    await storeMedia(alpha, "alpha");
+    await storeMedia(beta, "beta");
+
+    /*
+     * The read path is /api/media/[mediaId], which takes an id straight from a
+     * URL. RLS is what makes guessing one useless, so this is the assertion
+     * behind that route returning 404 rather than somebody else's photograph.
+     */
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ sha256: string }>>`SELECT sha256 FROM whatsapp_media ORDER BY sha256`,
+    );
+
+    expect(rows.map((r) => r.sha256)).toEqual(["beta-sha"]);
+  });
+
+  it("refuses to write media into another company", async () => {
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_media
+            (id, company_id, sha256, mime_type, byte_size, state, updated_at)
+          VALUES ('smuggled', ${beta.id}, 'smuggled-sha', 'image/jpeg', 0, 'PENDING', now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides stored media from the table's own owner", async () => {
+    await storeMedia(alpha, "alpha");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_media");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
+describe("templates and their edit log", () => {
+  async function seedTemplate(
+    company: SeededCompany,
+    name: string,
+  ): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: name },
+        select: { id: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name,
+          language: "en_US",
+          category: "MARKETING",
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+        select: { id: true },
+      });
+
+      await db.whatsAppTemplateEdit.create({
+        data: {
+          companyId,
+          templateId: template.id,
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+      });
+
+      return template.id;
+    });
+  }
+
+  it("does not show one company's templates to another", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+    await seedTemplate(beta, "beta_offer");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM whatsapp_templates ORDER BY name`,
+    );
+
+    expect(rows.map((r) => r.name)).toEqual(["beta_offer"]);
+  });
+
+  /*
+   * The edit log is what the quota is counted from, so a leak here is not only
+   * a disclosure - it would let one company's edits consume another's allowance
+   * and lock them out of fixing a rejected template.
+   */
+  it("does not count one company's edits against another", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+    await seedTemplate(beta, "beta_offer");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) AS count FROM whatsapp_template_edits`,
+    );
+
+    expect(Number(rows[0]?.count)).toBe(1);
+  });
+
+  /* A fixture, deliberately outside any `it`: seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  async function seedIntegration(company: SeededCompany): Promise<string> {
+    return withCompany(company.id, async (db, companyId) => {
+      const row = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: "smuggle" },
+        select: { id: true },
+      });
+      return row.id;
+    });
+  }
+
+  it("refuses to write a template into another company", async () => {
+    const integrationId = await seedIntegration(alpha);
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO whatsapp_templates
+            (id, company_id, integration_id, name, language, category,
+             components, updated_at)
+          VALUES ('smuggled', ${beta.id}, ${integrationId}, 'smuggled',
+                  'en_US', 'MARKETING', '[]'::jsonb, now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides templates from the table's own owner", async () => {
+    await seedTemplate(alpha, "alpha_offer");
+
+    const { rows } = await owner.query("SELECT * FROM whatsapp_templates");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

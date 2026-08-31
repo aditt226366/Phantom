@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 import {
   testAdminDatabaseUrl,
@@ -43,13 +45,31 @@ import {
  * plainly what happened. It does not silently pass.
  */
 
+/* This directory, for the screenshot stylesheet below. */
+const here = dirname(fileURLToPath(import.meta.url));
+
 /*
  * Not 3000, so a dev server can stay up while this runs, and overridable
- * because "already used" is otherwise a config edit rather than a flag. The
- * port is not rendered anywhere, so changing it does not invalidate a baseline.
+ * because "already used" is otherwise a config edit rather than a flag.
  */
 const PORT = Number(process.env["VISUAL_PORT"] ?? 3210);
 const BASE_URL = `http://localhost:${PORT}`;
+
+/*
+ * What the app calls itself, which is not where the suite finds it.
+ *
+ * These were the same value until Configuration > Numbers rendered the webhook
+ * address, and this comment used to say the port was not rendered anywhere so
+ * changing it could not invalidate a baseline. That stopped being true: APP_URL
+ * is now printed on a photographed page, and derived from BASE_URL it would
+ * make VISUAL_PORT — an escape hatch for a busy port — silently re-record a
+ * screenshot.
+ *
+ * So it is a literal, on the same rule every id and timestamp in the seed
+ * follows: a value this fixture renders is written down, not computed. Nothing
+ * navigates by it — Playwright uses baseURL — so it costs nothing to pin.
+ */
+const FIXTURE_APP_URL = "http://localhost:3210";
 
 export default defineConfig({
   testDir: "./tests/visual",
@@ -86,22 +106,53 @@ export default defineConfig({
   },
 
   expect: {
+    /*
+     * Headroom for the tallest page, and it has to live here rather than
+     * inside toHaveScreenshot - that object accepts threshold, ratios, scale
+     * and stylePath, and nothing about time.
+     *
+     * toHaveScreenshot captures repeatedly until two consecutive frames agree.
+     * With a diff budget two frames only had to land within it; at zero they
+     * have to be identical, and /styleguide is 21,848px and a couple of
+     * megabytes a frame. It ran out of the default five seconds once, on a
+     * loaded machine, before the sticky fix below made the frames settle.
+     *
+     * Time, not tolerance. Nothing here makes a difference easier to hide.
+     */
+    timeout: 30_000,
+
     toHaveScreenshot: {
       /*
-       * Two thresholds, doing different jobs.
+       * Two knobs, and only one of them is allowed to absorb anything.
        *
-       * `threshold` is per pixel: how different two pixels must be before
-       * either counts as changed at all. 0.2 in YIQ space absorbs antialiasing
-       * on curved glyph edges and nothing else.
+       * `threshold` is per pixel: how far two pixels may differ in YIQ space
+       * before either counts as changed at all. This is the one that exists for
+       * rasteriser noise — antialiasing along curved glyph edges, subpixel
+       * hinting — and 0.2 absorbs it without reaching a pixel that changed
+       * because the markup did.
        *
-       * `maxDiffPixelRatio` is the budget: 0.1% of the page. A 1440x2000 shot
-       * allows about 2,800 changed pixels — enough for the rasteriser to
-       * disagree with itself along a few hundred glyph edges, far short of a
-       * moved element. The card that collapsed to 20px changed a third of the
-       * viewport.
+       * `maxDiffPixelRatio` is a budget for pixels that got past that, and it
+       * is zero. A pixel the threshold did not absorb is a pixel that genuinely
+       * changed, and there is no number of those a screenshot suite should
+       * accept quietly.
+       *
+       * It used to be 0.001, and that was the two knobs doing each other's
+       * jobs. 0.1% of a 1440x900 page is about 1,300 pixels, which is enough to
+       * hide a whole CTA: /configuration's call to action was replaced, the
+       * 390px shot failed, and the 1440px shot passed and kept a baseline
+       * depicting a control the page no longer rendered. A budget wide enough
+       * to swallow a button is not a tolerance, it is a blind spot — in the one
+       * suite whose entire job is noticing that something looks different.
+       *
+       * If a run ever goes noisy, that is evidence `threshold` is wrong, and
+       * the fix is there. Raising this back up would only re-hide whatever the
+       * noise turned out to be.
        */
       threshold: 0.2,
-      maxDiffPixelRatio: 0.001,
+      maxDiffPixelRatio: 0,
+      /* Neutralises sticky positioning and backdrop filters, both of which
+         make a fullPage capture disagree with itself. See the file. */
+      stylePath: join(here, "tests", "visual", "screenshot.css"),
       animations: "disabled",
       caret: "hide",
       scale: "css",
@@ -143,7 +194,7 @@ export default defineConfig({
       DATABASE_URL: testDatabaseUrl(),
       DATABASE_URL_APP: testAppDatabaseUrl(),
       DATABASE_URL_ADMIN: testAdminDatabaseUrl(),
-      APP_URL: BASE_URL,
+      APP_URL: FIXTURE_APP_URL,
     },
   },
 });

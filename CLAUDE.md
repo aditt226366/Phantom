@@ -50,15 +50,48 @@ pooled connection and times out after 5s.
 
 **Never pass a company id that came from the request.** `withCompany` sets the
 value RLS trusts, so `withCompany(searchParams.companyId, …)` is a total
-bypass. Company ids originate in exactly two places: the session row, and
-`resolveCompany()`.
+bypass. Company ids originate in exactly three places:
 
-The only sanctioned raw-SQL sites are `packages/db/src/resolve-company.ts`,
-`packages/db/src/company.ts` and `packages/db/src/vault.ts` — the last because
-`SELECT … FOR UPDATE` has no query-builder form, and re-encrypting a credential
-without holding its row loses a concurrent save irrecoverably. The unscoped client is confined to
-`lib/auth/lockout.ts` and the admin client to `lib/admin-db.ts`, enforced by
-both a lint rule and `apps/web/tests/server/no-raw-prisma.test.ts`.
+| Origin | Trusted because |
+| --- | --- |
+| the session row | the cookie was resolved against `sessions` |
+| `resolveCompany()` | SECURITY DEFINER, and the only lookup with no scope |
+| **a job payload** | the producer put it there, and the producer is one of the two above |
+
+The third arrived with Phase 4a's worker and is the one worth being careful
+about, because it is the only one that has been *serialised*. Every job carries
+`companyId` and the worker opens `withCompany` with it, having never seen a
+request — so the guarantee is entirely about who enqueued.
+
+Two things hold it up. Only our own code writes to the queue: the webhook route
+enqueues after `resolveCompany()`, and a server action after `requireSession()`,
+so no company id reaches Redis without passing one of the first two rows first.
+And `parseJobPayload` validates against a registered Zod schema before a handler
+runs, so a malformed payload throws with the job name in it rather than opening
+a scope on whatever the string happened to be.
+
+What that does **not** survive is somebody with write access to Redis, who can
+name any company they like. The queue is a trust boundary in the same sense the
+database is: reachable only from inside, and everything downstream assumes so.
+Anything that ever accepts a job from outside this system has to re-derive the
+company id rather than read it.
+
+Raw SQL is confined to seven files in `packages/db/src` — `client.ts`,
+`with-company.ts`, `resolve-company.ts`, `company.ts`, `vault.ts`,
+`media-store.ts` and `conversations.ts` — each because the statement it needs
+has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
+credential loses a concurrent save irrecoverably. `substring()` over `bytea`,
+without which a chunked read materialises the whole file. `GREATEST`, without
+which advancing a conversation becomes three statements with two gaps in them —
+and two webhook deliveries for the same thread interleave in those gaps, leaving
+the newest timestamp beside the older message's preview. One UPDATE evaluates
+every guard against one locked tuple.
+
+The list lives in `packages/db/tests/no-raw-sql.test.ts`, which fails in both
+directions, so an eighth site is a diff in a security test rather than a line
+here. The unscoped client is confined to `lib/auth/lockout.ts` and the admin client to
+`lib/admin-db.ts`, enforced by both a lint rule and
+`apps/web/tests/server/no-raw-prisma.test.ts`.
 
 ### 4. Layouts are UX; server functions are authorization
 

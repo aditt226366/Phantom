@@ -99,11 +99,13 @@ Run from the repo root:
 | `npm run typecheck` | `tsc --noEmit` across every workspace |
 | `npm run lint` | ESLint on the web app |
 | `npm test` | Vitest, five projects |
+| `npm run test:gate` | The same run, refusing a short test count |
 | `npm run test:visual` | Screenshots of every page, 1440 and 390 |
 | `npm run test:visual:update` | Re-record the baselines — then look at them |
 | `npm run db:migrate` | `prisma migrate dev` |
 | `npm run db:studio` | Prisma Studio |
 | `npm run services:up` / `:down` | Postgres + Redis |
+| `npm run tunnel` | A public HTTPS origin Meta can reach (see below) |
 
 `verify` runs in that order for a reason: two of the checks read the compiled
 stylesheet and one drives a built server, so the build has to come before the
@@ -121,6 +123,46 @@ full-page screenshots against `apps/web/tests/visual/__screenshots__`. The
 baselines are per platform, because the same Chromium rasterises text
 differently on Windows, macOS and Linux; a first run on a new platform reports
 the snapshots as missing and writes them rather than passing quietly.
+
+---
+
+## Webhooks in development
+
+Meta cannot POST to localhost. Without a public origin, none of the inbound path
+can be exercised: signature verification needs the exact bytes Meta signed,
+delivery statuses only arrive out of order when a real network reorders them,
+and a template approval callback lands hours after the submission. Replaying a
+captured payload with curl proves the handler parses. It does not prove the
+endpoint works.
+
+```bash
+npm run tunnel
+```
+
+cloudflared, not ngrok — the quick tunnel needs no account, no token and no
+config file, so that command is the whole setup. Install it once:
+
+| | |
+| --- | --- |
+| Windows | `winget install --id Cloudflare.cloudflared` |
+| macOS | `brew install cloudflared` |
+| Linux | [Cloudflare's downloads page](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) |
+
+It prints a random `https://….trycloudflare.com` hostname. Two things need it:
+
+1. **Set `APP_URL` in `.env` to that hostname and restart `npm run dev`.**
+   Configuration → Numbers builds the webhook URL a tenant pastes into Meta out
+   of `APP_URL`, so leaving it at localhost shows them a URL that cannot work —
+   and the page looks perfectly correct while it does.
+2. **Paste `<hostname>/api/webhooks/whatsapp/<webhookKey>`** into the Meta app
+   config, with that integration's verify token.
+
+The hostname changes on every restart, so both steps are needed again each time.
+That is the cost of not having an account; a named tunnel fixes it and is worth
+setting up if you are doing this daily.
+
+Nothing here is required for `npm run verify` — the webhook tests drive the
+route handler directly. The tunnel is for the deliveries only Meta can make.
 
 ---
 

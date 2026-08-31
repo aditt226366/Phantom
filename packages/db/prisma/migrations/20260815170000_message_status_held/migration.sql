@@ -1,0 +1,45 @@
+-- A message Meta accepted but is not sending yet.
+--
+-- Meta answers a send with 200, a wamid, and sometimes
+-- message_status: "held_for_quality_assessment" - the message is queued behind a
+-- quality review rather than on its way. graph.ts has read that field since
+-- 5299e4f and returned `held` on SendAccepted; there was nowhere to put it.
+--
+-- Without this member the send worker has two bad options: store SENT, which
+-- claims something Meta has not done and shows the operator a message moving
+-- normally when it may never move at all; or store PENDING, which says we have
+-- not handed it over when we have, and makes a retry look reasonable when it
+-- would send the customer a second copy.
+--
+-- ---------------------------------------------------------------------------
+-- Where it sits on the ladder, and why that is the half that matters
+-- ---------------------------------------------------------------------------
+--
+--   PENDING 0 · HELD 1 · SENT 2 · FAILED 3 · DELIVERED 4 · READ 5
+--
+-- Above PENDING, because a wamid exists and the message is Meta's problem now.
+--
+-- Below SENT, because Meta has not sent it - and this is the direction that
+-- costs something if it is wrong. A message released from hold gets an ordinary
+-- `sent` callback afterwards. Ranked ABOVE SENT, the monotonic guard would read
+-- that callback as a step backwards and discard it, and the message would read
+-- as held for ever while the customer was replying to it. The same failure
+-- shape as ranking FAILED below SENT, which 20260815130000 already avoided.
+--
+-- The authority for the order is MESSAGE_STATUS_RANK in @whatsapp-os/core. This
+-- type's member order is kept in step with it so that \dT+ reads as
+-- documentation rather than as a second, disagreeing opinion - and a test now
+-- compares the two directly, so the next member cannot land on one side only.
+--
+-- ---------------------------------------------------------------------------
+-- Why this migration adds a value and does nothing else
+-- ---------------------------------------------------------------------------
+--
+-- Prisma runs a migration file inside a transaction, and Postgres refuses to
+-- USE an enum value in the transaction that added it ("unsafe use of new value
+-- of enum type"). A default, a CHECK or a backfill mentioning 'HELD' here would
+-- fail at deploy time rather than at review time. There is nothing to backfill
+-- in any case: HELD is written by the send worker from Meta's response, and no
+-- existing row can have been in that state.
+
+ALTER TYPE "message_status" ADD VALUE 'HELD' AFTER 'PENDING';

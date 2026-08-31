@@ -84,10 +84,10 @@ model Company {
   /// reset link - resolves a company through that function, so one clause
   /// covers all of them and no later route can forget it. The app-level check
   /// in requireSession() exists to render a message, not to be the boundary.
-  deactivatedAt DateTime? @map("deactivated_at")
+  deactivatedAt DateTime? @db.Timestamptz(3) @map("deactivated_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   users                  User[]
   sessions               Session[]
@@ -98,6 +98,15 @@ model Company {
   integrationSecrets     IntegrationSecret[]
   integrationVerifications IntegrationVerification[]
   usageEvents            UsageEvent[]
+  whatsappNumbers        WhatsAppNumber[]
+  contacts               Contact[]
+  conversations          Conversation[]
+  messages               Message[]
+  whatsappMedia          WhatsAppMedia[]
+  webhookEvents          WhatsAppWebhookEvent[]
+  unroutableWebhooks     UnroutableWebhook[]
+  whatsappTemplates      WhatsAppTemplate[]
+  templateEdits          WhatsAppTemplateEdit[]
 
   @@map("companies")
 }
@@ -116,7 +125,7 @@ model User {
   /// there is no clean migration out of that once rows exist.
   email String @unique
 
-  emailVerifiedAt DateTime? @map("email_verified_at")
+  emailVerifiedAt DateTime? @db.Timestamptz(3) @map("email_verified_at")
 
   /// Globally unique, and the reason app_resolve_company() exists: sign-in is
   /// username + password with no company selector, so the username has to
@@ -128,8 +137,8 @@ model User {
   passwordHash      String   @map("password_hash")
   phoneE164         String   @map("phone_e164")
   role              UserRole @default(MEMBER)
-  passwordChangedAt DateTime @default(now()) @map("password_changed_at")
-  lastLoginAt       DateTime? @map("last_login_at")
+  passwordChangedAt DateTime @db.Timestamptz(3) @default(now()) @map("password_changed_at")
+  lastLoginAt       DateTime? @db.Timestamptz(3) @map("last_login_at")
 
   /// When the breach check last actually ran for this password.
   ///
@@ -137,23 +146,27 @@ model User {
   /// HaveIBeenPwned was unreachable, or the password has been changed since.
   /// The next successful sign-in retries it, which is the only moment the
   /// plaintext exists again.
-  hibpCheckedAt DateTime? @map("hibp_checked_at")
+  hibpCheckedAt DateTime? @db.Timestamptz(3) @map("hibp_checked_at")
 
   /// Set when the breach check found this password in a known breach.
   ///
   /// Advisory, not a block: the user can still sign in. Locking someone out of
   /// an account they can demonstrably authenticate to is worse than the risk,
   /// and leaves them no way to fix it.
-  passwordBreachedAt DateTime? @map("password_breached_at")
+  passwordBreachedAt DateTime? @db.Timestamptz(3) @map("password_breached_at")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company                 Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sessions                Session[]
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
   auditLogs               AuditLog[]
+  conversationsAssigned   Conversation[]           @relation("ConversationsAssigned")
+  templatesCreated        WhatsAppTemplate[]       @relation("TemplatesCreated")
+  templateEdits           WhatsAppTemplateEdit[]   @relation("TemplateEdits")
+  messagesSent            Message[]                @relation("MessagesSent")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -177,10 +190,10 @@ model Session {
   ipHash    String?  @map("ip_hash")
   userAgent String?  @map("user_agent")
 
-  createdAt  DateTime  @default(now()) @map("created_at")
-  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  lastSeenAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  revokedAt  DateTime? @db.Timestamptz(3) @map("revoked_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -199,9 +212,9 @@ model EmailVerificationToken {
 
   tokenHash String @unique @map("token_hash")
 
-  expiresAt  DateTime  @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  consumedAt DateTime? @db.Timestamptz(3) @map("consumed_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -222,9 +235,9 @@ model PasswordResetToken {
 
   tokenHash String @unique @map("token_hash")
 
-  expiresAt  DateTime  @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  consumedAt DateTime? @db.Timestamptz(3) @map("consumed_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -245,7 +258,7 @@ model AuditLog {
   ip        String?
   userAgent String?     @map("user_agent")
   metadata  Json?
-  createdAt DateTime    @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3)    @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -292,17 +305,58 @@ model Integration {
   label    String
   status   IntegrationStatus   @default(NOT_CONNECTED)
 
-  lastVerifiedAt DateTime? @map("last_verified_at")
+  /// The opaque path segment Meta posts to: /api/webhooks/whatsapp/{key}.
+  ///
+  /// Not a company id and not this row's id. Meta stores this URL somewhere we
+  /// do not control and renders it in a UI customers screenshot, so it must
+  /// carry no internal identifier - and it must rotate without touching a
+  /// credential, which anything derived from an id could not.
+  ///
+  /// Globally unique, because the lookup happens before any company context
+  /// exists. app_resolver holds a column-level SELECT on exactly this column
+  /// and company_id; see the resolver migration.
+  ///
+  /// The default is a database expression rather than application code so that
+  /// no row can exist without one, including rows written by a migration or by
+  /// a future code path that has not thought about webhooks.
+  ///
+  /// Rotation, stated because "it rotates without touching a credential" is
+  /// half the argument for having this column at all:
+  ///
+  ///   It is a plain UPDATE of this one value, in the same 32-hex shape, and
+  ///   nothing else moves - no credential is re-encrypted, because none of the
+  ///   AAD components change. That is the property the opaque key buys.
+  ///
+  ///   It is NOT free to the tenant. The old URL stops resolving the instant
+  ///   the UPDATE commits, and inbound messages are dropped until they paste
+  ///   the new one into Meta - during which Meta is accumulating failures
+  ///   toward disabling the subscription. So it is a deliberate act with a
+  ///   warning attached, not a background hygiene job.
+  ///
+  ///   The control therefore lives with the page that displays the URL -
+  ///   Configuration > Numbers - rather than anywhere it could be triggered
+  ///   without the person seeing what they have to do next.
+  /// The expression is spelled the way Postgres normalises it, not the way it
+  /// was written in the migration. pg_get_expr() re-prints a default with its
+  /// own parenthesisation and explicit casts, so the readable form drifts on
+  /// every check - the same trap as an index name that does not match its
+  /// @map'ed column.
+  webhookKey String @unique @default(dbgenerated("replace((gen_random_uuid())::text, '-'::text, ''::text)")) @map("webhook_key")
+
+  lastVerifiedAt DateTime? @db.Timestamptz(3) @map("last_verified_at")
   /// The last failure, already scrubbed. Never contains a credential - see
   /// redactKeys/scrubValues in @whatsapp-os/core.
   lastError      String?   @map("last_error")
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company       Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  secrets       IntegrationSecret[]
-  verifications IntegrationVerification[]
+  secrets         IntegrationSecret[]
+  verifications   IntegrationVerification[]
+  whatsappNumbers WhatsAppNumber[]
+  webhookEvents   WhatsAppWebhookEvent[]
+  templates       WhatsAppTemplate[]
 
   /// One per provider per company, for now. This relaxes in Phase 4/6, when a
   /// company gets several numbers and several sheet bindings - which is why
@@ -365,8 +419,8 @@ model IntegrationSecret {
   /// hint exists to confirm which credential is loaded, not to rebuild it.
   last4      String?
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
@@ -402,13 +456,617 @@ model IntegrationVerification {
   /// response that failed, and it is worth nothing if it was never stored.
   details Json?
 
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
 
   company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
   @@index([companyId, createdAt(sort: Desc)])
   @@map("integration_verifications")
+}
+
+/// The quality rating Meta assigns from how recipients react.
+///
+/// Drops to RED before Meta restricts a number, so it is the earliest warning a
+/// customer gets that their messaging is about to stop working.
+enum WhatsAppQualityRating {
+  GREEN
+  YELLOW
+  RED
+  UNKNOWN
+
+  @@map("whatsapp_quality_rating")
+}
+
+/// One phone number under a company's WhatsApp Business Account.
+///
+/// Meta's model is one WABA to many numbers, and this mirrors it rather than
+/// relaxing Integration's unique on (company_id, provider). Relaxing that would
+/// move secrets between integration rows, and integration_id is an AAD
+/// component - so that is a decrypt-and-re-encrypt of every credential, not an
+/// UPDATE. See the note on IntegrationSecret above, which names this phase.
+///
+/// company_id is carried here and not reached through integration_id, for the
+/// same reason IntegrationSecret carries it: RLS evaluates per table, a policy
+/// that had to join integrations to find the company is a policy that can be
+/// got wrong, and schema-invariants would fail the table outright.
+///
+/// Everything Meta tells us about a number is a cache. The refresh job owns it;
+/// nothing here is typed by a person.
+model WhatsAppNumber {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// Meta's id for this number. Every Graph call and every webhook payload
+  /// names it by this, never by the display number.
+  phoneNumberId String @map("phone_number_id")
+
+  /// E.164 as Meta formats it, for display only. Never a lookup key: Meta has
+  /// changed its spacing, and matching on it would split one number in two.
+  displayNumber String  @map("display_number")
+  /// The business name shown to recipients, once Meta has approved it.
+  verifiedName  String? @map("verified_name")
+
+  qualityRating WhatsAppQualityRating @default(UNKNOWN) @map("quality_rating")
+
+  /// Meta's own strings - CONNECTED, PENDING, FLAGGED, RESTRICTED, and at least
+  /// BANNED, MIGRATED, RATE_LIMITED and UNVERIFIED that we do not model. Text
+  /// and not an enum, for the same reason messaging_tier is: the vocabulary is
+  /// Meta's, they add to it, and an unrecognised value must render as itself
+  /// rather than be flattened into UNKNOWN on the way in.
+  ///
+  /// UNKNOWN remains the default and a real value, meaning "Meta has told us
+  /// nothing" - distinct from metadata_refreshed_at being null, which means we
+  /// have never asked. sendPolicy refuses to send from either that or anything
+  /// it does not recognise, which is the fail-closed half of 20260816100000.
+  status        String                @default("UNKNOWN")
+
+  /// Meta's own strings, e.g. TIER_1K. Text and not enums, deliberately: the
+  /// sets have changed twice already, and an unrecognised tier must render as
+  /// itself at 3am rather than reject the refresh that carried it.
+  messagingTier   String? @map("messaging_tier")
+  throughputLevel String? @map("throughput_level")
+
+  /// When this row last agreed with Meta. Everything above it is a cache, and a
+  /// cache with no age is a claim nobody can check. Null means never fetched.
+  ///
+  /// Read by the numbers page to say how stale the data is. Never a trigger to
+  /// go and fetch: a Graph call on page load is the thing this cache exists to
+  /// prevent, and staleness shown honestly beats a dashboard that calls Meta
+  /// every time somebody opens it.
+  metadataRefreshedAt DateTime? @db.Timestamptz(3) @map("metadata_refreshed_at")
+
+  /// When Meta first stopped returning this number, or null if it still does.
+  ///
+  /// Set rather than deleting the row: a number absent because somebody removed
+  /// it in Business Manager and one absent because a single API call came back
+  /// short look identical from here, and only one is real. Untouched by later
+  /// refreshes that also miss it, so the age of the absence is readable, and
+  /// cleared the moment Meta returns it again.
+  missingSince  DateTime? @db.Timestamptz(3) @map("missing_since")
+  /// Why, as a machine code - the shape skipped_reason uses elsewhere.
+  missingReason String?   @map("missing_reason")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration   Integration    @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  /// The natural key. Meta's phone_number_id is globally unique, but scoping it
+  /// per company keeps the uniqueness a tenant fact rather than a global one -
+  /// two companies must never collide, and neither must learn of the other by
+  /// failing to insert.
+  @@unique([companyId, phoneNumberId])
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("whatsapp_numbers")
+}
+
+/// Which way a message travelled. Ours to define, so an enum.
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("message_direction")
+}
+
+/// The delivery ladder.
+///
+/// Ours, not Meta's, which is what makes an enum safe here: Meta's status
+/// strings are mapped into this by the webhook parser, and one it does not
+/// recognise is ignored rather than written. PENDING has no Meta equivalent at
+/// all - it means accepted by us and not yet handed over.
+///
+/// The order of the members is documentation. The authority is the rank in
+/// @whatsapp-os/core, which the worker consults before every write, and FAILED
+/// sits above SENT there deliberately - Meta emits `failed` after `sent` for
+/// downstream rejections, so a ladder that ranked it below would drop the
+/// failure and leave a message reading as on-its-way for ever.
+enum MessageStatus {
+  PENDING
+  /// Handed to Meta, and Meta never answered. Not FAILED - we do not know it
+  /// failed; not SENT - we do not know it sent; and deliberately not PENDING,
+  /// because anything that claims work by status would pick it up and send it
+  /// again. There is no wamid, so no callback can ever resolve it: only a
+  /// person can, by looking at WhatsApp. See 20260816120000.
+  UNCONFIRMED
+  /// Meta answered 200 and gave us a wamid, then held the message for quality
+  /// assessment instead of sending it. Written from the send response, never
+  /// from a status callback - Meta reports it on the POST and nowhere else.
+  HELD
+  SENT
+  FAILED
+  DELIVERED
+  READ
+
+  @@map("message_status")
+}
+
+/// How a conversation started. Our categorisation, so an enum.
+enum ConversationSource {
+  INBOUND
+  CAMPAIGN
+  ADS_CLICK_TO_WHATSAPP
+  MANUAL
+
+  @@map("conversation_source")
+}
+
+/// Who refused to deliver a message.
+///
+/// Meta's codes and our own policy's reasons are different namespaces, and
+/// conflating them means a support reply quoting a Graph code Meta never
+/// issued. Only META rows carry error_code.
+enum MessageFailureSource {
+  META
+  POLICY
+
+  @@map("message_failure_source")
+}
+
+/// A WhatsApp user who has messaged this company, or been messaged by it.
+model Contact {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's wa_id: the only stable identity a WhatsApp user has, and the key
+  /// every webhook arrives under.
+  ///
+  /// Matched on rather than phone_e164, because the two are not always the
+  /// same number. Brazil and Mexico have historically differed by a digit
+  /// between the number that messages and the wa_id it arrives as, so matching
+  /// on our normalised form would split one person into two contacts and split
+  /// their 24-hour window with them.
+  waId String @map("wa_id")
+
+  /// E.164 from parsePhone, for display and for Phase 5's audience building.
+  /// Null when wa_id does not parse as a number we recognise - which is not a
+  /// reason to drop the message.
+  phoneE164 String? @map("phone_e164")
+
+  /// The name the contact set on their own profile. Meta sends it on the first
+  /// inbound message of a window and not reliably afterwards, so it is only
+  /// ever written when present and never overwritten with null.
+  profileName String? @map("profile_name")
+  /// A name somebody here typed. Wins over profileName when set.
+  displayName String? @map("display_name")
+
+  /// Set when the contact opts out. STOP handling is Phase 12; the column is
+  /// here now because Phase 5's send queue filters on it, and adding it later
+  /// is a backfill on what will by then be the largest table in the schema.
+  optedOutAt DateTime? @db.Timestamptz(3) @map("opted_out_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([companyId, waId])
+  @@index([companyId, createdAt(sort: Desc)])
+  /// Phase 5 excludes opted-out contacts from every campaign. Composite and
+  /// company-first so that exclusion is a seek and not a scan of the whole
+  /// contact book.
+  @@index([companyId, optedOutAt])
+  @@map("contacts")
+}
+
+/// One contact, on one of the company's numbers.
+model Conversation {
+  id               String @id @default(cuid())
+  companyId        String @map("company_id")
+  contactId        String @map("contact_id")
+  whatsappNumberId String @map("whatsapp_number_id")
+
+  source ConversationSource @default(INBOUND)
+
+  /// When the customer last wrote. The fact the window derives from.
+  lastInboundAt DateTime? @db.Timestamptz(3) @map("last_inbound_at")
+  /// When anything last happened, either direction. What the list sorts on.
+  lastMessageAt DateTime? @db.Timestamptz(3) @map("last_message_at")
+  /// Denormalised so the list renders without touching messages at all.
+  lastMessagePreview String? @map("last_message_preview")
+
+  /// When free-form messaging stops being allowed.
+  ///
+  /// Stored rather than derived from the newest inbound message, for three
+  /// reasons in order of weight: canSend reads one row on the send path, in the
+  /// worker, immediately before a Graph call; the inbox filters and sorts on
+  /// it, and a derived value cannot be indexed; and the rule is not always
+  /// last_inbound_at + 24h - a free-entry-point conversation gets 72h, and Meta
+  /// has moved these boundaries before. Storing it puts the rule in one writer
+  /// instead of every reader.
+  ///
+  /// Advanced with GREATEST(), never assigned. Two inbound messages delivered
+  /// out of order - which Meta does - would otherwise move it backwards and
+  /// close the composer while the window is genuinely open.
+  windowExpiresAt DateTime? @db.Timestamptz(3) @map("window_expires_at")
+
+  unreadCount Int @default(0) @map("unread_count")
+
+  /// Null means nobody has picked it up.
+  assignedUserId String?   @map("assigned_user_id")
+  assignedAt     DateTime? @db.Timestamptz(3) @map("assigned_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact        Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  whatsappNumber WhatsAppNumber @relation(fields: [whatsappNumberId], references: [id], onDelete: Cascade)
+  /// SetNull, not Cascade, and deliberately unlike every other relation in this
+  /// schema: deleting an employee must not delete the conversations they
+  /// handled. The thread is the company's record of what a customer was told.
+  assignedUser   User?          @relation("ConversationsAssigned", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages       Message[]
+
+  /// One thread per contact per number, and the conflict target the inbound
+  /// upsert needs. Without it two deliveries for the same contact arriving
+  /// together both find no conversation and both insert, and the customer ends
+  /// up with two half-threads whose windows disagree.
+  @@unique([companyId, contactId, whatsappNumberId])
+  /// The inbox list.
+  @@index([companyId, lastMessageAt(sort: Desc)])
+  /// canSend, and Phase 9's "windows closing within the hour".
+  @@index([companyId, windowExpiresAt])
+  @@index([companyId, assignedUserId])
+  @@map("conversations")
+}
+
+/// One message, in either direction.
+model Message {
+  id             String @id @default(cuid())
+  companyId      String @map("company_id")
+  conversationId String @map("conversation_id")
+
+  direction MessageDirection
+  status    MessageStatus    @default(PENDING)
+
+  /// Meta's type string, stored as text and never an enum.
+  ///
+  /// The vocabulary is Meta's, not ours - text, image, document, audio, video,
+  /// sticker, location, contacts, interactive, button, order, system, reaction
+  /// - and they add to it without notice. An enum would turn "Meta shipped a
+  /// new message type" into a failed write on an inbound webhook, which is the
+  /// worst place in the system to fail: no user is watching, the delivery
+  /// retries, and the customer's message is lost.
+  ///
+  /// An unrecognised type stores as itself and renders in the thread as an
+  /// unsupported-type placeholder, so the gap is visible and the row survives.
+  type String
+
+  /// Meta's message id. Null on an outbound message until Meta answers, which
+  /// is why the unique below tolerates it: Postgres treats NULLs as distinct,
+  /// so many pending sends coexist and every real wamid is still claimed once.
+  wamid String?
+
+  /// The rendered text. Null for a media message with no caption.
+  body String?
+
+  /// The template as sent, in the same component shape the builder previews and
+  /// the Graph call carries. Stored on the message rather than only referenced,
+  /// because a template edited or deleted later must not rewrite history.
+  templatePayload Json? @map("template_payload")
+
+  /// Why this message is not going to arrive. Only META rows carry errorCode; a
+  /// canSend refusal - the window closed between enqueue and send - writes
+  /// POLICY and a sentence a person can act on.
+  errorSource MessageFailureSource? @map("error_source")
+  errorCode   Int?                  @map("error_code")
+  errorTitle  String?               @map("error_title")
+
+  /// The media this message carries, if any. SetNull, not Cascade: media is
+  /// shared by content hash, so one message being deleted must not take bytes
+  /// the other forty-nine still reference.
+  mediaId String? @map("media_id")
+
+  /// How many times a person has asked for this to be sent again. Part of the
+  /// send job's id, because BullMQ keeps completed job ids for an hour and a
+  /// retry reusing one is silently dropped.
+  sendAttempt Int @default(0) @map("send_attempt")
+
+  /// Who pressed send. Null for inbound and for anything a job originated.
+  sentByUserId String? @map("sent_by_user_id")
+
+  /// The one column the thread orders by, and the reason createdAt is not it.
+  ///
+  /// Inbound carries Meta's own unix-seconds timestamp; outbound is stamped
+  /// when we accept it. createdAt is when our worker inserted the row, and a
+  /// delayed or retried delivery makes the two diverge by minutes - so a thread
+  /// sorted by createdAt shows an order the customer never saw.
+  ///
+  /// Meta's granularity is one second, so ties are real. Every ordered read
+  /// breaks them on id, and the thread index below carries it for that reason.
+  occurredAt DateTime @db.Timestamptz(3) @map("occurred_at")
+
+  deliveredAt DateTime? @db.Timestamptz(3) @map("delivered_at")
+  readAt      DateTime? @db.Timestamptz(3) @map("read_at")
+  failedAt    DateTime? @db.Timestamptz(3) @map("failed_at")
+
+  /// When we wrote the row. Diagnostics only - never an ordering.
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  media        WhatsAppMedia? @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+  /// SetNull for the same reason as Conversation.assignedUser: deleting an
+  /// employee must not delete the messages they sent to customers.
+  sentBy       User?          @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  /// Inbound idempotency. Meta redelivers, and a redelivered message must not
+  /// appear twice in the thread.
+  @@unique([companyId, wamid])
+  /// The thread read, ordered and tie-broken.
+  @@index([companyId, conversationId, occurredAt(sort: Desc), id])
+  /// The send worker claims rows by status.
+  @@index([companyId, status])
+  @@map("messages")
+}
+
+/// Whether the bytes for a piece of media are here.
+///
+/// Ours to define, so an enum. SKIPPED is not a failure: it is the expected
+/// outcome for anything over the size cap, and nothing retries it.
+enum MediaState {
+  PENDING
+  STORED
+  SKIPPED
+  FAILED
+
+  @@map("media_state")
+}
+
+/// Inbound media, stored by content hash.
+///
+/// Meta's media URLs expire in minutes and need the access token, so storing
+/// the URL means broken images tomorrow. The bytes are fetched on receipt.
+///
+/// ---------------------------------------------------------------------------
+/// Content-addressed, and scoped per company
+/// ---------------------------------------------------------------------------
+///
+/// Keyed on the sha256 rather than on Meta's media id: the same image forwarded
+/// to fifty contacts arrives as fifty media ids and one hash, and storing it
+/// fifty times is fifty downloads and fifty copies in every backup.
+///
+/// The unique is (company_id, sha256) and deliberately NOT sha256 alone.
+/// Deduplicating across tenants is the obvious optimisation and the reason to
+/// refuse it is a tenancy argument rather than a technical one: it would make
+/// one company's storage cost depend on another's traffic, it would produce a
+/// row two companies jointly own - so deleting one company's data would either
+/// take the other's bytes or leave them holding a row they cannot account for -
+/// and it would let a company learn, by timing, that another tenant already
+/// holds a file it is uploading.
+///
+/// ---------------------------------------------------------------------------
+/// Where the bytes live, and for how long
+/// ---------------------------------------------------------------------------
+///
+/// In Postgres, behind MediaStore in packages/db/src/media-store.ts. That is a
+/// decision with a named expiry: it inflates every pg_dump and every base
+/// backup, so it is revisited when the table passes a few GB. storage_backend
+/// and storage_key exist from this first migration so that moving to object
+/// storage is a value change and a backfill, not a schema redesign.
+model WhatsAppMedia {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's hash of the content, which is also our identity for it. Available
+  /// from GET /{media-id} before any transfer, so a duplicate costs one
+  /// metadata call and no download at all.
+  sha256 String
+
+  /// Meta's vocabulary, so text and not an enum - the same test message.type
+  /// answers. Meta forwards whatever the sending handset produced, including
+  /// types this build has never seen, and a mime type it does not recognise
+  /// must store as itself rather than fail the write that carried it.
+  mimeType String @map("mime_type")
+
+  fileName String? @map("file_name")
+
+  /// What Meta said the file is, in bytes. Recorded even when the bytes were
+  /// not stored, because the thread renders "6.2 MB, not stored" and needs the
+  /// number. A CHECK constraint ties it to octet_length(bytes) when bytes are
+  /// present, so the metadata cannot disagree with the content.
+  byteSize Int @map("byte_size")
+
+  state MediaState @default(PENDING)
+
+  /// Why there are no bytes. 'over_max_size' is the expected one and is not an
+  /// error: the thread shows the reason and the file name, the webhook that
+  /// carried it still succeeds, and nothing retries.
+  skippedReason String? @map("skipped_reason")
+
+  /// Which MediaStore implementation holds the bytes. Present from the first
+  /// migration so that adding 's3' later is a value, not a schema change.
+  storageBackend String @default("postgres") @map("storage_backend")
+  /// The backend's own handle. Null for 'postgres', where the bytes are below.
+  storageKey String? @map("storage_key")
+
+  /// Null unless storage_backend is 'postgres'.
+  ///
+  /// STORAGE EXTERNAL is set in the migration and is load-bearing rather than a
+  /// micro-optimisation: the read path slices this column with substring() to
+  /// stream it, and under the default EXTENDED the value is compressed, so a
+  /// slice has to decompress from the start and the streaming is a fiction.
+  /// JPEG, MP4 and PDF do not compress anyway.
+  ///
+  /// A CHECK constraint caps it at 5 MiB. The cap is enforced during the
+  /// download - the fetch is aborted the moment the running byte count crosses
+  /// the limit - because checking a content-length header trusts a remote value
+  /// and checking after the fact means a 200 MB response was already resident
+  /// in the worker. The constraint is the backstop for both, in the same spirit
+  /// as validating a file type by magic bytes rather than by its extension.
+  bytes Bytes?
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([companyId, sha256])
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([companyId, state])
+  @@map("whatsapp_media")
+}
+
+/// One POST from Meta, as received.
+///
+/// Three jobs, and only the third makes it unavoidable:
+///
+///   1. Idempotency for the kinds of delivery that have no natural key. The
+///      wamid unique covers messages; a status callback has no id of its own
+///      and a template or quality update has nothing at all, so a redelivery
+///      would re-run the media download and re-record conversation usage.
+///   2. The only forensic record in the phase. "The customer says they replied
+///      and it is not in the inbox" is unanswerable without the raw delivery.
+///   3. It gives the route handler something to do that is ONE statement.
+///      Deriving a key by parsing the payload would put the parse inside the
+///      five seconds Meta allows before it retries.
+model WhatsAppWebhookEvent {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// sha256 of the raw body. Meta redelivers byte-identically, so this is an
+  /// exact "seen before" without parsing anything.
+  deliveryKey String @map("delivery_key")
+
+  /// The body as received, as text - not parsed jsonb.
+  ///
+  /// The signature was computed over these exact bytes, so this is the only
+  /// form that can be re-verified later, which is the whole point of keeping
+  /// it. jsonb would reorder keys and normalise numbers, and the record would
+  /// then prove nothing about what Meta actually sent. Parse on read when
+  /// debugging.
+  ///
+  /// Capped at 64 KiB, which is generous for Meta - a large batch of statuses
+  /// is a few KB. One strange delivery must not bloat the table.
+  payload String
+
+  /// Set when the payload was too large to keep whole. The prefix is still
+  /// stored and is still useful for debugging, but it can no longer be
+  /// signature-verified, which is worth knowing before trying.
+  payloadTruncated Boolean @default(false) @map("payload_truncated")
+
+  /// How many times Meta has delivered this exact body.
+  ///
+  /// Part of the processing job's id. BullMQ keeps failed job ids for a day,
+  /// so re-enqueueing a recovery with the id the first attempt used would be
+  /// silently dropped - the same trap as Message.sendAttempt.
+  deliveryCount Int @default(1) @map("delivery_count")
+
+  /// Null until the worker has finished with it.
+  ///
+  /// Load-bearing in two directions. It is what separates "already recorded"
+  /// from "already processed", so a redelivery of an event whose job was lost
+  /// is re-enqueued rather than discarded. And it is the only thing that makes
+  /// a silent failure visible: events older than a few minutes with
+  /// processed_at still null are work that vanished, which is a one-line
+  /// health check and what Phase 9's dashboard will read.
+  processedAt DateTime? @db.Timestamptz(3) @map("processed_at")
+
+  /// Why nothing was done with it. 'company_deactivated' is the one that is not
+  /// an error - the resolver deliberately answers for a suspended company, and
+  /// the refusal happens here instead.
+  skippedReason String? @map("skipped_reason")
+  error         String?
+
+  /// When Meta's delivery arrived. Also what the retention prune reads.
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, deliveryKey])
+  /// The retention prune, and the operator's "what arrived recently".
+  @@index([companyId, createdAt(sort: Desc)])
+  /// The unprocessed backlog, which is the health check.
+  @@index([companyId, processedAt])
+  @@map("whatsapp_webhook_events")
+}
+
+/// Why a delivery could not be accepted. Ours to define, so an enum.
+enum UnroutableReason {
+  /// The path segment matches no WhatsApp integration. A rotated key, a stale
+  /// Meta config, or somebody probing.
+  UNKNOWN_KEY
+  /// The key resolves but X-Hub-Signature-256 did not verify. Usually a stale
+  /// app secret on a real tenant; sometimes a forgery.
+  BAD_SIGNATURE
+
+  @@map("unroutable_reason")
+}
+
+/// Deliveries that arrived and could not be accepted.
+///
+/// Global on purpose: an unknown key has no company to attribute the row to,
+/// which is the whole reason this table is separate from
+/// whatsapp_webhook_events. Listed in GLOBAL_TABLES with that reason.
+///
+/// Attacker-writable, and bounded accordingly - see the migration. One row per
+/// key hash with a counter, never one row per request, and the real bound is
+/// the per-IP throttle in front of it.
+model UnroutableWebhook {
+  id String @id @default(cuid())
+
+  /// sha256 of the path segment, not the segment itself.
+  ///
+  /// For BAD_SIGNATURE this is a real tenant's live webhook key, and this table
+  /// is readable by the platform admin rather than by the tenant. Storing the
+  /// hash means an operator can correlate reports without the table becoming a
+  /// list of working webhook URLs.
+  webhookKeyHash String @unique @map("webhook_key_hash")
+
+  reason UnroutableReason
+
+  /// Null for UNKNOWN_KEY, which by definition resolves to no company.
+  /// Populated for BAD_SIGNATURE, because "every delivery to this tenant is
+  /// failing verification" is only actionable if you can say whose.
+  companyId String? @map("company_id")
+
+  /// Hash of the most recent source address. Not a history - the throttle
+  /// bounds abuse, this only helps an operator tell one persistent source from
+  /// scattered noise.
+  lastIpHash String? @map("last_ip_hash")
+
+  attemptCount Int      @default(1) @map("attempt_count")
+  firstSeenAt  DateTime @db.Timestamptz(3) @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime @db.Timestamptz(3) @default(now()) @map("last_seen_at")
+
+  /// SetNull, not Cascade: deleting a company should not erase the evidence
+  /// that something was still posting to its old webhook.
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  /// The retention prune, and the operator's "what is failing now".
+  @@index([lastSeenAt(sort: Desc)])
+  @@index([companyId, lastSeenAt(sort: Desc)])
+  @@map("unroutable_webhooks")
 }
 
 /// One countable thing that happened, priced at the moment it happened.
@@ -423,6 +1081,114 @@ model IntegrationVerification {
 /// (kind, currency, version), so a kind that nothing has priced does not
 /// compile. A second list in the database could only disagree with it. Every
 /// write goes through recordUsage(), which takes the union.
+/// A message template, in the exact shape Meta was given.
+///
+/// -----------------------------------------------------------------------
+/// `components` is jsonb and is the submission, not a rendering of it
+/// -----------------------------------------------------------------------
+///
+/// Decision 10. The Studio's preview and the Graph POST read this one value,
+/// so what a tenant approved on screen cannot drift from what Meta received.
+/// Storing a normalised header/body/footer/buttons split instead would mean
+/// two assemblies of the same thing - one for the preview, one for the wire -
+/// and the day they disagree is the day somebody's customer gets a message
+/// nobody reviewed.
+///
+/// It is Meta's schema, not ours, which is the other half of the argument: the
+/// component vocabulary is theirs to extend, and a column per field would need
+/// a migration every time they add one.
+model WhatsAppTemplate {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  /// Which WABA it lives under. Meta scopes templates to the business account.
+  integrationId String @map("integration_id")
+
+  /// lowercase_snake_case, as Meta requires. Slugified in the Studio, not here.
+  name     String
+  /// Meta's locale code, e.g. en_US. Text: the list is long and theirs.
+  language String
+
+  /// MARKETING, UTILITY or AUTHENTICATION - and text rather than an enum for
+  /// the usual reason, plus a sharper one. Meta RE-CATEGORISES templates whose
+  /// wording it reads as promotional, so the value here can change to something
+  /// the tenant did not choose, and the price changes with it. A write that
+  /// rejected an unfamiliar category would drop exactly that news.
+  category String
+
+  /// The components array, byte-for-byte what was POSTed.
+  components Json
+
+  /// Meta's vocabulary: PENDING, APPROVED, REJECTED, PAUSED, DISABLED,
+  /// IN_APPEAL - and whatever they add next, which must render as itself.
+  status String @default("PENDING")
+
+  /// Meta's id, once it accepts the submission. Null until then, which is what
+  /// distinguishes "never submitted" from "submitted and waiting".
+  metaTemplateId String? @map("meta_template_id")
+
+  /// Meta's own words for why it said no, stored verbatim. Paraphrasing it
+  /// would put our sentence in front of the person who has to act on theirs.
+  rejectedReason String? @map("rejected_reason")
+
+  /// When Meta last told us anything about this template.
+  statusUpdatedAt DateTime? @db.Timestamptz(3) @map("status_updated_at")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  /// SetNull, like every other authorship column here: deleting an employee
+  /// must not delete the template their colleagues are sending.
+  createdBy   User?       @relation("TemplatesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  edits       WhatsAppTemplateEdit[]
+
+  /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
+  @@unique([companyId, name, language])
+  @@index([companyId, updatedAt(sort: Desc)])
+  @@index([companyId, status])
+  @@map("whatsapp_templates")
+}
+
+/// One edit, appended. Never updated, never deleted.
+///
+/// -----------------------------------------------------------------------
+/// The quota is DERIVED from these rows, and there is no counter column
+/// -----------------------------------------------------------------------
+///
+/// A counter is a second source of truth for something the rows already say,
+/// and it is wrong the first time a write half-fails. Counting is cheap at this
+/// cardinality - a template is edited a handful of times in a month, and the
+/// index below makes the window a seek.
+///
+/// R8: what that count produces is a FLOOR, not the quota. Meta counts edits
+/// made in Business Manager too, and those never reach this table. The Studio
+/// labels it "edits made here" for that reason, and the Edit button is never
+/// the enforcement - submitting attempts it and decodes Meta's refusal.
+model WhatsAppTemplateEdit {
+  id         String @id @default(cuid())
+  companyId  String @map("company_id")
+  templateId String @map("template_id")
+
+  /// The components as submitted by THIS edit, so the log is a history of what
+  /// was actually sent rather than a list of timestamps.
+  components Json
+
+  editedByUserId String? @map("edited_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template WhatsAppTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  editedBy User?            @relation("TemplateEdits", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  /// The window count: every read is "edits to this template since T".
+  @@index([companyId, templateId, createdAt(sort: Desc)])
+  @@map("whatsapp_template_edits")
+}
+
 model UsageEvent {
   id        String @id @default(cuid())
   companyId String @map("company_id")
@@ -472,7 +1238,7 @@ model UsageEvent {
 
   /// When it happened, which is not always when it was written - a retried job
   /// records the original moment.
-  occurredAt DateTime @default(now()) @map("occurred_at")
+  occurredAt DateTime @db.Timestamptz(3) @default(now()) @map("occurred_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -527,8 +1293,8 @@ model LoginAttempt {
   /// How many times this pair has been locked out. Drives exponential backoff,
   /// and is NOT reset by a successful sign-in - only failureCount is.
   lockoutCount  Int       @default(0) @map("lockout_count")
-  lockedUntil   DateTime? @map("locked_until")
-  lastFailureAt DateTime  @default(now()) @map("last_failure_at")
+  lockedUntil   DateTime? @db.Timestamptz(3) @map("locked_until")
+  lastFailureAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_failure_at")
 
   @@unique([scope, username, ip])
   @@index([lockedUntil])
@@ -540,6 +1306,14 @@ enum LoginScope {
   ADMIN
   /// Reset-link requests, throttled per email and per address.
   PASSWORD_RESET
+  /// Inbound webhook deliveries that did not resolve or did not verify.
+  ///
+  /// Keyed on the source address with a sentinel in `username`, the way
+  /// signup throttling already is - never on the webhook key. Throttling per
+  /// key would let anyone who learns a tenant's URL flood it until the key is
+  /// locked out, at which point genuine Meta deliveries are refused and Meta
+  /// disables the subscription. See the migration.
+  WEBHOOK
 
   @@map("login_scope")
 }
@@ -553,9 +1327,9 @@ model AdminUser {
   id           String    @id @default(cuid())
   username     String    @unique
   passwordHash String    @map("password_hash")
-  lastLoginAt  DateTime? @map("last_login_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastLoginAt  DateTime? @db.Timestamptz(3) @map("last_login_at")
+  createdAt    DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  updatedAt    DateTime @db.Timestamptz(3)  @updatedAt @map("updated_at")
 
   sessions AdminSession[]
   auditLogs AdminAuditLog[]
@@ -575,10 +1349,10 @@ model AdminSession {
 
   ipHash     String?   @map("ip_hash")
   userAgent  String?   @map("user_agent")
-  createdAt  DateTime  @default(now()) @map("created_at")
-  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime @db.Timestamptz(3)  @default(now()) @map("created_at")
+  lastSeenAt DateTime @db.Timestamptz(3)  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime @db.Timestamptz(3)  @map("expires_at")
+  revokedAt  DateTime? @db.Timestamptz(3) @map("revoked_at")
 
   adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
 
@@ -604,7 +1378,7 @@ model AdminRepairRun {
 
   /// How many companies were enqueued when the run started.
   totalCompanies Int      @map("total_companies")
-  startedAt      DateTime @default(now()) @map("started_at")
+  startedAt      DateTime @db.Timestamptz(3) @default(now()) @map("started_at")
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
 
@@ -621,7 +1395,7 @@ model AdminAuditLog {
   action    String
   ip        String?
   metadata  Json?
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
 

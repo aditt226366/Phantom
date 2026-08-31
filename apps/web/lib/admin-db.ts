@@ -445,6 +445,39 @@ export interface PlatformOverview {
    */
   unpricedThisMonth: number;
   planDistribution: Array<{ plan: Plan; count: number }>;
+  /**
+   * Webhook deliveries that reached us and could not be routed, last 7 days.
+   *
+   * P6: operator visibility is a commit rather than a claim. These rows have
+   * existed since 4a and were readable only by querying the table, which means
+   * a misconfigured tenant was invisible to the person whose job is noticing.
+   *
+   * The count is DISTINCT KEYS, not deliveries. The table aggregates per
+   * webhook key - one row, an attemptCount, and a lastSeenAt - so a row is one
+   * misconfiguration and its attempts are how loudly it is failing. An operator
+   * acts on the first number; the second only says how urgent it is, and is
+   * carried alongside rather than instead.
+   *
+   * Split by reason because they are different problems with different
+   * remedies, and a single total would average them into neither:
+   *
+   *   unknownKey    the path matches no integration - a rotated key, a stale
+   *                 Meta config, or somebody probing. Nobody's messages are
+   *                 arriving, and the tenant may not know.
+   *   badSignature  the key resolves but the signature did not verify. Almost
+   *                 always a stale app secret on a REAL tenant, which is a
+   *                 support call waiting to happen; occasionally a forgery.
+   *
+   * Windowed at 7 days rather than all-time. An all-time count only ever rises,
+   * so it stops being a signal the first time anything goes wrong - what an
+   * operator needs is "is this happening now".
+   */
+  unroutableThisWeek: {
+    unknownKey: number;
+    badSignature: number;
+    /** Deliveries behind those keys. How loud, rather than how many. */
+    attempts: number;
+  };
 }
 
 /**
@@ -460,7 +493,10 @@ export async function getPlatformOverview(
   const dayStart = startOfPlatformDay(now);
   const monthStart = startOfPlatformMonth(now);
 
-  const [companies, users, callsToday, spend, plans] = await Promise.all([
+  const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  const [companies, users, callsToday, spend, plans, unroutable] =
+    await Promise.all([
     adminPrisma.company.groupBy({
       by: ["deactivatedAt"],
       _count: { _all: true },
@@ -474,7 +510,22 @@ export async function getPlatformOverview(
       _count: { _all: true },
     }),
     adminPrisma.company.groupBy({ by: ["plan"], _count: { _all: true } }),
+    /* Grouped rather than two counts: one round trip, and the reasons cannot
+       drift apart by being windowed differently. */
+    /* Grouped rather than several counts: one round trip, and the reasons
+       cannot drift apart by being windowed differently. Windowed on lastSeenAt
+       because that is "is this still happening", which is the question - a key
+       that failed all last month and stopped is not today's problem. */
+    adminPrisma.unroutableWebhook.groupBy({
+      by: ["reason"],
+      where: { lastSeenAt: { gte: weekStart } },
+      _count: { _all: true },
+      _sum: { attemptCount: true },
+    }),
   ]);
+
+  const unroutableFor = (reason: string): number =>
+    unroutable.find((row) => row.reason === reason)?._count?._all ?? 0;
 
   const active = companies
     .filter((row) => row.deactivatedAt === null)
@@ -507,6 +558,14 @@ export async function getPlatformOverview(
     planDistribution: plans
       .map((row) => ({ plan: row.plan, count: row._count._all }))
       .sort((a, b) => a.plan.localeCompare(b.plan)),
+    unroutableThisWeek: {
+      unknownKey: unroutableFor("UNKNOWN_KEY"),
+      badSignature: unroutableFor("BAD_SIGNATURE"),
+      attempts: unroutable.reduce(
+        (total, row) => total + (row._sum?.attemptCount ?? 0),
+        0,
+      ),
+    },
   };
 }
 

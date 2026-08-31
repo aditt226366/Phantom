@@ -4,7 +4,7 @@ import {
   listIntegrations,
   saveIntegrationSecrets,
 } from "@/lib/admin-db";
-import { secretAad } from "@whatsapp-os/core";
+import { integrationFields, secretAad } from "@whatsapp-os/core";
 import { createCompany, newCompanyId, withCompany } from "@whatsapp-os/db";
 import pg from "pg";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -113,28 +113,48 @@ describe("saving credentials", () => {
      * Blank means unchanged. An operator rotating one credential cannot
      * re-type the other three, because the panel never shows them.
      */
-    const first = await saveIntegrationSecrets(companyId, "WHATSAPP_CLOUD", {
+    /*
+     * Derived from the registry rather than listed. This assertion was three
+     * hard-coded key names and broke the moment WHATSAPP_APP_SECRET was added -
+     * correctly, but the failure said nothing about what had changed. Adding
+     * the next credential should not require editing an expectation here.
+     */
+    const whatsappKeys = integrationFields("WHATSAPP_CLOUD").map((f) => f.key);
+    const rotatedKey = "WHATSAPP_ACCESS_TOKEN";
+
+    /* The keys later assertions name. Anything else gets a generated value. */
+    const NAMED_VALUES: Record<string, string> = {
       WHATSAPP_PHONE_NUMBER_ID: PHONE_ID,
       WHATSAPP_BUSINESS_ACCOUNT_ID: BUSINESS_ID,
       WHATSAPP_ACCESS_TOKEN: TOKEN,
       WHATSAPP_VERIFY_TOKEN: VERIFY,
-    });
+    };
+
+    const everything = Object.fromEntries(
+      whatsappKeys.map((key) => [
+        key,
+        NAMED_VALUES[key] ?? `${key.toLowerCase()}-fixture-value`,
+      ]),
+    );
+
+    const first = await saveIntegrationSecrets(
+      companyId,
+      "WHATSAPP_CLOUD",
+      everything,
+    );
 
     const rotated = "EAAGm0PX4ZCpsBO7ZBxRotatedAccessToken77";
-    const second = await saveIntegrationSecrets(companyId, "WHATSAPP_CLOUD", {
-      WHATSAPP_PHONE_NUMBER_ID: "",
-      WHATSAPP_BUSINESS_ACCOUNT_ID: "",
-      WHATSAPP_ACCESS_TOKEN: rotated,
-      WHATSAPP_VERIFY_TOKEN: "",
-    });
+    const second = await saveIntegrationSecrets(
+      companyId,
+      "WHATSAPP_CLOUD",
+      Object.fromEntries(
+        whatsappKeys.map((key) => [key, key === rotatedKey ? rotated : ""]),
+      ),
+    );
 
     expect(second.integrationId).toBe(first.integrationId);
-    expect(second.saved).toEqual(["WHATSAPP_ACCESS_TOKEN"]);
-    expect(second.unchanged).toEqual([
-      "WHATSAPP_PHONE_NUMBER_ID",
-      "WHATSAPP_BUSINESS_ACCOUNT_ID",
-      "WHATSAPP_VERIFY_TOKEN",
-    ]);
+    expect(second.saved).toEqual([rotatedKey]);
+    expect(second.unchanged).toEqual(whatsappKeys.filter((k) => k !== rotatedKey));
 
     const id = second.integrationId;
     expect(

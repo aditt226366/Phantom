@@ -32,6 +32,8 @@ import {
   endAdminSession,
   getAdminSession,
 } from "@/lib/auth/admin-session";
+import { evictWebhookSecrets } from "@/lib/webhook-secrets.ts";
+import { applyVerificationEffects } from "@whatsapp-os/core";
 import { requestContext } from "@/lib/auth/request";
 import { safeNextPath } from "@/lib/auth/safe-next";
 
@@ -111,6 +113,17 @@ export async function saveIntegrationAction(
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
 
+  /*
+   * Beside the revalidate, and for the same reason: something is holding a
+   * stale copy of what just changed. The page holds a rendered badge; this
+   * process holds a decrypted app secret, and a rotated secret that keeps
+   * failing signatures for another minute reads exactly like a save that did
+   * not work.
+   *
+   * Reaches THIS instance only. Others converge when their entries expire.
+   */
+  evictWebhookSecrets(companyId);
+
   const saved =
     result.saved.length === 0
       ? "Nothing changed."
@@ -162,6 +175,33 @@ async function runVerification(
     },
   });
 
+  /*
+   * Everything that follows a successful verification lives in one place, so
+   * this path and the worker's cannot drift. They did, and invisibly: commit 21
+   * put the numbers refresh in the worker job only, and this - the button an
+   * operator actually presses - never triggered it, so whatsapp_numbers stayed
+   * empty and every inbound message was skipped as unknown_phone_number_id.
+   *
+   * A timestamp for the token, because the id must be unique per verification
+   * rather than per company (R2): a stable one would make the second Save &
+   * Verify inside BullMQ's retention window a silent no-op, which is exactly
+   * the press somebody makes after fixing a credential.
+   */
+  await applyVerificationEffects(
+    {
+      companyId,
+      verified: result?.ok === true,
+      token: String(Date.now()),
+    },
+    {
+      enqueue: (name, data, options) => systemQueue.add(name, data, options),
+      onWarn: (message, fields) =>
+        console.warn(`[verification] ${message}`, fields),
+    },
+  );
+
+  /* Revalidated after the effects, so a refresh enqueued above is already in
+     flight by the time the page re-renders. */
   revalidatePath(`/admin/companies/${companyId}/integrations`);
 
   if (!result) {
@@ -224,6 +264,9 @@ export async function disconnectIntegrationAction(
   });
 
   revalidatePath(`/admin/companies/${companyId}/integrations`);
+  /* Otherwise a disconnected integration keeps verifying deliveries from cache
+     for up to the TTL. */
+  evictWebhookSecrets(companyId);
   redirect(`/admin/companies/${companyId}/integrations`);
 }
 

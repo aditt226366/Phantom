@@ -33,12 +33,29 @@ import { prisma } from "./client.ts";
  * sites in the codebase.
  */
 
+/**
+ * "webhook" is the odd one out, in a way worth knowing before using it.
+ *
+ * Every other kind asks "may this person act", and refuses a deactivated
+ * company. That one asks "did this third party tell us something true", and
+ * resolves for a deactivated company on purpose — Meta disables a subscription
+ * that fails for about a week, so refusing here would silently cost the tenant
+ * their webhook and every message sent while they were suspended. The refusal
+ * belongs in the worker, which records the delivery and declines to act.
+ *
+ * It also matches only WHATSAPP_CLOUD integrations. Every integration has a
+ * webhook_key, including Sheets and Ads, and resolving one of those would open
+ * the right company and then fail looking for credentials never stored.
+ *
+ * See 20260815120000_resolve_company_by_webhook.
+ */
 export type ResolveKind =
   | "username"
   | "email"
   | "session"
   | "verification"
-  | "password_reset";
+  | "password_reset"
+  | "webhook";
 
 export async function resolveCompany(
   kind: ResolveKind,

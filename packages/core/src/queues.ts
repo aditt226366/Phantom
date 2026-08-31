@@ -30,6 +30,13 @@ export const JOB_NAMES = {
   PING: "system.ping",
   INTEGRATION_VERIFY: "integration.verify",
   VAULT_RESEAL: "vault.reseal",
+  WHATSAPP_WEBHOOK: "whatsapp.webhook",
+  WHATSAPP_MESSAGE_SEND: "whatsapp.message.send",
+  WHATSAPP_MARK_READ: "whatsapp.mark.read",
+  WHATSAPP_MEDIA_FETCH: "whatsapp.media.fetch",
+  WHATSAPP_NUMBERS_REFRESH: "whatsapp.numbers.refresh",
+  WHATSAPP_TEMPLATE_SUBMIT: "whatsapp.template.submit",
+  WHATSAPP_TEMPLATE_SYNC: "whatsapp.template.sync",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -72,6 +79,158 @@ export const vaultResealJobSchema = z.object({
 export type VaultResealJob = z.infer<typeof vaultResealJobSchema>;
 
 /**
+ * Process one recorded webhook delivery.
+ *
+ * Carries the event id rather than the payload: the body is already stored
+ * verbatim, and putting it in the job too would duplicate every inbound
+ * message into Redis - including the ones over the size cap.
+ */
+export const whatsappWebhookJobSchema = z.object({
+  companyId: z.string().min(1),
+  eventId: z.string().min(1),
+});
+
+export type WhatsAppWebhookJob = z.infer<typeof whatsappWebhookJobSchema>;
+
+/** Hand one already-persisted message to Meta. */
+export const whatsappMessageSendJobSchema = z.object({
+  companyId: z.string().min(1),
+  messageId: z.string().min(1),
+  /**
+   * Which attempt this is, mirroring messages.send_attempt.
+   *
+   * Part of the job id, because BullMQ keeps completed and failed ids for
+   * hours - a retry re-enqueued under the first attempt's id is silently
+   * dropped and the button appears to do nothing.
+   */
+  sendAttempt: z.number().int().min(0),
+});
+
+export type WhatsAppMessageSendJob = z.infer<typeof whatsappMessageSendJobSchema>;
+
+/**
+ * The job id for a send, naming the attempt as well as the message.
+ *
+ * R2, and the reason `sendAttempt` exists on the row at all. BullMQ keeps
+ * completed job ids for an hour and failed ones for a day, and refuses a job
+ * whose id it already holds - silently, because for every other job in this
+ * system that refusal IS the deduplication. A retry re-enqueued under the first
+ * attempt's id is therefore dropped without an error anywhere, and the button
+ * the operator pressed appears to do nothing at all.
+ *
+ * So the attempt is in the id. Retrying message X for the second time is a
+ * different job from sending it the first, which is the truth of it: the send
+ * job runs with attempts: 1, so every subsequent try is a person deciding to
+ * send again rather than a queue retrying on its own.
+ */
+export function sendJobId(messageId: string, sendAttempt: number): string {
+  return `send:${messageId}:${sendAttempt}`;
+}
+
+export const whatsappMarkReadJobSchema = z.object({
+  companyId: z.string().min(1),
+  conversationId: z.string().min(1),
+});
+
+export type WhatsAppMarkReadJob = z.infer<typeof whatsappMarkReadJobSchema>;
+
+/**
+ * The job id for a read receipt, keyed on the thread AND the message.
+ *
+ * Opening a thread three times must not tell Meta three times. BullMQ refuses a
+ * job whose id it already holds, so the id is the deduplication - and it has to
+ * name the message, not just the conversation: keyed on the conversation alone,
+ * a genuinely new message arriving after the first open would be silently
+ * dropped as a duplicate and never marked read at all.
+ *
+ * The message id rather than the wamid, because the enqueue site has ours in
+ * hand and does not need a second lookup for Meta's.
+ *
+ * Dedup here is a burst guard, not a permanent record: BullMQ keeps completed
+ * ids for an hour. The rule that stops the steady-state noise is upstream -
+ * readReceiptTarget returns null when nothing is unread, so re-opening a thread
+ * that is already read enqueues nothing at all.
+ */
+export function markReadJobId(conversationId: string, messageId: string): string {
+  return `read:${conversationId}:${messageId}`;
+}
+
+export const whatsappMediaFetchJobSchema = z.object({
+  companyId: z.string().min(1),
+  messageId: z.string().min(1),
+  /** Meta's media id. Its download URL expires in minutes. */
+  metaMediaId: z.string().min(1),
+});
+
+export type WhatsAppMediaFetchJob = z.infer<typeof whatsappMediaFetchJobSchema>;
+
+/** Read every template Meta holds for this WABA and adopt the unknown ones. */
+export const whatsappTemplateSyncJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type WhatsAppTemplateSyncJob = z.infer<typeof whatsappTemplateSyncJobSchema>;
+
+/** Hand one already-persisted template to Meta. */
+export const whatsappTemplateSubmitJobSchema = z.object({
+  companyId: z.string().min(1),
+  templateId: z.string().min(1),
+});
+
+export type WhatsAppTemplateSubmitJob = z.infer<
+  typeof whatsappTemplateSubmitJobSchema
+>;
+
+/**
+ * The job id for a submission, naming the attempt.
+ *
+ * The same reasoning as sendJobId (R2): BullMQ keeps completed ids for an hour
+ * and refuses a job whose id it already holds, silently. A resubmit after a
+ * rejection re-enqueued under the first attempt's id would be dropped and the
+ * Fix-and-resubmit button would look dead.
+ *
+ * Unlike a send, a repeat here is safe - Meta refuses a duplicate name rather
+ * than creating a second template - so this is about the button working, not
+ * about a message reaching a customer twice.
+ */
+export function templateSubmitJobId(templateId: string, attempt: number): string {
+  return `template:${templateId}:${attempt}`;
+}
+
+export const whatsappNumbersRefreshJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type WhatsAppNumbersRefreshJob = z.infer<
+  typeof whatsappNumbersRefreshJobSchema
+>;
+
+/**
+ * The send job runs ONCE. Everything else keeps the default five attempts.
+ *
+ * Meta's /messages endpoint has no idempotency key and no "did this land"
+ * lookup. A timeout after Meta processed the request is indistinguishable from
+ * a timeout before it did, so an automatic retry sends a real customer the
+ * same message a second time - the worst failure this phase can produce, and
+ * one that cannot be un-sent.
+ *
+ * Read that as an oversight and "fixing" it back to five is a data-integrity
+ * regression, which is why it is written here rather than left to the call
+ * site.
+ *
+ * The narrower danger is worth stating, because it shapes the UI: only the
+ * AMBIGUOUS outcome is unsafe. A structured error from Meta proves the message
+ * was not sent, and those are surfaced in the failed bubble as explicitly
+ * retryable with Meta's own reason - see SendRefused in whatsapp/graph.ts. It
+ * is the timeouts that get no automatic second chance and a person deciding.
+ */
+export const SEND_JOB_OPTIONS = {
+  attempts: 1,
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 24 * 3_600 },
+} as const;
+
+/**
  * Registry mapping each job name to the schema that validates its payload.
  * The worker looks the schema up by job name, so adding a job means adding one
  * entry here and one handler - the wiring is not duplicated.
@@ -80,6 +239,13 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.PING]: pingJobSchema,
   [JOB_NAMES.INTEGRATION_VERIFY]: integrationVerifyJobSchema,
   [JOB_NAMES.VAULT_RESEAL]: vaultResealJobSchema,
+  [JOB_NAMES.WHATSAPP_WEBHOOK]: whatsappWebhookJobSchema,
+  [JOB_NAMES.WHATSAPP_MESSAGE_SEND]: whatsappMessageSendJobSchema,
+  [JOB_NAMES.WHATSAPP_MARK_READ]: whatsappMarkReadJobSchema,
+  [JOB_NAMES.WHATSAPP_MEDIA_FETCH]: whatsappMediaFetchJobSchema,
+  [JOB_NAMES.WHATSAPP_NUMBERS_REFRESH]: whatsappNumbersRefreshJobSchema,
+  [JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT]: whatsappTemplateSubmitJobSchema,
+  [JOB_NAMES.WHATSAPP_TEMPLATE_SYNC]: whatsappTemplateSyncJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

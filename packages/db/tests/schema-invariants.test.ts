@@ -1,6 +1,18 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { testDatabaseUrl } from "../scripts/db-urls.mjs";
+import { COMPANY_SCOPED_MODELS } from "../src/with-company.ts";
+import {
+  COLUMN_GRANTS,
+  OUT_OF_BAND_DDL,
+  RESOLVER_TABLE_GRANTS,
+  checkColumnGrants,
+  checkOutOfBandDdl,
+  checkResolverTableGrants,
+} from "../scripts/invariants.mjs";
 
 /**
  * Rule 1 of CLAUDE.md, enforced by the database rather than by memory.
@@ -47,6 +59,14 @@ const GLOBAL_TABLES = new Set<string>([
    * progress is derived from integration_verifications instead.
    */
   "admin_repair_runs",
+  /*
+   * An unknown webhook key resolves to no company, so there is nothing to
+   * attribute the row to - which is the whole reason this is not part of
+   * whatsapp_webhook_events. Written by an unauthenticated endpoint, read only
+   * by the platform admin, and app_runtime's default grants are revoked in the
+   * migration.
+   */
+  "unroutable_webhooks",
 ]);
 
 /** Global tables holding admin credentials. app_runtime gets nothing here. */
@@ -57,36 +77,38 @@ const ADMIN_TABLES = [
   "admin_repair_runs",
 ];
 
+
+
+
 /**
- * Tables where app_resolver still holds a *whole-table* SELECT grant.
+ * Tenant-owned models deliberately absent from COMPANY_SCOPED_MODELS.
  *
- * app_resolver answers one question — "which company does this opaque key
- * belong to" — from outside every company context, running SECURITY DEFINER.
- * The entire argument for giving it that reach is that it can see almost
- * nothing, and a whole-table grant is how that stops being true without anyone
- * deciding it: companies was granted whole-table so that app_available_slug()
- * could read `slug`, and `deactivated_at` was consequently readable by the
- * resolver before any migration granted it.
- *
- * companies has since been narrowed to three columns and is deliberately
- * absent below. These four have the same shape of problem and are listed
- * rather than fixed, because each needs its own reading of which columns the
- * lookup functions touch and bundling four narrowings into one migration is
- * how one of them goes wrong quietly.
- *
- * Listing them is the point. Narrowing one is a shrinking diff in a security
- * test; granting a new one is a widening diff in the same place. Neither is
- * a comment in a migration nobody reads again.
+ * Membership of that set is what injects company_id on create and merges it
+ * into every where. Absence is not a hole — RLS still refuses the cross-company
+ * read — but it is defence in depth switched off, so each exemption carries a
+ * reason rather than being an oversight nobody noticed.
  */
-const RESOLVER_TABLE_GRANTS = new Set<string>([
-  /* app_resolve_company: username and email lookups. */
-  "users",
-  /* app_resolve_company: the session token lookup. */
-  "sessions",
-  /* app_resolve_company: consuming an unauthenticated verification link. */
-  "email_verification_tokens",
-  /* app_resolve_company: consuming an unauthenticated reset link. */
-  "password_reset_tokens",
+const UNSCOPED_MODELS = new Map<string, string>([
+  [
+    "Company",
+    "its tenant key is `id`, not `company_id`, so an injected filter would " +
+      "produce invalid queries. Its RLS policy covers it.",
+  ],
+  [
+    "Session",
+    "written before a company context exists — sign-in resolves the company " +
+      "from the session row, not the other way round.",
+  ],
+  [
+    "EmailVerificationToken",
+    "consumed from an unauthenticated link, through resolveCompany.",
+  ],
+  ["PasswordResetToken", "same as EmailVerificationToken."],
+  [
+    "AuditLog",
+    "written on paths that already hold an explicit companyId, including ones " +
+      "with no session at all.",
+  ],
 ]);
 
 /** Prisma's own bookkeeping. */
@@ -375,44 +397,90 @@ describe("schema invariants", () => {
     });
 
     it("holds a whole-table grant only where the allowlist says", async () => {
-      const { rows } = await db.query<{ table_name: string }>(
-        `SELECT DISTINCT table_name FROM information_schema.role_table_grants
-         WHERE grantee = 'app_resolver' AND table_schema = 'public'
-         ORDER BY table_name`,
-      );
-
       /*
-       * An allowlist rather than "no matches", so that narrowing one of these
-       * shows up as a shrinking diff here and granting a fifth shows up as a
-       * widening one — in a security test, rather than as a line in a
-       * migration that reads like every other GRANT.
+       * The assertion runs from scripts/invariants.mjs, which is also what
+       * `npm run db:verify` points at another database. One implementation, so
+       * a suite that is green cannot mean a different thing from a clean
+       * report against dev or production - which is exactly the gap that let
+       * dev drift for eight commits (C10).
        */
       expect(
-        rows.map((r) => r.table_name),
+        await checkResolverTableGrants(db),
         "app_resolver's whole-table grants have changed",
-      ).toEqual([...RESOLVER_TABLE_GRANTS].sort());
+      ).toEqual([]);
     });
 
-    it("keeps app_resolver's reach into companies to three columns", async () => {
-      const { rows: columns } = await db.query<{ column_name: string }>(
-        `SELECT column_name FROM information_schema.column_privileges
-         WHERE grantee = 'app_resolver'
-           AND table_schema = 'public' AND table_name = 'companies'
-         ORDER BY column_name`,
+    it("holds a column grant only where the allowlist says", async () => {
+      /*
+       * Column grants live in pg_attribute.attacl, not pg_class.relacl, so
+       * information_schema.column_privileges cannot see them and neither can
+       * `prisma migrate diff`. See scripts/invariants.mjs.
+       */
+      expect(
+        await checkColumnGrants(db),
+        "column grants have changed — widen COLUMN_GRANTS deliberately or revoke",
+      ).toEqual([]);
+    });
+
+    it("has no reach that neither allowlist accounts for", async () => {
+      /*
+       * The joint assertion, and the one that makes "the only cross-company
+       * capability in the system is a single text value out" a checkable claim.
+       *
+       * The two allowlists are otherwise independent checks with a gap between
+       * them: a whole-table grant is compared against RESOLVER_TABLE_GRANTS, a
+       * column grant against COLUMN_GRANTS, and a grant on a table named in
+       * neither list satisfies both — because each query only looks where its
+       * own list already points.
+       *
+       * So this asks the opposite question. Everything app_resolver holds
+       * anywhere in the schema, table-level and column-level together, against
+       * everything the two lists say it should.
+       */
+      const { rows } = await db.query<{ entry: string }>(
+        `SELECT c.relname || ':' || acl.privilege_type AS entry
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+           JOIN pg_roles r ON r.oid = acl.grantee
+          WHERE n.nspname = 'public' AND c.relkind = 'r'
+            AND r.rolname = 'app_resolver'
+         UNION ALL
+         SELECT c.relname || '.' || a.attname || ':' || acl.privilege_type
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+           JOIN pg_roles r ON r.oid = acl.grantee
+          WHERE n.nspname = 'public'
+            AND a.attnum > 0 AND NOT a.attisdropped
+            AND r.rolname = 'app_resolver'
+          ORDER BY entry`,
       );
 
-      /* id and deactivated_at for app_resolve_company, slug for
-         app_available_slug. Widening this is a migration and a diff here. */
-      expect(columns.map((r) => r.column_name)).toEqual([
-        "deactivated_at",
-        "id",
-        "slug",
-      ]);
+      /* Whole-table entries are SELECT by construction — anything else on a
+         resolver table is precisely what this is looking for, so it is built
+         in rather than assumed away. */
+      const expected = [
+        ...[...RESOLVER_TABLE_GRANTS].map((table) => `${table}:SELECT`),
+        ...[...COLUMN_GRANTS]
+          .filter((entry) => entry.includes(":app_resolver:"))
+          .map((entry) => entry.replace(":app_resolver:", ":")),
+      ].sort();
+
+      expect(
+        rows.map((r) => r.entry),
+        "app_resolver's total footprint is not what the two allowlists describe",
+      ).toEqual(expected);
     });
 
-    it("keeps the lookup functions owned by app_resolver", async () => {
-      const { rows } = await db.query<{ proname: string; owner: string }>(
-        `SELECT p.proname, p.proowner::regrole::text AS owner
+    it("keeps the lookup functions owned by app_resolver, and definer", async () => {
+      const { rows } = await db.query<{
+        proname: string;
+        owner: string;
+        prosecdef: boolean;
+      }>(
+        `SELECT p.proname, p.proowner::regrole::text AS owner, p.prosecdef
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public'
            AND p.proname IN ('app_resolve_company', 'app_available_slug')
@@ -431,6 +499,19 @@ describe("schema invariants", () => {
         expect(row.owner, `${row.proname} is owned by ${row.owner}`).toBe(
           "app_resolver",
         );
+
+        /*
+         * The other half of the same failure, and the one a CREATE OR REPLACE
+         * can drop by omission: SECURITY INVOKER is the default, so a rewrite
+         * that forgets the clause keeps the right owner and still runs as
+         * app_runtime. The symptom is identical — every lookup returns NULL,
+         * sign-in stops working, and nothing in the logs mentions the
+         * migration that did it.
+         */
+        expect(
+          row.prosecdef,
+          `${row.proname} is not SECURITY DEFINER`,
+        ).toBe(true);
       }
     });
 
@@ -451,6 +532,105 @@ describe("schema invariants", () => {
         /* TRUNCATE ignores RLS entirely — a one-statement bypass. */
         expect(held, `${table}: TRUNCATE is granted`).not.toContain("TRUNCATE");
       }
+    });
+  });
+
+  describe("the withCompany extension", () => {
+    /**
+     * Model name for each mapped table, parsed from schema.prisma.
+     *
+     * Parsed rather than grepped, comments stripped first: a /// doc comment
+     * mentioning @@map would otherwise be read as one. There is no generated
+     * manifest to use instead — Prisma 7's client does not expose DMMF at
+     * runtime.
+     */
+    function modelsByTable(): Map<string, string> {
+      const source = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "..", "prisma", "schema.prisma"),
+        "utf8",
+      ).replace(/^\s*\/\/.*$/gm, "");
+
+      const byTable = new Map<string, string>();
+
+      for (const [, model, body] of source.matchAll(
+        /^model\s+(\w+)\s*\{([\s\S]*?)^\}/gm,
+      )) {
+        const mapped = /@@map\("([^"]+)"\)/.exec(body ?? "");
+        if (mapped) byTable.set(mapped[1]!, model!);
+      }
+
+      return byTable;
+    }
+
+    it("scopes every tenant-owned model, or says why not", () => {
+      /*
+       * COMPANY_SCOPED_MODELS injects company_id on create and merges it into
+       * every where. A tenant table missing from it is not an immediate hole —
+       * RLS still refuses the cross-company read — but defence in depth is off,
+       * and a create without an explicit companyId then fails with an opaque
+       * "new row violates row-level security policy" from a background job
+       * rather than working.
+       *
+       * whatsapp_media shipped that way in 20260815140000 and nothing noticed,
+       * because its tests happened to pass companyId by hand. The existing
+       * backstop covers the policy; this covers the set.
+       */
+      const byTable = modelsByTable();
+
+      expect(byTable.size, "schema.prisma parsed to no models").toBeGreaterThan(10);
+
+      const unaccounted = protectedTables()
+        .map((table) => ({ table, model: byTable.get(table) }))
+        .filter(
+          (entry) =>
+            entry.model &&
+            !COMPANY_SCOPED_MODELS.has(entry.model) &&
+            !UNSCOPED_MODELS.has(entry.model),
+        )
+        .map((entry) => `${entry.table} (${entry.model})`);
+
+      expect(
+        unaccounted.sort(),
+        "tenant tables in neither COMPANY_SCOPED_MODELS nor UNSCOPED_MODELS",
+      ).toEqual([]);
+    });
+
+    it("names only models that exist", () => {
+      /*
+       * A renamed model leaves a stale entry that scopes nothing, and the set
+       * still looks complete.
+       */
+      const models = new Set(modelsByTable().values());
+
+      expect(
+        [...COMPANY_SCOPED_MODELS].filter((m) => !models.has(m)).sort(),
+        "COMPANY_SCOPED_MODELS names models that do not exist",
+      ).toEqual([]);
+      expect(
+        [...UNSCOPED_MODELS.keys()].filter((m) => !models.has(m)).sort(),
+        "UNSCOPED_MODELS names models that do not exist",
+      ).toEqual([]);
+    });
+
+    it("does not both scope and exempt the same model", () => {
+      /* Two answers to one question means the reason went unread. */
+      expect(
+        [...UNSCOPED_MODELS.keys()].filter((m) => COMPANY_SCOPED_MODELS.has(m)).sort(),
+      ).toEqual([]);
+    });
+  });
+
+  describe("DDL that schema.prisma cannot express", () => {
+    it("is exactly what the allowlist names", async () => {
+      /*
+       * CHECK constraints, column storage, triggers and exclusion constraints -
+       * everything schema.prisma cannot express and the drift check therefore
+       * cannot see. Swept in both directions from scripts/invariants.mjs.
+       */
+      expect(
+        await checkOutOfBandDdl(db),
+        "out-of-band DDL has changed — update OUT_OF_BAND_DDL deliberately",
+      ).toEqual([]);
     });
   });
 });

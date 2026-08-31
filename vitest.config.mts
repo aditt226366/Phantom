@@ -24,15 +24,91 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * and Vite's native config loader warns on ESM syntax in a file it loads as
  * CommonJS.
  */
+/**
+ * Installed first in every project, before any other setup file.
+ *
+ * A process.exit() inside a Vitest fork is reported only as "Worker exited
+ * unexpectedly" - no stack, no file, and the tests that never started go
+ * missing rather than failing. parseEnv() exits on bad configuration, so
+ * anything reaching it from a test dies that way. The guard turns it into a
+ * located failure. See tests/no-silent-exit.ts.
+ */
+const SILENT_EXIT_GUARD = fileURLToPath(
+  new URL("./tests/no-silent-exit.ts", import.meta.url),
+);
+
+/**
+ * Once per run, not once per project.
+ *
+ * Two projects need a migrated test database - db and web-server - and both
+ * used to declare this themselves. That ran it twice against the one shared
+ * database, and the second execution issues ALTER ROLE and grant changes
+ * through db-roles.mjs while the first project's workers are already querying
+ * the database being reconfigured.
+ *
+ * The advisory lock inside migrate-test.mjs did not help: it serialises the two
+ * setups against each other, which was never the hazard. Setting up a shared
+ * database a second time while tests are running against it is wrong on its own
+ * terms, whatever it turns out to break.
+ *
+ * Hoisted here, it runs once before any project starts.
+ */
+const GLOBAL_SETUP = fileURLToPath(
+  new URL("./packages/db/tests/global-setup.ts", import.meta.url),
+);
+
+/**
+ * No cross-project parallelism, and the reason is the fork crash.
+ *
+ * `fileParallelism: false` was set on `db` and `web-server` individually, which
+ * serialises files *within* a project and does nothing between them - so the db
+ * project's workers and web-server's ran at the same time, against the one
+ * shared test database. That was the last remaining suspect for the worker that
+ * dies with no stack, and the evidence pointed at it twice: the crash never
+ * reproduces with `--project db` alone, and its rate rose sharply when Phase 4a
+ * added ~60 *web-server* tests and no db tests at all.
+ *
+ * Hoisted here with `maxWorkers: 1`, one file runs at a time across the whole
+ * run. `web-server` is on threads for the other half of the reason.
+ *
+ * Measured over fifteen full gates, five per configuration. Two levers, and
+ * **both are load-bearing** - neither alone gets to zero.
+ *
+ *   sequential + all forks        1 in 5 crashed (web-server)   ~300s
+ *   sequential + ws on threads    0 in 5 crashed                ~140s
+ *   parallel  + ws on threads     1 in 5 crashed (db)           ~135s
+ *
+ * The third row is the one that settles it. Putting web-server on threads and
+ * letting the projects overlap again did not fix anything - the crash simply
+ * moved to `db`, the *other* forked project touching the same database. So the
+ * serialisation was never merely masking a pool problem, and the pool was never
+ * merely masking a concurrency problem. The crash needs a forked worker on a
+ * database-touching file AND cross-project overlap; remove either and it stops.
+ *
+ * Hence both are kept. And the wall-clock argument for dropping the
+ * serialisation evaporated once it was measured: threads are enough faster than
+ * forks that row two costs ~5s against row three, not the ~165s that row one
+ * did. The gate is back to roughly where it was before any of this.
+ *
+ * `db` stays on forks deliberately. It is the project that has never crashed
+ * while web-server was forked, and changing a second thing at the same time
+ * would make the next measurement unreadable.
+ */
 export default defineConfig({
   test: {
+    globalSetup: [GLOBAL_SETUP],
+    fileParallelism: false,
+    maxWorkers: 1,
+    minWorkers: 1,
     projects: [
       {
         test: {
           name: "core",
+          fileParallelism: false,
           root: "./packages/core",
           environment: "node",
           include: ["tests/**/*.test.ts"],
+          setupFiles: [SILENT_EXIT_GUARD],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },
@@ -45,10 +121,11 @@ export default defineConfig({
          */
         test: {
           name: "worker",
+          fileParallelism: false,
           root: "./apps/worker",
           environment: "node",
           include: ["tests/**/*.test.ts"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },
@@ -58,8 +135,7 @@ export default defineConfig({
           root: "./packages/db",
           environment: "node",
           include: ["tests/**/*.test.ts"],
-          globalSetup: ["./tests/global-setup.ts"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
 
           pool: "forks",
@@ -105,10 +181,9 @@ export default defineConfig({
           environment: "node",
           include: ["tests/server/**/*.test.ts"],
           exclude: ["tests/server/setup.ts", "tests/server/server-only-stub.ts"],
-          globalSetup: ["../../packages/db/tests/global-setup.ts"],
-          setupFiles: ["./tests/server/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/server/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
-          pool: "forks",
+          pool: "threads",
           fileParallelism: false,
           hookTimeout: 120_000,
           testTimeout: 30_000,
@@ -126,10 +201,11 @@ export default defineConfig({
         },
         test: {
           name: "web",
+          fileParallelism: false,
           root: "./apps/web",
           environment: "jsdom",
           include: ["tests/*.test.tsx"],
-          setupFiles: ["./tests/setup.ts"],
+          setupFiles: [SILENT_EXIT_GUARD, "./tests/setup.ts"],
           server: { deps: { inline: [/@whatsapp-os\//] } },
         },
       },

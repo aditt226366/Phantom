@@ -121,6 +121,92 @@ sweep.** Without that exclusion the next run reassigns them to
 every username and session lookup silently returns NULL — sign-in fails with
 nothing in the logs.
 
+## An amended migration silently forks every database that ran it
+
+**`prisma migrate deploy` never re-runs a migration it has already applied**, so
+editing one after it has run leaves every database that ran the original holding
+the original's effects — permanently, and with nothing to say so.
+
+It happened here. `20260815160000` was edited during its own commit, after the
+development database had applied an earlier version. Dev kept the old effects:
+two of three column grants on `unroutable_webhooks` were missing for eight
+commits. The test database was rebuilt often enough to get the final version, so
+the suite was green throughout. The first symptom was a webhook route that
+worked in tests and returned **500 in a browser** (C10).
+
+The recorded checksums are the proof, and the way to confirm it:
+
+```sql
+SELECT migration_name, checksum FROM _prisma_migrations ORDER BY migration_name;
+```
+
+Different checksums for the same migration across two databases means they
+applied different files. Exactly one had drifted out of 28.
+
+**So: any in-place amendment to an applied migration must be followed by
+rebuilding every database that applied the original — `dev` included, not just
+`test`.**
+
+```
+npm run db:nuke -- dev
+npm run db:nuke -- test
+```
+
+A production database cannot be rebuilt, which is the real reason to avoid the
+edit: there the only fix is a new, additive migration.
+
+**`npm run db:verify -- <dev|test|url>` is what notices.** It runs the four
+catalog invariants — `COLUMN_GRANTS`, `RESOLVER_TABLE_GRANTS`, `OUT_OF_BAND_DDL`
+and the timestamp check — against whichever database you point it at, from
+`packages/db/scripts/invariants.mjs`. The same module backs the test suite, so a
+green suite and a clean report cannot mean different things.
+
+Read-only: every statement is a `SELECT` against a system catalog, which is why
+it is safe to point at production — and it is a **Phase 12 launch gate**, run
+before first customer traffic and after every deploy.
+
+**It is not a substitute for `prisma migrate diff`, and the diff is not a
+substitute for it.** The diff compares tables and columns. It cannot see grants
+at all — a column grant is not even in `pg_class.relacl`, it lives in
+`pg_attribute.attacl` — and it cannot see CHECK constraints, column storage or
+triggers, none of which `schema.prisma` can express. It reported
+*"No difference detected"* over the drifted database the whole time. Run both.
+
+## Timestamps are `timestamptz(3)`, and a new one must say so
+
+**Every `DateTime` field carries `@db.Timestamptz(3)`, and there is a test that
+fails if one does not.** `20260816090000` converted all 64 columns; the
+allowlist in `packages/db/tests/timestamp-columns.test.ts` is empty and is
+meant to stay empty.
+
+Prisma's default is `timestamp(3)` *without* time zone — a wall clock with no
+offset. Adding a `DateTime` field without the attribute silently reintroduces
+one, and the generated migration looks like any other column addition.
+
+What that used to cost, which is the reason for the attribute rather than a
+style preference. The ORM is self-consistent about naive columns, so nothing is
+wrong until raw SQL touches one, and then:
+
+- **A bound `Date`** arrives as a string carrying the *node process's* offset,
+  and `::timestamp` keeps the digits and drops the offset. Measured here: the
+  server session is UTC but node is UTC+4, so the write lands four hours out.
+- **`now()`** is `timestamptz`, and assigning it to a naive column converts
+  through the session's `TimeZone` — correct only while that stays UTC.
+
+Both write rows that look entirely plausible and are wrong by hours, and every
+window, expiry and ordering built on them is wrong by the same amount.
+
+Against `timestamptz` there is no wall clock to misread: bind the `Date`, use
+`now()`, no casts. `advanceConversation` in `packages/db/src/conversations.ts`
+is the worked example and its comment records what it used to have to write.
+
+If a naive column ever comes back, so does the incantation —
+`${date.toISOString()}::timestamptz AT TIME ZONE 'UTC'` on every bound value
+and `now() AT TIME ZONE 'UTC'` instead of `now()`. Prefer converting the column.
+
+**Assert exact instants in tests, never tolerances.** A tolerant comparison
+passes on a UTC machine and hides every fault above on all the others.
+
 ## Roles, grants and RLS
 
 **A policy is not a privilege.** RLS narrows what a role sees *within* the rows
@@ -189,6 +275,80 @@ test of a module that uses it. Scripts that import such a module run with
 - `migrate-test.mjs` takes an advisory lock; two projects run the same
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
+**A worker fork dies occasionally in full runs, and it is memory exhaustion.**
+`Error: [vitest-pool]: Worker forks emitted error / Caused by: Error: Worker
+exited unexpectedly`, in a full `vitest run`, with **zero tests failing** and a
+non-zero exit.
+
+It was investigated across two phases as a race, and it is not one. The machine
+runs out of physical memory and the OS refuses or kills a fork. Four
+measurements settle it, and they are recorded because the symptom is so unlike
+the cause that the next person will start where the last one did:
+
+- **`Failed to start forks worker for <file>`.** A worker that could not be
+  *created*. That is an allocation failure and nothing else.
+- **A `truncateAll()` hook timed out at 120 seconds.** That statement takes
+  milliseconds against an idle database.
+- **One run reported `Duration 27486s`** — 7.6 hours, with `tests 27264s`,
+  against the 80s the same suite takes when healthy. No race is three orders of
+  magnitude.
+- **The visual suite's admin sign-in timed out at 60s.** Argon2id is
+  *memory-hard by design*, so it is the first thing to fail under pressure and
+  the last thing anyone suspects.
+
+The state at the time: 11.4 GB resident of 15.7 GB physical, 0.8 GB free, 31 GB
+of pagefile in use. Everything was paging to disk.
+
+**Both mitigations work, and both work for a reason other than the one recorded
+in their commits.** `3f2ddc3` and `9992fb6` describe concurrency; they are
+actually footprint reductions, and the messages are left alone rather than
+rewritten because they are inside a tag:
+
+- **sequential projects** (`fileParallelism: false` + `maxWorkers: 1` at the
+  root) halves peak concurrent memory. Note `fileParallelism: false` **per
+  project** does not serialise *across* projects — that was the original
+  mistake, and it is why db and web-server ran together for months.
+- **`pool: "threads"` on web-server** gives one shared V8 heap instead of a
+  fresh one per file. That is why it helped where threads-on-db did not: db was
+  not the project losing workers.
+
+Both are kept. Measured over fifteen full gates, five per configuration:
+
+| config | crashed | healthy wall |
+| --- | --- | --- |
+| sequential + all forks | 1 in 5 (web-server) | ~300s |
+| **sequential + web-server on threads** | **0 in 5** | **~140s** |
+| parallel + web-server on threads | 1 in 5 (db) | ~135s |
+
+**Freeing memory removes the catastrophe but not the crash.** With ~2.6 GB free
+the suite returned to 80s of test execution and one run in two still lost a
+worker. So memory is the cause of the *severity* and very likely of the crash
+itself, but the headroom on this machine is not enough to prove the second half.
+Treat a recurrence as pressure, not as a race.
+
+**Diagnosing one:** match on the signature — a file that never reports, zero
+tests failing, a non-zero exit — and find it by diffing reported names against
+the files on disk **per project**. Do not go by filename: it has been
+`auth-schema.test.ts`, `conversation-send.test.ts`,
+`company-deactivation.test.ts`, `webhook-throttle.test.ts` and
+`read-receipts.test.ts` at different times, and two older notes claiming "always
+the db project" and "always auth-schema" were both simply wrong.
+
+Two other presentations of the same thing, so they are not chased separately:
+
+- **A named test failing with `read ECONNRESET`.** Postgres was checked at the
+  time — no FATAL, no termination, no restart, no OOM, zero container restarts
+  — so the reset is the worker dying and taking its socket down, not the
+  database closing it.
+- **`Could not read the test report at …report.json` (exit 127).** Vitest died
+  before writing the report. Every file had already reported ✓.
+
+**What to do about it:** free memory. On a 16 GB machine, browsers and the WSL
+VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
+moved this one from 0.8 GB free to 2.6 GB and from 7.6 hours to 80 seconds. The
+gate's single retry absorbs what is left.
+
+
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own
 explanation at least once: `no-raw-prisma.test.ts` says so in its header about
@@ -201,6 +361,131 @@ that `company-header.tsx` contains "Reactivate" stayed green when the control
 was deleted, because the word survived in a neighbouring heading. Extracting
 the decision into a small exported function and asserting both branches is
 usually two lines more and actually fails.
+
+**Redirect the gate, never pipe it.** `npm run verify | tail -2 && git commit`
+commits on a red gate, because a pipeline's exit status is the *last* command's
+and `tail` succeeded. This swallowed a failing gate three times in Phase 4a
+before anybody noticed. Write to a file and read it afterwards:
+
+```
+npm run verify > verify.log 2>&1; echo "exit=$?"; tail -40 verify.log
+```
+
+A pre-commit hook in `.githooks/pre-commit` now runs the gate regardless of how
+the command was invoked, wired by a `prepare` script that sets
+`core.hooksPath`. `--no-verify` still skips it, which is fine: that is explicit
+and appears in the command. What the hook removes is the accidental version.
+
+**A deliberate break must prove it broke something.** Two of three breaks in one
+Phase 4a commit reported no failures, and the reason was not that the assertions
+were weak - the `perl` substitutions never matched, so nothing had changed and
+the suite was green because the code was still correct. Break-it-once discipline
+failing in exactly the way it exists to catch.
+
+So: assert the edit landed before reading the result. Match the anchor and fail
+if it is absent, or diff the file, or print the changed line. An unverified
+substitution is a test of nothing.
+
+The same shape caught the pre-commit hook itself. Its first version ran the gate
+inside `if ... then exit 0; fi` and read `$?` afterwards - which is the status of
+the completed `if`, always 0. It printed "commit refused" and exited zero, and
+the probe commit it was written to block landed anyway. Capture a status on the
+line that produces it: `cmd || status=$?`.
+
+**Every break goes through `scripts/break-once.mjs`, and git is the baseline.**
+It stages the file, applies the substitution, prints the diff, runs the command,
+restores from the index and refuses to call a break proved unless the command
+actually failed:
+
+```
+node scripts/break-once.mjs \
+  --file packages/core/src/whatsapp/media.ts \
+  --find 'if (received > MAX_MEDIA_BYTES) {' \
+  --replace 'if (received > MAX_MEDIA_BYTES * 100) {' \
+  --command 'npx vitest run --project core <file> > /tmp/break.log 2>&1'
+```
+
+It refuses four things, each because it has already gone wrong here: an
+**untracked file**, an anchor matching **nothing**, an anchor matching **more
+than one place**, and a `--command` containing a **pipe** — a pipeline's status
+is its last command's, so the failure would be invisible and reported as a pass.
+That last one caught this script on its own first run.
+
+Invoked as `node scripts/break-once.mjs` rather than through the `break-once`
+npm script, which also exists. Both work — verified — but npm eats a leading
+`--flag` under some versions, and that has already rebuilt the wrong database
+once in this repository. The direct form cannot be affected by it.
+
+**Two shells will corrupt an anchor before it reaches the script.**
+
+- **PowerShell 5.1 drops an empty string argument**, so `--replace ''` arrives
+  as nothing at all and the next flag is read as the replacement. Presents as
+  "could not read arguments". Use bash for break-once.
+- **Git Bash rewrites anything that looks like a Unix path.** MSYS turned
+  `"/configuration/numbers"` inside an anchor into
+  `"C:/Program Files/Git/configuration/numbers"`. Presents as "matched
+  nothing", which is safe but baffling. Prefix with `MSYS_NO_PATHCONV=1`
+  whenever the anchor contains a slash-leading path.
+
+**Multi-line anchors work, and did not until Phase 4a.** The documented `
+`
+expansion was `value.replaceAll("
+", "
+")` — both arguments are already a
+newline in a JS source file, so it did nothing and every multi-line anchor ever
+written matched nothing. Fixing that alone was not enough: this checkout holds
+CRLF files, LF files, and files carrying both where a tool edited part of one,
+which is exactly the region an anchor targets. `
+` now compiles to `
+?
+`
+and the match is a regex, with nothing normalised on disk.
+
+**Why git rather than a copy, and why the refusal is absolute.** The fork crash
+has now caused two separate incidents by killing a process mid-break:
+
+- a probe added `email_verification_tokens.forced_failure` and left it, invisible
+  to every migration and drift check — 62 failures in 15 files, an afternoon;
+- a probe disabled the media size cap in an **untracked** file, and the
+  scratchpad backup taken beside it captured the damage too, so `diff` reported
+  clean against a broken baseline and nothing true was left to compare against.
+
+We are not investigating that crash, by agreement — so the mitigation cannot be
+care, because care is what the crash interrupts. It has to be that every break is
+recoverable by construction: `git add` first, so a killed run leaves the damage
+in `git status` and `git diff` where it is obvious, rather than in a file nobody
+is comparing. An untracked file has no baseline at all, which is why that is a
+refusal and not a warning.
+
+**Break-once mutates the database, and a killed process never cleans up.**
+That is not a discipline problem and cannot be fixed by being more careful.
+A probe that adds a column, drops a policy or disables RLS undoes itself in a
+`finally`, an `afterEach`, or the next line — none of which run when the worker
+is killed, and this suite has a worker that dies for reasons nobody has found.
+
+What it looks like next time: a suite that was green an hour ago fails in
+several unrelated files at once, with unique and foreign-key violations that
+read exactly like a broken feature, and **nothing in the diff explains it**. One
+occurrence cost an afternoon — `email_verification_tokens.forced_failure`,
+NOT NULL with no default, left behind by a probe and present in no migration, no
+`schema.prisma` and no source file.
+
+Nothing routine catches it. `prisma migrate deploy` only applies migrations and
+never removes what one did not create, and the drift check runs against the
+*development* database, which stays clean the whole time.
+
+So the answer is detection at the start of the next run, not prevention:
+`migrate-test.mjs` diffs `whatsapp_os_test` against `schema.prisma` before any
+test file loads, and refuses the run with `EXIT_SCHEMA_DRIFT`. Both the script
+and the Vitest globalSetup name the remedy, which is:
+
+```
+npm run db:nuke -- test
+```
+
+Deliberately before the tests rather than after: the run that *inherits* the
+stray object is the one that should fail. Failing afterwards would report it on
+the run after the one that was actually confusing.
 
 **Break every new assertion once before committing it.** Several tests in this
 repository initially passed for the wrong reason — matching a word inside a
@@ -309,10 +594,36 @@ Things worth knowing before touching it:
 - **The fixture is literal.** `apps/web/scripts/visual-seed.mjs` writes fixed
   ids, names, counts and timestamps into `whatsapp_os_test`. A suite that diffs
   on a moving value is one people re-record without looking.
-- **The one moving part is the platform day.** "API calls today" and "Est.
-  spend this month" are windowed at render time, so their events are stamped
-  `now()`. A run crossing midnight IST between seed and screenshot sees both
-  cards go to zero. Re-seed and re-run.
+- **The rule is about rendering, not about the clock**, and it cuts both ways.
+  A value may be stamped `now()` provided nothing ever prints it: "API calls
+  today" and "Est. spend this month" are windowed at render time, and the open
+  thread's `window_expires_at` is `now() + 18h` because a conversation cannot
+  be both permanently open and described by a fixed instant. The corollary is
+  binding on whoever renders one — the window may appear as an open/closed
+  state or as a coarse bucket, **never as a timestamp**.
+
+  The reverse is the trap. A value nothing renders *today* can be random and
+  nothing will notice: `webhook_key` defaults to a database expression, so the
+  seed wrote four fresh random keys on every run for as long as it existed, and
+  the first page to display one would have produced a baseline that never
+  matched twice — diagnosed as a flaky suite rather than as a fixture. When a
+  page starts rendering a column, check what writes it.
+- **A rendered value must be a literal even when it lives in the config.**
+  `playwright.config.ts` derived `APP_URL` from `BASE_URL`, which comes from
+  `VISUAL_PORT`, under a comment saying the port was not rendered anywhere.
+  True until Configuration > Numbers printed the webhook URL, at which point an
+  escape hatch for a busy port silently re-recorded a screenshot. It is a fixed
+  literal now. Nothing navigates by `APP_URL` — Playwright uses `baseURL`.
+- **A run crossing midnight IST** between seed and screenshot sees the two
+  windowed cards go to zero. Re-seed and re-run.
+- **The TRUNCATE is discovered, not listed**, for the reason `truncateAll` in
+  `packages/db/tests/helpers.ts` gives. It was a hand-written list of fifteen
+  tables and Phase 4a added seven it did not know about. A fixture that does
+  not wipe is one that accumulates, and every baseline drifts a run at a time.
+- **A dynamic route segment needs an entry in `DYNAMIC_SEGMENTS`** in
+  `pages.spec.ts`. Without one the coverage test fails in *both* directions
+  with two messages that are each wrong; the guard beside the map catches it
+  first and names the route and the remedy.
 - **Baselines are per platform** — `{platform}` is in the snapshot path,
   because the same Chromium rasterises text differently on Windows, macOS and
   Linux. A first run on a new platform reports them missing and writes them.
@@ -325,9 +636,57 @@ Things worth knowing before touching it:
 - **Adding a page means adding it to `ROUTES`** in `tests/visual/fixture.ts`.
   A coverage test walks `app/**` and fails on anything missing, in both
   directions.
+- **`--update-snapshots` only rewrites what actually failed.** A copy change
+  small enough to fit inside `maxDiffPixelRatio` (0.1%) passes, so the baseline
+  is never re-recorded and keeps depicting the old text — which is how the
+  desktop `/configuration` shot ended up showing a CTA the page no longer
+  rendered while the 390px shot of the same change failed. When a change is
+  deliberate, force it with `--update-snapshots=all` and look at the result.
 
 Re-record with `npm run test:visual:update` — and then look at the images. A
 baseline nobody reviewed is a screenshot of a bug.
+
+**The comparison is `threshold` for noise and a budget of zero for everything
+else, and the two are not interchangeable.** `threshold` (0.2, per pixel, YIQ)
+exists for rasteriser noise — antialiasing on glyph edges, subpixel hinting.
+`maxDiffPixelRatio` is **0**: a pixel the threshold did not absorb is a pixel
+that genuinely changed.
+
+It used to be 0.001, which on a 1440x900 page is about 1,300 pixels — enough to
+hide a whole call to action. `/configuration`'s CTA was replaced, the 390px shot
+failed at 887 pixels, and the 1440px shot passed and kept a baseline depicting a
+control the page no longer rendered. A budget wide enough to swallow a button is
+a blind spot, not a tolerance.
+
+If a run goes noisy, **measure the pixels before touching either knob.** Deltas
+of one or two are the rasteriser and mean `threshold` is wrong. A large delta
+confined to a band is something moving, and the fix is neither knob:
+
+- **`position: sticky` cannot be photographed by `fullPage`.** The capture
+  scrolls and composites, a sticky element follows the scroll by definition, and
+  it lands at an offset that depends on tile boundaries and timing.
+  `/styleguide` is 21,848px tall and carries the sticky top nav; a twenty-row
+  band moved by a pixel between runs, 1,474 pixels — comfortably inside the old
+  budget, so it had been unstable since the suite was written and never once
+  failed. `tests/visual/screenshot.css` is applied at capture time through
+  `stylePath` and makes `.sticky` static and backdrop filters none. At scroll
+  zero the two look identical, so nothing is lost.
+- **`toHaveScreenshot` has no `timeout` of its own** — the option lives at
+  `expect.timeout`, and typecheck is what catches putting it in the wrong
+  object, because Playwright ignores unknown keys in silence. It matters at
+  ratio zero: the assertion captures until two consecutive frames *agree*, and
+  agreement used to mean "within the budget" and now means identical.
+
+**`--update-snapshots` only rewrites what actually failed.** A copy change small
+enough to fit inside the budget passes, so the baseline is never re-recorded and
+keeps depicting the old text. Force a deliberate change with
+`--update-snapshots=all` — and know that it rewrites *every* file whether it
+differed or not, so revert the ones that only moved by a delta of one.
+
+**A screenshot break needs a rebuild inside it.** The suite runs against
+`next start`, so editing a source file and re-running Playwright photographs the
+previous build and proves nothing. `--command 'cd apps/web && npm run build > b.log 2>&1 && npx playwright test ...'`.
+break-once catches this correctly — it reports the break as unobserved.
 
 **Never resolve a data file relative to `import.meta.url` in bundled code.**
 `denylist.ts` did `new URL("./data/…", import.meta.url)` and handed it to
@@ -419,6 +778,25 @@ the accepted tradeoff, not an oversight.
 
 **Admin TOTP is deferred to Phase 12.** A password alone on a panel that reads
 across every tenant is a known gap.
+
+**Verse refuses off-topic questions and admits it is not human — and both are
+compliance, not manners.** Since **15 January 2026** general-purpose LLM chatbots
+are banned on the WhatsApp Business Platform; task-specific business assistants
+remain allowed. Verse is the second kind by design, which is why the policy
+changed nothing about the product and everything about the status of two
+behaviours:
+
+- it **genuinely refuses** off-topic questions, rather than answering them with a
+  disclaimer attached;
+- it **answers honestly** when asked whether it is a human.
+
+Neither is a tone choice, and neither may be softened to improve a demo. The
+realistic way this breaks is a prompt edit six months from now that makes the
+assistant "more helpful" on questions outside its task — which is the exact
+behaviour the ban describes. Relaxing either belongs in a diff somebody reviews,
+which is the reason they are written here rather than only in a system prompt.
+
+See `docs/plans/spec-amendments.md` A5.
 
 **The deferred breach check is advisory, by design.** When signup fails open,
 `hibpCheckedAt` stays null and the next *successful* sign-in retries the check —

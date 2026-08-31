@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { requireSession } from "@/lib/auth/session";
+import { EMPTY_COPY } from "@/lib/empty-copy";
 import { SectionHeader, SectionShell } from "../_components/section";
 
 export const metadata: Metadata = { title: "Bulk Messaging" };
@@ -16,7 +17,7 @@ export default async function Page() {
       <EmptyState
         tone="lavender"
         title="Nothing sent yet"
-        description="Upload a contact list and send an approved template to everyone on it."
+        description={EMPTY_COPY["bulk-messaging"]}
           action={<Button>Import contacts</Button>}
       />
     </SectionShell>

@@ -103,6 +103,36 @@ test.describe("coverage", () => {
      */
     const EXCLUDED = new Map([["/reset-password", "needs a live reset token"]]);
 
+    /**
+     * What a dynamic segment stands for.
+     *
+     * This was a ternary that substituted `[id]` and left everything else
+     * alone, which is a silent trap rather than a missing feature: an
+     * unsubstituted `[conversationId]` matches nothing in ROUTES, so it fails
+     * *both* assertions below with two messages that are each wrong — "nothing
+     * photographs them" when something does, and "no page.tsx renders them"
+     * when one does. Whoever adds the thread page would be debugging the
+     * walker, not their page.
+     *
+     * So: a map, and a guard below that names the real problem. Every entry is
+     * a row the visual seed writes.
+     *
+     * A list per segment rather than one value, because a single route can be
+     * worth photographing in more than one state. The open-window thread and
+     * the closed one are the same page.tsx and completely different pictures —
+     * only the second has a disabled composer, a refused message and an image
+     * in it — and with one value per segment the second id read as a route
+     * nothing renders.
+     */
+    const DYNAMIC_SEGMENTS = new Map<string, readonly string[]>([
+      ["[id]", [FIXTURE.companyId]],
+      [
+        "[conversationId]",
+        [FIXTURE.conversationId, FIXTURE.closedConversationId],
+      ],
+      ["[templateId]", [FIXTURE.rejectedTemplateId]],
+    ]);
+
     const found: string[] = [];
 
     function walk(dir: string): void {
@@ -117,17 +147,38 @@ test.describe("coverage", () => {
 
         const segments = relative(appDir, dirname(full))
           .split(/[\\/]/)
-          .filter((segment) => segment !== "" && !segment.startsWith("("))
-          .map((segment) =>
-            segment === "[id]" ? FIXTURE.companyId : segment,
-          );
+          .filter((segment) => segment !== "" && !segment.startsWith("("));
 
-        found.push(`/${segments.join("/")}`);
+        /* One path per combination of fixture values. An unmapped segment
+           stands for itself, brackets included, so the guard below sees it. */
+        let paths = [""];
+        for (const segment of segments) {
+          const values = DYNAMIC_SEGMENTS.get(segment) ?? [segment];
+          paths = paths.flatMap((prefix) =>
+            values.map((value) => `${prefix}/${value}`),
+          );
+        }
+
+        /* app/page.tsx has no segments at all, so the accumulator never gets
+           its leading slash from the loop. That is the marketing page. */
+        found.push(...paths.map((path) => (path === "" ? "/" : path)));
       }
     }
 
     expect(existsSync(appDir), `app/ not found at ${appDir}`).toBe(true);
     walk(appDir);
+
+    /*
+     * The guard the map is actually for. A segment still in brackets is one
+     * nobody gave a value to, and saying so here is the difference between a
+     * one-line fix and an afternoon reading the two assertions below.
+     */
+    const unmapped = found.filter((path) => path.includes("[")).sort();
+
+    expect(
+      unmapped,
+      "these routes have a dynamic segment with no fixture value — add it to DYNAMIC_SEGMENTS above",
+    ).toEqual([]);
 
     /* Query strings distinguish tabs of one page, not separate pages. */
     const covered = new Set(ROUTES.map((route) => route.path.split("?")[0]));

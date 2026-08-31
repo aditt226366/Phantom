@@ -56,6 +56,40 @@ export const SIGNUP_SENTINEL = "@signup";
 
 export const MAX_SIGNUPS_PER_IP = 5;
 
+/**
+ * Sentinel in the username column for webhook throttling.
+ *
+ * The same shape signup uses, and for the same reason: there is no username to
+ * key on. '@' cannot appear in a real username, which the ^[a-z0-9_.]{3,32}$
+ * rule guarantees.
+ *
+ * What is NOT keyed on is the point. Throttling per webhook key would let
+ * anyone who learns a tenant's URL flood it until that key locks out - after
+ * which genuine Meta deliveries are refused, failures accumulate, and Meta
+ * disables the subscription in about seven days. An attacker severing a
+ * customer's WhatsApp using our own protection. So the key is the source
+ * address, and only the address.
+ */
+export const WEBHOOK_SENTINEL = "@webhook";
+
+/**
+ * Failures from one address before it is locked out.
+ *
+ * Deliberately generous next to MAX_FAILURES_PER_IP, because the two are
+ * protecting different things. Sign-in throttling is guarding an account; this
+ * is guarding a decrypt.
+ *
+ * The route checks this BEFORE resolving anything, so a flood already costs
+ * only one indexed lookup per request. What the threshold buys is a ceiling on
+ * the expensive path - resolve, decrypt, verify, insert - not on the endpoint.
+ *
+ * And it has to tolerate a bad day. A signature failure is what genuine Meta
+ * traffic looks like when a tenant's stored app secret is stale (P5), so a
+ * tight threshold would lock out Meta itself over a configuration mistake and
+ * keep dropping real messages after it was fixed.
+ */
+export const MAX_WEBHOOK_FAILURES_PER_IP = 60;
+
 const BASE_LOCKOUT_MS = 15 * 60 * 1_000;
 const MAX_LOCKOUT_MS = 24 * 60 * 60 * 1_000;
 const USERNAME_WINDOW_MS = 60 * 60 * 1_000;
@@ -207,4 +241,50 @@ export async function recordSignupAttempt(ip: string): Promise<void> {
     MAX_SIGNUPS_PER_IP,
     USERNAME_WINDOW_MS,
   );
+}
+
+/**
+ * Webhook throttle, keyed on the hashed source address alone.
+ *
+ * `ipHash`, not `ip`. The endpoint is unauthenticated and reachable by anyone,
+ * so the addresses reaching it are not a set this system chose; storing them
+ * raw would turn a throttle counter into a log of who probed us. hashIp is
+ * one-way and keyed.
+ *
+ * Its own LoginScope member, so webhook counters cannot collide with a
+ * sign-in's - the row key is (scope, username, ip), and a shared scope would
+ * let an address locked out of the webhook be locked out of signing in.
+ */
+export async function checkWebhookAllowed(ipHash: string): Promise<LockState> {
+  return checkLocked(WEBHOOK_SENTINEL, ipHash, LoginScope.WEBHOOK);
+}
+
+/**
+ * Count one delivery that did not resolve or did not verify.
+ *
+ * Only those. A request carrying a key that resolves and a signature that
+ * verifies is Meta, its decrypt is cached, and the work left is one insert - so
+ * it is never counted and never throttled, however much of it arrives.
+ */
+export async function recordWebhookFailure(ipHash: string): Promise<void> {
+  await bump(
+    LoginScope.WEBHOOK,
+    WEBHOOK_SENTINEL,
+    ipHash,
+    MAX_WEBHOOK_FAILURES_PER_IP,
+    USERNAME_WINDOW_MS,
+  );
+}
+
+/**
+ * Forget an address's failures after a delivery that did verify.
+ *
+ * The recovery path, and the reason it matters: a stale app secret makes
+ * genuine Meta traffic fail its signature, so Meta's own addresses accumulate
+ * failures through no fault of their own. Once the tenant fixes the secret, the
+ * first delivery that verifies clears the count rather than leaving it to
+ * expire - otherwise the fix appears not to have worked for another hour.
+ */
+export async function clearWebhookFailures(ipHash: string): Promise<void> {
+  await clearFailures(WEBHOOK_SENTINEL, ipHash, LoginScope.WEBHOOK);
 }

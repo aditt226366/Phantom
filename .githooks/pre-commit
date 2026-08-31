@@ -1,0 +1,141 @@
+#!/bin/sh
+#
+# The gate, where it cannot be talked out of running.
+#
+# `npm run verify` has been bypassed three times in this phase, every time the
+# same way: piping it to `tail` or `grep` to read the summary. A pipeline's exit
+# status is the LAST command's, so `npm run verify | tail -2 && git commit`
+# commits on a red gate because `tail` succeeded. Nothing warns.
+#
+# Redirect, never pipe. `>` preserves the exit status of the command; `|` hands
+# you the status of whatever you piped into. That rule is why this script writes
+# to a file and reads it afterwards rather than doing the obvious thing.
+#
+# Skipping is still possible with `git commit --no-verify`, and that is fine -
+# it is explicit, it appears in the command, and someone chose it. What this
+# removes is the accidental version.
+
+git_dir="$(git rev-parse --git-dir)"
+log="$git_dir/verify.log"
+retry_log="$git_dir/verify-retry.log"
+tally="$git_dir/gate-retries.log"
+
+#
+# Capture the status on the same line that produces it.
+#
+# The first version of this script wrapped the run in `if ... then exit 0; fi`
+# and then read `$?` below, which is the status of the COMPLETED IF STATEMENT -
+# always 0. It printed "commit refused" and exited zero, and the probe commit
+# it was supposed to block landed anyway.
+#
+# That is the same failure as the pipeline this hook exists to prevent: a check
+# that reports a problem without enforcing it. Worth keeping in the file, since
+# the broken version reads perfectly well.
+#
+run_gate() {
+  status=0
+  npm run "$gate" >"$1" 2>&1 || status=$?
+  return "$status"
+}
+
+#
+# Is this the known worker crash, and nothing else?
+#
+# The db project's fork dies intermittently in full runs - eight occurrences
+# and counting, characterised in the conventions skill, still unexplained below
+# the JavaScript layer. It exits non-zero with a short test count and no test
+# actually failing.
+#
+# Two conditions, and the second is the one that matters. The worker-exit
+# signature must be present, AND no test may have reported a failure. A run
+# where a worker died *and* something genuinely broke is a genuine red and gets
+# no second chance - a real failure must never get another roll of the dice.
+#
+# Anything that fails before the test phase - typecheck, lint, build - never
+# produces the worker signature at all, because vitest did not run. Anything
+# after it, the screenshot suite, fails with Playwright output instead. So the
+# discriminator does not need to enumerate the other stages.
+#
+is_crash_shaped() {
+  grep -q "Worker exited unexpectedly" "$1" 2>/dev/null &&
+    ! grep -qE "Tests +[0-9]+ failed" "$1" 2>/dev/null
+}
+
+refuse() {
+  printf '\npre-commit: THE GATE FAILED. Last 40 lines of %s:\n\n' "$1"
+  tail -40 "$1"
+  printf '\npre-commit: commit refused. Full output is in %s\n' "$1"
+  exit 1
+}
+
+#
+# Screenshots can be switched off for a stretch of commits that render nothing,
+# by committing .githooks/SKIP_VISUAL. The marker is a file rather than an edit
+# to this script so that the state is visible in `git status`, appears in the
+# diff of the commit that sets it, and is restored by deleting something rather
+# than by remembering to re-edit a line. The banner below shouts on every run.
+#
+skip_visual="$(git rev-parse --show-toplevel)/.githooks/SKIP_VISUAL"
+gate="verify"
+[ -f "$skip_visual" ] && gate="verify:no-visual"
+
+printf 'pre-commit: running the gate (npm run %s). It includes a build, so it
+' "$gate"
+printf '            takes a few minutes. --no-verify skips it.
+'
+
+if [ "$gate" = "verify:no-visual" ]; then
+  printf '
+'
+  printf '  ##################################################################
+'
+  printf '  #  SCREENSHOTS ARE OFF. .githooks/SKIP_VISUAL says why and until  #
+'
+  printf '  #  when. Delete that file to restore the full gate.               #
+'
+  printf '  ##################################################################
+'
+  printf '
+'
+fi
+
+if run_gate "$log"; then
+  printf 'pre-commit: gate passed.\n'
+  exit 0
+fi
+
+if ! is_crash_shaped "$log"; then
+  refuse "$log"
+fi
+
+#
+# One retry, and only for this. Recorded rather than absorbed.
+#
+# Without it roughly two commits in five are refused for a reason that is not
+# real, and --no-verify becomes muscle memory - which would cost more than the
+# hook buys. But a retry that leaves no trace is how an intermittent fault
+# becomes permanent background noise, so every one is appended to a tally and
+# the running count is printed.
+#
+# If that count starts climbing on most commits, the crash has got worse and is
+# worth another look with the exit-code capture. The signal arrives by itself
+# instead of depending on somebody remembering what they saw last week.
+#
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse --short HEAD)" >>"$tally"
+retries="$(wc -l <"$tally" | tr -d ' ')"
+
+printf '\npre-commit: the first run hit the known db worker crash - non-zero exit,\n'
+printf '            short test count, nothing actually failing. Retrying once.\n'
+printf '            Retry %s recorded in %s\n\n' "$retries" "$tally"
+
+if run_gate "$retry_log"; then
+  printf 'pre-commit: gate passed on the retry.\n'
+  exit 0
+fi
+
+if is_crash_shaped "$retry_log"; then
+  printf '\npre-commit: the retry hit the same crash. Refusing rather than\n'
+  printf '            retrying again - twice in a row is no longer noise.\n'
+fi
+
+refuse "$retry_log"

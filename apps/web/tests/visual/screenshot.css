@@ -1,0 +1,43 @@
+/*
+ * Applied to every page immediately before it is photographed, and to nothing
+ * else. Playwright injects this via `expect.toHaveScreenshot.stylePath`.
+ *
+ * ---------------------------------------------------------------------------
+ * Why a sticky element cannot be photographed by fullPage
+ * ---------------------------------------------------------------------------
+ *
+ * `fullPage` captures a page taller than the viewport by scrolling and
+ * compositing. A `position: sticky` element follows the scroll by definition,
+ * so it is re-rendered partway down the captured image at an offset that
+ * depends on tile boundaries and on timing - which means the same page
+ * photographs a pixel or two differently between two runs that rendered
+ * identical markup.
+ *
+ * This was found on /styleguide, which is 21,848px tall and carries the
+ * `sticky top-0` top nav. A twenty-row band at y≈12,990 - the nav, ghosted
+ * mid-page - moved by one pixel between runs. It had almost certainly been
+ * doing so since the suite was written: 1,474 pixels on a page that size was
+ * comfortably inside the old maxDiffPixelRatio of 0.001, which allowed 31,460.
+ * Driving that budget to zero is what made it visible.
+ *
+ * Static rather than hidden, because at scroll position zero a sticky element
+ * and a static one occupy the same place and look identical. What is lost is
+ * only the ghost.
+ *
+ * `.sticky` is Tailwind's own class for it, so this selector is exactly as
+ * precise as the utility that causes the problem.
+ */
+.sticky {
+  position: static !important;
+}
+
+/*
+ * The same class of problem, one step subtler. A backdrop filter composites
+ * against whatever is behind the element, so during a tiled capture it
+ * composites against different content per tile. The nav carries
+ * `backdrop-blur-sm`; with the nav no longer ghosted this is belt and braces,
+ * and it costs nothing on a page whose backdrop is a flat canvas colour.
+ */
+* {
+  backdrop-filter: none !important;
+}

@@ -12,6 +12,14 @@ import { log } from "./logger.ts";
 import { handlePing } from "./jobs/ping.ts";
 import { handleIntegrationVerify } from "./jobs/integration-verify.ts";
 import { handleVaultReseal } from "./jobs/vault-reseal.ts";
+import { handleWhatsAppWebhook } from "./jobs/whatsapp-webhook.ts";
+import { handleWhatsAppMediaFetch } from "./jobs/whatsapp-media.ts";
+import { handleWhatsAppTemplateSubmit } from "./jobs/whatsapp-template-submit.ts";
+import { handleWhatsAppTemplateSync } from "./jobs/whatsapp-template-sync.ts";
+import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
+import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
+import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
+import { systemQueue } from "./queue.ts";
 
 /**
  * whatsapp-os background worker.
@@ -48,6 +56,47 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.VAULT_RESEAL:
       return handleVaultReseal(
         parseJobPayload(JOB_NAMES.VAULT_RESEAL, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_WEBHOOK:
+      return handleWhatsAppWebhook(
+        parseJobPayload(JOB_NAMES.WHATSAPP_WEBHOOK, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_MESSAGE_SEND:
+      /*
+       * No job id is threaded through: usage is deduped on the message id, not
+       * the job (C3), and this job runs once by contract anyway.
+       */
+      return handleWhatsAppMessageSend(
+        parseJobPayload(JOB_NAMES.WHATSAPP_MESSAGE_SEND, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_MEDIA_FETCH:
+      return handleWhatsAppMediaFetch(
+        parseJobPayload(JOB_NAMES.WHATSAPP_MEDIA_FETCH, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_MARK_READ:
+      return handleWhatsAppMarkRead(
+        parseJobPayload(JOB_NAMES.WHATSAPP_MARK_READ, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_NUMBERS_REFRESH:
+      /* The job id is the usage dedupe key, as with integration.verify. */
+      return handleWhatsAppNumbersRefresh(
+        parseJobPayload(JOB_NAMES.WHATSAPP_NUMBERS_REFRESH, job.data),
+        job.id ?? `${job.name}:${job.timestamp}`,
+      );
+
+    case JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT:
+      return handleWhatsAppTemplateSubmit(
+        parseJobPayload(JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT, job.data),
+      );
+
+    case JOB_NAMES.WHATSAPP_TEMPLATE_SYNC:
+      return handleWhatsAppTemplateSync(
+        parseJobPayload(JOB_NAMES.WHATSAPP_TEMPLATE_SYNC, job.data),
       );
 
     default:
@@ -102,6 +151,9 @@ async function shutdown(signal: string): Promise<void> {
 
   try {
     await worker.close();
+    /* The producer holds its own connection, so it needs its own close - a
+       missed one keeps the process alive after the worker has stopped. */
+    await systemQueue.close();
     await connection.quit();
     await prisma.$disconnect();
     log.info("shutdown complete");

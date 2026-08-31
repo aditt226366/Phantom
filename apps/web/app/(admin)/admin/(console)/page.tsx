@@ -7,6 +7,7 @@ import {
 } from "@/lib/admin-db";
 import { requireAdminSession } from "@/lib/auth/admin-session";
 import { requestContext } from "@/lib/auth/request";
+import { Card } from "@/components/ui/card";
 import { formatCount, formatMicros } from "@/lib/format";
 import { PlanDistribution } from "../_components/plan-distribution";
 import { RepairPanel } from "../_components/repair-panel";
@@ -96,6 +97,8 @@ export default async function AdminOverviewPage() {
         />
 
         <PlanDistribution distribution={overview.planDistribution} />
+
+        <UnroutableCard unroutable={overview.unroutableThisWeek} />
       </section>
 
       <RepairPanel run={repair} />
@@ -151,5 +154,67 @@ function SpendCard({
       }
       {...(note ? { note } : {})}
     />
+  );
+}
+
+/**
+ * Webhook deliveries that arrived and could not be routed.
+ *
+ * P6: operator visibility is a commit rather than a claim. These rows have
+ * existed since 4a and were readable only by querying the table - so a tenant
+ * whose webhook was misconfigured was invisible to the person whose job is
+ * noticing, and stayed invisible until they complained.
+ *
+ * Two numbers rather than one, because they are different problems:
+ *
+ *   Unknown key    the path matches no integration. A rotated key, a stale
+ *                  Meta config, or somebody probing. Nothing is arriving.
+ *   Bad signature  the key resolves but the signature did not verify. Almost
+ *                  always a stale app secret on a REAL tenant, which is a
+ *                  support call that has not been made yet.
+ *
+ * Zero is the expected reading, and it renders as plainly as any other number.
+ * A card that hid itself when empty would leave an operator unable to tell "no
+ * problems" from "this panel is broken", which is the distinction the card is
+ * for.
+ */
+function UnroutableCard({
+  unroutable,
+}: {
+  unroutable: { unknownKey: number; badSignature: number; attempts: number };
+}) {
+  const total = unroutable.unknownKey + unroutable.badSignature;
+
+  return (
+    /* Card and the same type tokens StatCard uses, so this reads as one of the
+       row rather than as something bolted on. `text-caption-uppercase` is a
+       type step and not a transform - adding `uppercase` on top shouted the
+       label at a reader every neighbouring card speaks to normally. */
+    <Card className="flex flex-col gap-xxs">
+      <p className="text-caption-uppercase text-muted">Unroutable webhooks</p>
+
+      <p
+        className={
+          total > 0
+            ? "font-display text-display-md text-error"
+            : "font-display text-display-md text-ink"
+        }
+      >
+        {formatCount(total)}
+      </p>
+
+      <p className="text-caption text-muted">
+        {formatCount(unroutable.unknownKey)} unknown key
+        {unroutable.unknownKey === 1 ? "" : "s"} ·{" "}
+        {formatCount(unroutable.badSignature)} bad signature
+        {unroutable.badSignature === 1 ? "" : "s"}
+      </p>
+
+      {/* Distinct keys above; deliveries here. The first is how many problems,
+          the second is how loudly they are failing. */}
+      <p className="mt-xxs text-caption text-muted-soft">
+        {formatCount(unroutable.attempts)} deliveries, last 7 days
+      </p>
+    </Card>
   );
 }

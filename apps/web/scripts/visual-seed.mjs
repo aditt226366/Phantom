@@ -1036,6 +1036,34 @@ try {
     }
   }
 
+  /*
+   * Unroutable deliveries, so the operator card photographs a real reading
+   * rather than three zeroes. One of each reason, because they are different
+   * problems and the card splits them - and the counts are deliberately small
+   * and different from each other, so a card that rendered the same number
+   * twice would be visibly wrong rather than plausibly right.
+   *
+   * lastSeenAt is stamped relative to now, and the rule at the top of this file
+   * holds: the card windows on the last 7 days and renders a COUNT, never the
+   * instant. A literal would age out of that window and the card would fall to
+   * zero on a date nobody wrote down.
+   */
+  const unroutable = [
+    ["c000visualfixtureunroute1", "UNKNOWN_KEY", 4, 2],
+    ["c000visualfixtureunroute2", "BAD_SIGNATURE", 11, 1],
+  ];
+
+  for (const [id, reason, attempts, daysAgo] of unroutable) {
+    await client.query(
+      `INSERT INTO unroutable_webhooks
+         (id, webhook_key_hash, reason, attempt_count, first_seen_at, last_seen_at)
+       VALUES ($1, $2, $3::unroutable_reason, $4,
+               now() - ($5 || ' days')::interval,
+               now() - ($5 || ' days')::interval)`,
+      [id, `${id}-hash`, reason, attempts, String(daysAgo)],
+    );
+  }
+
   console.log(
     `Seeded ${TEST_DATABASE_NAME}: 3 companies, ${users.length} users, ` +
       `4 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +

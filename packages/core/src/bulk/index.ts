@@ -22,3 +22,16 @@ export type {
   RejectReason,
 } from "./audience.ts";
 export { toCsv, safeCsvFilename } from "./csv.ts";
+export {
+  classifyBulkError,
+  describeDuration,
+  estimatedDurationMs,
+  sendDelayMs,
+  tierCapacity,
+  tierHeadroom,
+} from "./limits.ts";
+export type {
+  BulkErrorAction,
+  TierHeadroom,
+  TierKnowledge,
+} from "./limits.ts";

@@ -88,17 +88,43 @@ describe("required keys and what the badge may say", () => {
     }
   });
 
-  it("does not hold a badge down for a key nothing reads yet", () => {
-    /*
-     * WHATSAPP_BUSINESS_ACCOUNT_ID is only needed by the Template Studio in
-     * Phase 4b. Marking it required now would demote every WhatsApp card for a
-     * value no code path consults, which is the lenient/strict mistake in the
-     * other direction.
-     */
+  /*
+   * The inverse of what this asserted through 4a, and the flip is the point.
+   *
+   * WHATSAPP_BUSINESS_ACCOUNT_ID was optional for exactly as long as nothing
+   * read it: a key that demotes a badge while no code path would notice its
+   * absence teaches operators to ignore the badge, which is the lenient/strict
+   * mistake in the other direction.
+   *
+   * The Template Studio reads it - every template call is scoped to the WABA -
+   * so without it the Studio submits nothing and the Library syncs nothing.
+   * Required now, and demoting the badge is the correct report rather than a
+   * nuisance.
+   */
+  it("holds the badge down once the Studio needs the WABA id", () => {
     const businessAccountId = integrationFields("WHATSAPP_CLOUD").find(
       (f) => f.key === "WHATSAPP_BUSINESS_ACCOUNT_ID",
     );
 
-    expect(businessAccountId?.required).toBe(false);
+    expect(businessAccountId?.required).toBe(true);
+  });
+
+  /*
+   * And the consequence, asserted rather than assumed: a WhatsApp integration
+   * missing only this key reports NOT_CONNECTED however green the stored status
+   * is. That is the derived status doing its job - the panel must not say
+   * CONNECTED about an integration that cannot do half of what it is for.
+   */
+  it("reports a WhatsApp integration without a WABA id as not connected", () => {
+    const withoutWaba = integrationFields("WHATSAPP_CLOUD")
+      .map((f) => f.key)
+      .filter((key) => key !== "WHATSAPP_BUSINESS_ACCOUNT_ID");
+
+    expect(missingRequiredKeys("WHATSAPP_CLOUD", withoutWaba)).toEqual([
+      "WHATSAPP_BUSINESS_ACCOUNT_ID",
+    ]);
+    expect(
+      effectiveIntegrationStatus("WHATSAPP_CLOUD", withoutWaba, "CONNECTED"),
+    ).toBe("NOT_CONNECTED");
   });
 });

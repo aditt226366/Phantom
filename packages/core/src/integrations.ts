@@ -87,10 +87,22 @@ export const INTEGRATION_FIELDS = {
       key: "WHATSAPP_BUSINESS_ACCOUNT_ID",
       label: "Business account ID",
       secret: false,
-      /* Only templates need it, and those are Phase 4b. Marked required when
-         the Template Studio arrives, not before - a key nothing reads yet must
-         not hold a badge down. */
-      required: false,
+      /*
+       * Required as of 4b, and this is the commit that starts needing it.
+       *
+       * It was optional for exactly as long as nothing read it - a key that
+       * holds a badge down while no code path would notice its absence teaches
+       * operators to ignore the badge. The Template Studio changed that: every
+       * template call is scoped to the WABA, so without this the Studio submits
+       * nothing and the Library syncs nothing.
+       *
+       * The flip and the need land together on purpose. Commit 11's derived
+       * effectiveIntegrationStatus already reads `required`, so the badge
+       * starts reporting the absence in the same commit that makes it matter,
+       * rather than in a later one that would leave a window where the panel
+       * says CONNECTED about an integration that cannot do half its job.
+       */
+      required: true,
     },
     {
       key: "WHATSAPP_ACCESS_TOKEN",

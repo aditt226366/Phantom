@@ -958,3 +958,88 @@ there is no path for an admin to set a password. Either would let an operator
 take an account with nothing in the user's inbox to notice. Sessions are revoked
 at issue time, not at token use, because the reason to press that button is a
 suspected compromise.
+
+**A lead source is a producer of messages, and there are now two.** Phase 6 made
+the Phase 5 rule structural rather than a claim about one commit.
+`materialiseOutboundTemplate` in `packages/db/src/outbound.ts` is the shared
+half — contact upsert, the last opt-out filter, conversation upsert, the message
+row, and the `advanceConversation` call whose absence Phase 5's screenshot
+caught. Both bulk and lead sources call it; what stays with each producer is
+only its own bookkeeping. A third producer writes a caller, never a copy.
+
+Five things follow, each with a test:
+
+- **Idempotency is a unique index, checked inside the transaction that writes
+  the message.** `UNIQUE (company_id, spreadsheet_id, row_hash)`. Never a
+  check-then-send: a poll running every thirty seconds beside a retrying job
+  will find the window between the question and the answer, and what comes out
+  of it is a real customer messaged twice. The row insert goes **first** in the
+  transaction, so a duplicate is refused before any message exists.
+- **The cursor is a count AND an anchor, and the count alone is wrong twice.** A
+  deletion puts it past the end of the sheet and the binding never sends again;
+  a mid-sheet insert shifts an already-sent row into its place while the new one
+  above it is never looked at. Neither errors. The anchor is a hash of the last
+  row seen over *every* cell — deliberately not `rowHash`, which ignores
+  unmapped cells and would be blind to the edits the anchor watches for.
+- **The row hash excludes the row's position, the unmapped cells and the tab.**
+  A position-sensitive hash re-sends the whole sheet to everybody on it after one
+  insert at the top. It is length-prefixed rather than joined on a separator, and
+  version-tagged: changing what is hashed makes every stored row look new, which
+  is a message to every customer a tenant has ever imported, with no undo.
+- **Activation starts the cursor at the END of the sheet.** Switching on a
+  binding must not contact the rows already in it. Bulk messaging is where a
+  decision to contact five thousand people belongs — it has the counts, the
+  typed confirmation and the pace.
+- **A quota failure never demotes, and an unreadable sheet always does.** A lost
+  share is the most common failure this feature has and looks identical to "no
+  new leads" unless the page says so. A timeout demoting would teach people to
+  ignore the state that matters.
+
+**The worker cannot enumerate companies, so per-tenant scheduling is per-row.**
+Each binding gets a BullMQ job scheduler carrying its own `companyId`, registered
+by a server action after `requireSession()`. The scheduler id is derived from the
+binding id, because `upsertJobScheduler` is an upsert on that key — a random or
+timestamped id leaves the old schedule running and the binding polls twice as
+often, which is every other tenant's problem first because Sheets meters reads
+per *project*. Pausing does not unregister it: the handler returns early, so
+re-enabling is one UPDATE rather than a re-registration that could fail and leave
+a binding that says ACTIVE and reads nothing.
+
+**`app_resolve_company` has seven kinds now, and the last two disagree about
+suspension on purpose.** `webhook` resolves for a deactivated company because
+Meta disables a subscription that keeps failing, so refusing costs the tenant
+their webhook and every message that arrived while they were suspended.
+`lead_source` refuses one, because that bell only ever causes us to *send* and
+Apps Script has no subscription to lose. Adding a kind means restating all seven
+branches under `SET ROLE app_resolver`, and both catalog invariants will catch
+the new grant — widen `COLUMN_GRANTS` with a reason rather than granting the
+whole table.
+
+**One page in the app calls a provider before it can render, and the screenshot
+suite cannot.** The lead-source mapping screen reads Google live. It goes
+through `apps/web/lib/lead-sources/sheets.ts`, which answers from a literal when
+`LEAD_SHEET_FIXTURE` holds one fixed sentinel — set by `playwright.config.ts` and
+nothing else. Without it the gate spends the full ten-second provider timeout at
+two viewports every run and photographs an error state, so the screen most worth
+looking at becomes the one screen never looked at. The module states what the
+hook can and cannot reach; the worker has its own call and does not import it.
+Prefer this shape to storing a copy of the tenant's rows.
+
+**`webhook_key` defaults to a database expression, and the seed must write a
+literal one — for the second time.** The conventions already record this about
+`integrations`. `lead_sources` repeats it, and the trap is sharper: the Apps
+Script panel is collapsed, so the URL is not in the DOM and a random key costs
+nothing *today*. The first change that opens that panel by default would produce
+a baseline that never matched twice and would be diagnosed as a flaky suite.
+
+**PowerShell here-string syntax silently corrupts a `git commit -m` under bash.**
+`git commit -m @'...'@` in Git Bash concatenates a literal `@` onto both ends of
+the message, so the subject line becomes `@`. It does not error. Write the
+message to a file and use `git commit -F`, which has no quoting hazards in either
+shell.
+
+**A multi-line break-once anchor needs the two-character escape, not a real
+newline.** `--find 'a\nb'` works; an actual line break inside the quoted argument
+matches nothing and is reported as "the break did not land". PowerShell 5.1 also
+drops an empty `--replace ''`, so widen a guard rather than deleting a line when
+proving one.

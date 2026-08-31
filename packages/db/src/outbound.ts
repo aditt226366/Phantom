@@ -110,6 +110,20 @@ export async function materialiseOutboundTemplate(
       companyId,
       contactId: contact.id,
       whatsappNumberId: input.whatsappNumberId,
+      /*
+       * CAMPAIGN, not the INBOUND default.
+       *
+       * Nobody wrote to us - this thread exists because a list or a
+       * spreadsheet said to start it, which is what the enum member is for.
+       * The default was left in place through Phase 5 and is wrong in a quiet
+       * way: `source` is how an operator tells a customer who got in touch
+       * from a stranger who was contacted, and every bulk thread claiming to
+       * be inbound makes that column useless exactly where it matters.
+       *
+       * On create only. A contact who wrote in first has an INBOUND thread and
+       * being messaged later does not retroactively make it a campaign.
+       */
+      source: "CAMPAIGN",
     },
     update: {},
     select: { id: true },

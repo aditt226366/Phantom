@@ -359,6 +359,73 @@ const MEDIA_BYTES = Buffer.from(
 const MEDIA_SHA256 = createHash("sha256").update(MEDIA_BYTES).digest("hex");
 
 /* ------------------------------------------------------------------ */
+/* Lead sources                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Two bindings, and the second one is the reason this block exists.
+ *
+ *   healthy    polling, with real leads behind it in three different states,
+ *              so the live feed photographs more than one badge.
+ *   lost       ERROR, carrying the sentence Google actually produces when a
+ *              spreadsheet was never shared with the service account.
+ *
+ * The error state is the screen a tenant genuinely stares at and the one least
+ * likely to be looked at during development, because everything works on the
+ * machine where the share was set up by the person writing the feature. It is
+ * seeded deliberately for that reason - the same argument as the unverified
+ * workspace one table over.
+ */
+const LEAD_SOURCE = {
+  healthy: "c000visualfixtureleadsrc1",
+  lost: "c000visualfixtureleadsrc2",
+};
+
+const LEAD_MAPPING = {
+  phone: "Mobile",
+  variables: { 1: "Name", 2: "Order" },
+};
+
+/** Literal instants, because the binding prints when it last looked and sent. */
+const T_LEAD = {
+  healthyCreated: "2026-08-12T05:00:00Z", // 12/08/2026 10:30:00
+  healthyPolled: "2026-08-15T06:30:00Z", //  15/08/2026 12:00:00
+  healthySent: "2026-08-15T06:29:00Z", //    15/08/2026 11:59:00
+  lostCreated: "2026-08-11T04:00:00Z", //    11/08/2026 09:30:00
+  lostPolled: "2026-08-15T06:31:00Z", //     15/08/2026 12:01:00
+  lostFailed: "2026-08-13T09:15:00Z", //     13/08/2026 14:45:00
+};
+
+/**
+ * The healthy binding's recent leads.
+ *
+ * One of each outcome the feed can show - delivered, queued, and a row skipped
+ * because the contact had opted out. A feed of five identical green badges
+ * would photograph a layout that has never had to fit a long sentence beside a
+ * number, which is exactly the part that breaks at 390px.
+ */
+const LEAD_ROWS = [
+  { phone: "+919876543240", state: "SENT", status: "READ", skip: null },
+  { phone: "+919876543241", state: "SENT", status: "DELIVERED", skip: null },
+  { phone: "+919876543242", state: "SENT", status: "SENT", skip: null },
+  { phone: "+919876543243", state: "SENT", status: "PENDING", skip: null },
+  {
+    phone: "+919876543244",
+    state: "SKIPPED",
+    status: null,
+    skip: "Opted out, or the number cannot receive WhatsApp",
+  },
+  {
+    phone: "+919876543245",
+    state: "SENT",
+    status: "FAILED",
+    skip: null,
+    error: "This number cannot receive WhatsApp messages.",
+  },
+];
+
+/* ------------------------------------------------------------------ */
+
 /* Broadcasts                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1490,6 +1557,184 @@ try {
     finishedAt: T_BROADCAST.finishedEnded,
   });
 
+  /* ---------------------------------------------------------------- */
+  /* Lead sources                                                       */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * The healthy binding, and the one that has lost access to its sheet.
+   *
+   * cursor_count and cursor_anchor are literal because the page never renders
+   * them - but they are written anyway, because a binding with a null anchor is
+   * one that would rescan its whole sheet on the next poll, and a fixture that
+   * quietly describes a state the product tries to avoid is a fixture that
+   * teaches the wrong thing to whoever reads it next.
+   */
+  await client.query(
+    `INSERT INTO lead_sources
+       (id, company_id, name, spreadsheet_id, tab, sheet_gid, action,
+        action_config, template_id, whatsapp_number_id, status,
+        poll_interval_seconds, cursor_count, cursor_anchor, rows_seen,
+        rows_sent, rows_skipped, rows_rejected, rows_duplicate, reject_reasons,
+        last_polled_at, last_sent_at, created_by_user_id, created_at, updated_at)
+     VALUES ($1, $2, 'Website enquiries', '1NorthwindLeadsSheetFixture0001',
+             'Leads', 0, 'TEMPLATE', $3::jsonb, $4, $5, 'ACTIVE', 30,
+             184, $6, 184, 171, 6, 7, 0, $7::jsonb, $8, $9,
+             'c000visualfixtureuser001', $10, $10)`,
+    [
+      LEAD_SOURCE.healthy,
+      COMPANY.active,
+      JSON.stringify({
+        kind: "TEMPLATE",
+        templateId: FIXTURE.approvedTemplateId,
+        mapping: LEAD_MAPPING,
+      }),
+      FIXTURE.approvedTemplateId,
+      NUMBERS[0].id,
+      "c000visualfixtureleadanchor00000000000000000000000000000000000001",
+      JSON.stringify({ unparseable_phone: 5, missing_phone: 2 }),
+      T_LEAD.healthyPolled,
+      T_LEAD.healthySent,
+      T_LEAD.healthyCreated,
+    ],
+  );
+
+  /*
+   * The lost-access binding.
+   *
+   * last_error is Google's own sentence, wrapped the way the action wraps it -
+   * because "Requested entity was not found" alone is technically honest and
+   * useless, and what the tenant reads has to say what to do about it. Nothing
+   * has been sent, so last_sent_at is null and the page photographs the
+   * "nothing sent yet" branch as well as the error.
+   */
+  await client.query(
+    `INSERT INTO lead_sources
+       (id, company_id, name, spreadsheet_id, tab, sheet_gid, action,
+        action_config, template_id, whatsapp_number_id, status,
+        poll_interval_seconds, cursor_count, cursor_anchor, rows_seen,
+        rows_sent, rows_skipped, rows_rejected, rows_duplicate, reject_reasons,
+        last_polled_at, last_error, last_error_at, created_by_user_id,
+        created_at, updated_at)
+     VALUES ($1, $2, 'Trade show sign-ups', '1NorthwindTradeShowFixture0002',
+             'Sheet1', 0, 'TEMPLATE', $3::jsonb, $4, $5, 'ERROR', 30,
+             0, NULL, 0, 0, 0, 0, 0, '{}'::jsonb, $6, $7, $8,
+             'c000visualfixtureuser001', $9, $9)`,
+    [
+      LEAD_SOURCE.lost,
+      COMPANY.active,
+      JSON.stringify({
+        kind: "TEMPLATE",
+        templateId: FIXTURE.approvedTemplateId,
+        mapping: LEAD_MAPPING,
+      }),
+      FIXTURE.approvedTemplateId,
+      NUMBERS[0].id,
+      T_LEAD.lostPolled,
+      "We cannot see that spreadsheet. Share it with the service account, " +
+        "as Editor, then try again. (Google said: Requested entity was not " +
+        "found.)",
+      T_LEAD.lostFailed,
+      T_LEAD.lostCreated,
+    ],
+  );
+
+  /*
+   * The healthy binding's leads, each one a real contact, conversation and
+   * message - because that is exactly what a lead IS after materialisation.
+   * Nothing here is a lead-shaped parallel row; the feed reads the same tables
+   * the inbox does.
+   */
+  let leadRowIndex = 0;
+
+  for (const lead of LEAD_ROWS) {
+    const n = String(leadRowIndex).padStart(6, "0");
+    const contactId = `c000visualfixturelc${n}`;
+    const conversationId = `c000visualfixturelv${n}`;
+    const messageId = `c000visualfixturelm${n}`;
+    const rowId = `c000visualfixturelr${n}`;
+    /* Literal and descending, so the feed's order is fixed rather than
+       whatever one transaction's clock produced. */
+    const at = `2026-08-15T0${5 - Math.min(leadRowIndex, 4)}:00:00Z`;
+    leadRowIndex += 1;
+
+    await client.query(
+      `INSERT INTO contacts (id, company_id, wa_id, phone_e164, display_name,
+                             created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+      [
+        contactId,
+        COMPANY.active,
+        lead.phone.slice(1),
+        lead.phone,
+        null,
+        at,
+      ],
+    );
+
+    if (lead.state === "SENT") {
+      await client.query(
+        `INSERT INTO conversations
+           (id, company_id, contact_id, whatsapp_number_id, source,
+            last_message_at, last_message_preview, unread_count,
+            created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'CAMPAIGN', $5, $6, 0, $5, $5)`,
+        [
+          conversationId,
+          COMPANY.active,
+          contactId,
+          NUMBERS[0].id,
+          at,
+          "Hi there, thanks for getting in touch about NW-2291.",
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO messages
+           (id, company_id, conversation_id, direction, status, type, body,
+            template_payload, occurred_at, send_attempt, error_source,
+            error_title, failed_at, created_at, updated_at)
+         VALUES ($1, $2, $3, 'OUTBOUND', $4::message_status, 'template', $5,
+                 $6::jsonb, $7, 0, $8, $9, $10, $7, $7)`,
+        [
+          messageId,
+          COMPANY.active,
+          conversationId,
+          lead.status,
+          "Hi there, thanks for getting in touch about NW-2291.",
+          JSON.stringify({
+            name: "order_ready",
+            language: "en_US",
+            parameters: ["there", "NW-2291"],
+          }),
+          at,
+          lead.error ? "META" : null,
+          lead.error ?? null,
+          lead.error ? at : null,
+        ],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO lead_source_rows
+         (id, company_id, lead_source_id, spreadsheet_id, row_hash, phone_e164,
+          state, skip_reason, message_id, created_at)
+       VALUES ($1, $2, $3, '1NorthwindLeadsSheetFixture0001', $4, $5,
+               $6::lead_source_row_state, $7, $8, $9)`,
+      [
+        rowId,
+        COMPANY.active,
+        LEAD_SOURCE.healthy,
+        `fixture-row-hash-${n}`,
+        lead.phone,
+        lead.state,
+        lead.skip,
+        lead.state === "SENT" ? messageId : null,
+        at,
+      ],
+    );
+  }
+
   /*
    * Unroutable deliveries, so the operator card photographs a real reading
    * rather than three zeroes. One of each reason, because they are different
@@ -1525,7 +1770,7 @@ try {
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +
       `${KYC_DOCUMENTS.length} approved KYC documents, ` +
-      `3 broadcasts, ` +
+      `3 broadcasts, 2 lead sources, ${LEAD_ROWS.length} leads, ` +
       `${BLOCKED_KYC_DOCUMENTS.length} for the unverified workspace.`,
   );
 } finally {

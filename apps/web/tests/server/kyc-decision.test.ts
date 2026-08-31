@@ -33,8 +33,16 @@ const DOCUMENT = {
   status: "PENDING",
 };
 
+const deleteCompanyKycDocuments = vi.fn(async (_id: string) => 3);
+const getCompanyDetail = vi.fn(async (_id: string) => ({
+  id: "company-1",
+  name: "Northwind Traders",
+}) as unknown);
+
 vi.mock("@/lib/admin-db", () => ({
   decideKycDocument,
+  deleteCompanyKycDocuments,
+  getCompanyDetail,
   getKycDocument,
   writeAdminAudit,
 }));
@@ -54,13 +62,24 @@ vi.mock("@/lib/auth/request", () => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
-/* redirect() throws in real Next. Swallowed so the assertions after it run. */
+/*
+ * redirect() throws in real Next; this stub returns.
+ *
+ * That makes the mock WEAKER than reality, which is deliberate and is what
+ * makes these assertions worth something: an action relying on the throw to
+ * stop would keep running here, and the "refuses" tests would catch it. The
+ * erase action uses `return redirect(...)` for exactly that reason.
+ */
 vi.mock("next/navigation", () => ({ redirect: () => undefined }));
 
-const { approveDocumentAction, rejectDocumentAction, revokeDocumentAction } =
-  await import(
-    "@/app/(admin)/admin/(console)/companies/[id]/documents/actions"
-  );
+const {
+  approveDocumentAction,
+  eraseCompanyDocumentsAction,
+  rejectDocumentAction,
+  revokeDocumentAction,
+} = await import(
+  "@/app/(admin)/admin/(console)/companies/[id]/documents/actions"
+);
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();
@@ -71,6 +90,10 @@ function form(fields: Record<string, string>): FormData {
 beforeEach(() => {
   decideKycDocument.mockClear().mockResolvedValue(true);
   getKycDocument.mockClear().mockResolvedValue(DOCUMENT);
+  deleteCompanyKycDocuments.mockClear().mockResolvedValue(3);
+  getCompanyDetail
+    .mockClear()
+    .mockResolvedValue({ id: "company-1", name: "Northwind Traders" });
   writeAdminAudit.mockClear();
 });
 
@@ -197,6 +220,84 @@ describe("a document that is not there", () => {
     await approveDocumentAction(form({ documentId: "nope" }));
 
     expect(decideKycDocument).not.toHaveBeenCalled();
+    expect(writeAdminAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("erasing a company's documents", () => {
+  /*
+   * DPDP's right to erasure, and the one operation allowed to contradict the
+   * append-only table. Irreversible, so the interesting assertions are all
+   * about what stops it happening by accident.
+   */
+  it("erases when the typed name matches exactly", async () => {
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "company-1", confirmName: "Northwind Traders" }),
+    );
+
+    expect(deleteCompanyKycDocuments).toHaveBeenCalledWith("company-1");
+  });
+
+  it("refuses a name that does not match", async () => {
+    /*
+     * The mistake this exists to stop is not a misclick - a confirm step
+     * already covers that. It is confirming the WRONG company, which is what
+     * happens with two tabs open, and only the typed name catches it.
+     */
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "company-1", confirmName: "Northwind" }),
+    );
+
+    expect(deleteCompanyKycDocuments, "erased on a near-match").not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty confirmation", async () => {
+    await eraseCompanyDocumentsAction(form({ companyId: "company-1" }));
+
+    expect(deleteCompanyKycDocuments).not.toHaveBeenCalled();
+  });
+
+  it("accepts a name with stray whitespace, and nothing looser", async () => {
+    /* Trimmed because a copy-paste picks up a trailing space and refusing that
+       teaches people to distrust the control. Nothing else is forgiven. */
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "company-1", confirmName: "  Northwind Traders  " }),
+    );
+
+    expect(deleteCompanyKycDocuments).toHaveBeenCalledTimes(1);
+
+    deleteCompanyKycDocuments.mockClear();
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "company-1", confirmName: "northwind traders" }),
+    );
+
+    expect(deleteCompanyKycDocuments, "matched case-insensitively").not.toHaveBeenCalled();
+  });
+
+  it("records the count after the delete, not before", async () => {
+    /*
+     * The documents are gone; this row is the only remaining evidence that
+     * they existed and who removed them. So the number has to be what was
+     * actually deleted rather than what was expected to be.
+     */
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "company-1", confirmName: "Northwind Traders" }),
+    );
+
+    expect(writeAdminAudit.mock.calls[0]?.[0]).toMatchObject({
+      action: "admin.kyc.documents.erased",
+      metadata: { companyId: "company-1", documentsRemoved: 3 },
+    });
+  });
+
+  it("does nothing for a company that does not exist", async () => {
+    getCompanyDetail.mockResolvedValue(null);
+
+    await eraseCompanyDocumentsAction(
+      form({ companyId: "nope", confirmName: "anything" }),
+    );
+
+    expect(deleteCompanyKycDocuments).not.toHaveBeenCalled();
     expect(writeAdminAudit).not.toHaveBeenCalled();
   });
 });

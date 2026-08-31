@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { KYC_KINDS, canUseFeatures, type KycStatus } from "@whatsapp-os/core/kyc";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   getCompanyDetail,
@@ -15,6 +17,7 @@ import { AdminCsrfField } from "../../../../_components/admin-csrf-field";
 import { KycDocumentCard } from "../../../../_components/kyc-document-card";
 import {
   approveDocumentAction,
+  eraseCompanyDocumentsAction,
   rejectDocumentAction,
   revokeDocumentAction,
 } from "./actions";
@@ -38,8 +41,10 @@ export const metadata: Metadata = { title: "Documents" };
  */
 export default async function CompanyDocumentsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const session = await requireAdminSession();
   const context = await requestContext();
@@ -49,6 +54,7 @@ export default async function CompanyDocumentsPage({
   if (!company) notFound();
 
   const documents = await listCompanyKycDocuments(company.id);
+  const confirming = (await searchParams)["confirm"] === "erase";
 
   await writeAdminAudit({
     adminUserId: session.adminUserId,
@@ -155,6 +161,103 @@ export default async function CompanyDocumentsPage({
           ))}
         </ul>
       )}
+
+      {/*
+        Erasure, and only ever behind the confirm step.
+
+        A GET renders the panel; only the form inside it mutates - the same
+        shape Deactivate uses, for the same reason. The link is at the bottom
+        and reads plainly rather than shouting: it is a legal obligation an
+        operator carries out on request, not an escape hatch for a bad upload.
+      */}
+      {documents.length > 0 ? (
+        confirming ? (
+          <EraseConfirm
+            companyId={company.id}
+            companyName={company.name}
+            documentCount={documents.length}
+          />
+        ) : (
+          <p className="text-body-sm text-muted">
+            <Link
+              href={`/admin/companies/${company.id}/documents?confirm=erase`}
+              className="underline underline-offset-4"
+            >
+              Erase these documents permanently
+            </Link>{" "}
+            — for a DPDP erasure request.
+          </p>
+        )
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * The confirmation step for an irreversible delete.
+ *
+ * The operator types the company's name. Deactivate is reversible and a
+ * confirm step is proportionate for it; this destroys the evidence that
+ * verification ever happened, and a confirm step alone only protects against a
+ * misclick. Typing the name is what protects against confirming the WRONG
+ * company, which is the mistake that actually happens with two tabs open.
+ */
+function EraseConfirm({
+  companyId,
+  companyName,
+  documentCount,
+}: {
+  companyId: string;
+  companyName: string;
+  documentCount: number;
+}) {
+  return (
+    <section className="rounded-xl border border-hairline-strong bg-surface-card p-lg">
+      <h2 className="font-display text-display-sm text-ink">
+        Erase {documentCount} document{documentCount === 1 ? "" : "s"} for{" "}
+        {companyName}?
+      </h2>
+
+      <div className="mt-sm flex max-w-2xl flex-col gap-xs text-body-sm text-body">
+        <p>
+          The files and every record of what was approved are deleted
+          permanently. This cannot be undone and there is no copy.
+        </p>
+        <p>
+          This workspace will be blocked from every feature until it files all
+          three again — which is correct: nobody has verified it any more.
+        </p>
+        <p className="text-ink">
+          Do this for a DPDP erasure request. Not to clear a rejected upload —
+          the tenant can simply send a new one.
+        </p>
+      </div>
+
+      <form action={eraseCompanyDocumentsAction} className="mt-lg flex flex-col gap-xs">
+        <AdminCsrfField />
+        <input type="hidden" name="companyId" defaultValue={companyId} />
+
+        <label htmlFor="confirm-name" className="text-body-sm text-body">
+          Type <span className="text-ink">{companyName}</span> to confirm.
+        </label>
+        <input
+          id="confirm-name"
+          name="confirmName"
+          required
+          autoComplete="off"
+          className="max-w-narrow rounded-md border border-hairline-strong bg-canvas px-sm py-xs font-body text-body-sm text-ink"
+        />
+
+        <div className="mt-sm flex items-center gap-sm">
+          <Button type="submit">Erase permanently</Button>
+          <Link
+            href={`/admin/companies/${companyId}/documents`}
+            className="text-body-sm text-muted underline underline-offset-4"
+          >
+            Cancel
+          </Link>
+        </div>
+      </form>
+    </section>
   );
 }

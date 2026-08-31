@@ -177,6 +177,14 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "company-integrations", path: `${company}/integrations`, audience: "admin" },
   { name: "company-verification-logs", path: `${company}/integrations?view=logs`, audience: "admin" },
   { name: "company-documents", path: `${company}/documents`, audience: "admin" },
+  {
+    /* The irreversible one, behind its confirm step. Photographed for the
+       reason company-deactivate-confirm is: a destructive panel nobody has
+       looked at is one whose copy nobody has read. */
+    name: "company-documents-erase-confirm",
+    path: `${company}/documents?confirm=erase`,
+    audience: "admin",
+  },
   { name: "company-billing", path: `${company}/billing`, audience: "admin" },
   { name: "company-deactivate-confirm", path: `${company}?confirm=deactivate`, audience: "admin" },
 ];

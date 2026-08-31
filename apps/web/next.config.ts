@@ -94,6 +94,28 @@ const nextConfig: NextConfig = {
       allowedOrigins: [
         new URL(process.env["APP_URL"] ?? "http://localhost:3000").host,
       ],
+
+      /**
+       * The outermost half of the KYC upload cap, and the half that streams.
+       *
+       * Next refuses a body larger than this AS IT ARRIVES, before the action
+       * runs and before anything is resident. That is what stops a 200 MB
+       * request from being buffered, and it is not something a Server Action
+       * can do for itself: by the time the action has a File, the framework
+       * has already parsed the multipart body.
+       *
+       * The exact 5 MiB rule is readPdfUpload's, and it runs over what gets
+       * through here - so the worst case that reaches memory is this number,
+       * not the client's ambition. The two are deliberately not equal: a
+       * request carrying a 5 MiB file also carries the multipart boundaries,
+       * the field names and the CSRF token, so a limit of exactly 5 MiB would
+       * refuse a file exactly at the documented maximum, with a framework
+       * error rather than our own sentence. The margin is for the envelope.
+       *
+       * Raising the documented cap means raising this too, and the CHECK
+       * constraint in 20260831090000 is the third copy of the number.
+       */
+      bodySizeLimit: "6mb",
     },
   },
 };

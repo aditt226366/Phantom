@@ -745,6 +745,7 @@ test database rebuilt afterwards.
 | --- | --- | --- |
 | `phase-4a` | 16 | 33 of 38 failed, **5 survived** |
 | `phase-4b` | 18 | 37 of 42 failed, **5 survived** |
+| `phase-3` | 19 | 41 of 46 failed, **5 survived** (see `phase-3.md`) |
 
 **The same five both times, and they are the five in `NOT_POLICY_TESTS`** — the
 role-attribute checks, the fixture sanity check, the ownership catalog fact, and

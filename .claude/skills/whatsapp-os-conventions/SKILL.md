@@ -341,13 +341,27 @@ Two other presentations of the same thing, so they are not chased separately:
   — so the reset is the worker dying and taking its socket down, not the
   database closing it.
 - **`Could not read the test report at …report.json` (exit 127).** Vitest died
-  before writing the report. Every file had already reported ✓.
+  before writing the report. Every file had already reported ✓. **The
+  pre-commit hook matches this signature too**, as of Phase 3 — it knew only
+  `"Worker exited unexpectedly"` and refused a commit with 63 files reported and
+  no assertion failing, which is the false red the retry exists to absorb.
 
 **What to do about it:** free memory. On a 16 GB machine, browsers and the WSL
 VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
 moved this one from 0.8 GB free to 2.6 GB and from 7.6 hours to 80 seconds. The
 gate's single retry absorbs what is left.
 
+
+**`vi.fn` with a zero-argument implementation types its calls as `[]`.** So
+`mock.calls[0][2]` is an index into an empty tuple: it runs perfectly and fails
+to typecheck. Type the mock to the real signature —
+`vi.fn(async (_db: unknown, _id: string, _input: unknown) => "x")`.
+
+Worth knowing where it surfaces: **`npm run typecheck` did not catch the first
+occurrence and `next build` did.** The web workspace's own `tsc` pass during the
+build covers files the root typecheck does not, so a test file can be green in
+one and red in the other. Run the build, not only the typecheck, before assuming
+a test file is clean.
 
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own
@@ -421,11 +435,38 @@ once in this repository. The direct form cannot be affected by it.
 - **PowerShell 5.1 drops an empty string argument**, so `--replace ''` arrives
   as nothing at all and the next flag is read as the replacement. Presents as
   "could not read arguments". Use bash for break-once.
+- **Never hand-restore DDL through a shell one-liner.** Phase 3 dropped a CHECK
+  constraint to prove its tests failed, then put it back with
+  `node -e "... '\x255044462d'::bytea ..."`. The shell ate one layer of
+  backslash and the JS string literal ate another, so Postgres stored the hex
+  encoding of `%5044462d` instead of `%PDF-` — and every valid PDF started
+  failing a check that looked correct in `pg_get_constraintdef`. **The migration
+  is the only copy of that DDL worth trusting; rebuild from it**
+  (`npm run db:nuke -- test`) rather than retyping it.
 - **Git Bash rewrites anything that looks like a Unix path.** MSYS turned
   `"/configuration/numbers"` inside an anchor into
   `"C:/Program Files/Git/configuration/numbers"`. Presents as "matched
   nothing", which is safe but baffling. Prefix with `MSYS_NO_PATHCONV=1`
   whenever the anchor contains a slash-leading path.
+
+**A break that is not observed may mean the test is weak, not that the break is
+unobservable.** Phase 3 hit both, one after the other, on the same assertion.
+
+`feature-gate-coverage.test.ts` walks the app and proves every page calls the
+KYC gate. Replacing a page's `await getFeatureAccess()` with a hard-coded
+`{ allowed: true }` did not fail it: the check matched the bare identifier, and
+the import statement at the top of the file still contained it. A coverage test
+satisfied by an unused import is one that would have watched the thing it
+guards be removed. It strips imports as well as comments now, and matches the
+call with its opening parenthesis.
+
+Then the fixed version met the ceiling that no source-level check can cross.
+Replacing the import with a local no-op stub leaves every call site written
+exactly as before, and no amount of parsing sees it. The answer was a second
+test that runs the code — a real action, a blocked company, and the assertion
+that no row is written. **Neither test is sufficient alone**, and the pair is
+the pattern: a source check proves the line exists, and only running it proves
+the line does anything.
 
 **Multi-line anchors work, and did not until Phase 4a.** The documented `
 `
@@ -777,7 +818,45 @@ silent success would be worse. Sign-in does not enumerate; signup does. That is
 the accepted tradeoff, not an oversight.
 
 **Admin TOTP is deferred to Phase 12.** A password alone on a panel that reads
-across every tenant is a known gap.
+across every tenant is a known gap — and a sharper one since Phase 3, because
+that panel can now read every tenant's Aadhaar card.
+
+**The KYC gate is one function, and nothing may cache it.** `canUseFeatures` in
+`@whatsapp-os/core/kyc` is pure and returns machine reason codes; every page and
+every action of every feature section calls it, `canSend` calls it rather than
+restating it, and the layout reads it only to render a banner. Two rules follow,
+and both have tests:
+
+- **Never enforce it in a layout.** Cached per segment, not guaranteed to
+  re-execute, so a refusal there is one a tenant can navigate around. Hiding a
+  nav item is not a boundary either — the URL resolves and the action is
+  reachable by its id.
+- **Never cache the verdict beyond one request.** React `cache()` makes the
+  repeats free within a request and does not persist across them, which is the
+  point: an operator revoking an approval has to close the gate on the tenant's
+  very next navigation, mid-session.
+
+Coverage is mechanical rather than reviewed:
+`apps/web/tests/server/feature-gate-coverage.test.ts` walks `app/(app)` and
+fails in both directions, with the four permitted entry points exempted by name.
+**A new feature section fails that test until it is gated.**
+
+**A KYC document's bytes leave the server through exactly one route.**
+`/api/admin/kyc-documents/[documentId]`, admin-only and audited on every access
+including a 304. Nothing else selects the column — not a loader, not an action's
+return value, not a log line — and the stat shape in `packages/db/src/kyc.ts` is
+built column by column so that adding a column to the table cannot widen it.
+There is deliberately no tenant-facing download: a tenant already has the file
+they sent, so one would be a second exit for nothing.
+
+**`kyc_documents` is append-only, and erasure is the one thing allowed to
+contradict that.** A re-upload supersedes rather than overwrites, so what an
+operator approved survives the tenant replacing it. `deleteCompanyKycDocuments`
+exists because DPDP obliges deletion once the collection purpose is served; it
+is per company, never per document — a per-document version would invite using
+it to tidy up a rejected upload — and it is behind a typed confirmation of the
+company name, because a confirm step protects against a misclick and only the
+typed name protects against confirming the wrong company.
 
 **Verse refuses off-topic questions and admits it is not human — and both are
 compliance, not manners.** Since **15 January 2026** general-purpose LLM chatbots

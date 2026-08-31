@@ -102,6 +102,19 @@ navigation within it. `requireSession()` there is a redirect for the user's
 benefit. Every page, loader and server action calls it itself — React `cache()`
 makes the repeats free.
 
+The same applies to the KYC gate, which is the second thing this rule now
+covers. `getFeatureAccess()` / `assertFeatureAccess()` in
+`lib/auth/feature-gate.ts` are called by every page and every action of every
+feature section; the layout calls the first one only to render a banner.
+Hiding a nav item is not a boundary — the URL still resolves and a server
+action is reachable by its id.
+
+`apps/web/tests/server/feature-gate-coverage.test.ts` walks `app/(app)` and
+fails on a page or action that consults neither, so a section added later is a
+failing test rather than a hole. What A4 permits while unverified is exactly:
+sign in, sign out, Profile > Personal details, Profile > Documents and the
+verify-email flow. Each is exempted there by name, with a reason.
+
 ### 5. The platform admin is a separate account space, not a permission
 
 `/admin` has its own table, its own session table and its own cookie. There is

@@ -8,8 +8,9 @@ Written down before the affected phases start, so that the code which depends on
 them — schema shapes, sequencing, what blocks what — is not re-derived from a
 conversation nobody can find.
 
-Status: none of these phases have started. Phase 4a is in progress; see
-`phase-4.md`.
+Status: **A4 is done** — Phase 3 shipped and is tagged; see `phase-3.md`. A6 is
+in force and was run against dev and test at that tag. A1, A2, A3 and A5 have
+not started. Phases 4a and 4b are complete; see `phase-4.md`.
 
 ---
 
@@ -128,6 +129,19 @@ land in, and adding an expiry column later is a backfill on encrypted rows.
 
 **Changes: Documents/KYC, which returns and lands before the feature phases.**
 
+**Shipped, tagged `phase-3`.** What follows is the amendment as written; the
+implementation and the decisions it forced are in `phase-3.md`. Two things are
+worth pulling back here because they change what a later phase has to do:
+
+- The gate is **one function**, `canUseFeatures` in `@whatsapp-os/core/kyc`,
+  and `canSend` calls it rather than restating it. A feature phase adding a
+  send path inherits the gate by using `canSend`.
+- Coverage is **enforced, not reviewed**. `feature-gate-coverage.test.ts` walks
+  `app/(app)` and fails on a page or action that consults neither entry point,
+  so a section added in Phase 5 or 7 fails the gate until it is either gated or
+  exempted with a reason. That is this amendment's "the one that gets missed is
+  the one nobody notices", made mechanical.
+
 The original plan gated *sending* on verification. It now gates **everything**.
 
 What an unverified account can do, in full:
@@ -229,7 +243,7 @@ Two hard orderings, each with its reason:
 
 | Ordering | Because |
 | --- | --- |
-| KYC **before** every feature phase | A gate retrofitted onto existing entry points is a gate with a hole in it |
+| ~~KYC **before** every feature phase~~ **done** | A gate retrofitted onto existing entry points is a gate with a hole in it |
 | Flow builder **before** the AI layer | The deterministic engine is what the AI layer would otherwise improvise, and building it second builds it twice |
 
 Exact phase numbers are not renumbered here. Three phases changed size and two

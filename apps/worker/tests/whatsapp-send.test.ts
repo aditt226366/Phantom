@@ -30,6 +30,7 @@ const canSend =
     ) => Promise<{ waId: string; decision: Decision } | null>
   >();
 const sendWhatsAppText = vi.fn();
+const sendWhatsAppTemplate = vi.fn();
 /* Typed to the shapes the job calls, so the argument assertions below are
    checked rather than reaching into an inferred empty tuple. */
 const recordSendAccepted =
@@ -106,6 +107,17 @@ vi.mock("@whatsapp-os/db", () => ({
 }));
 
 vi.mock("@whatsapp-os/core/whatsapp", () => ({
+  sendWhatsAppTemplate: (
+    secrets: Record<string, string>,
+    input: { to: string; name: string; language: string; parameters: string[] },
+  ) => {
+    /* Recorded the same way the text send is, so "no scope open while Meta is
+       answering" holds for both kinds rather than only the one it was written
+       against. */
+    sequence.push("graph");
+    scopesOpenDuringSend.push(openScopes);
+    return sendWhatsAppTemplate(secrets, input);
+  },
   sendWhatsAppText: (secrets: Record<string, string>, input: { to: string; body: string }) => {
     sequence.push("graph");
     scopesOpenDuringSend.push(openScopes);
@@ -150,6 +162,7 @@ beforeEach(() => {
     updateContact,
     canSend,
     sendWhatsAppText,
+    sendWhatsAppTemplate,
     recordSendAccepted,
     recordSendRefused,
     recordSendUnconfirmed,
@@ -290,6 +303,64 @@ describe("the boundary", () => {
     /* Recorded on the row, so the refusal reaches the thread rather than only
        a log line. */
     expect(recordSendDeclined.mock.calls[0]![3]).toBe("window_closed");
+  });
+
+  /*
+   * The asymmetry, at the layer that acts on it.
+   *
+   * A template is the one thing allowed once the window has closed, so the
+   * intent the worker asks with has to match what it is about to send. Asking
+   * `freeform` for a template row would be refused by the very window the
+   * template exists to survive - and the failure is silent from the outside:
+   * the send is declined, the customer gets nothing, and the only evidence is
+   * a POLICY failure on a row somebody has to open the thread to see.
+   */
+  it("asks about a template as a template, not as free-form", async () => {
+    findFirstMessage.mockResolvedValue({
+      ...messageRow(),
+      body: "Reminder: your appointment is on Thursday at 3pm.",
+      templatePayload: {
+        name: "appointment_reminder",
+        language: "en_US",
+        parameters: ["Thursday", "3pm"],
+      },
+    });
+
+    canSend.mockImplementation(async (_db, _companyId, _conversationId, intent) => ({
+      waId: "wa-customer",
+      /* What the real policy does: free-form is refused once the window has
+         gone, a template is not. Mirrored here so the assertion is about the
+         intent the worker chose rather than about a stub that always says yes. */
+      decision:
+        (intent as { kind: string }).kind === "template"
+          ? { allowed: true }
+          : { allowed: false, reason: "window_closed" },
+    }));
+
+    sendWhatsAppTemplate.mockResolvedValue({
+      ok: true,
+      wamid: "wamid.template",
+      waId: null,
+      messageStatus: "accepted",
+      held: false,
+    });
+
+    const result = await handleWhatsAppMessageSend(JOB);
+
+    expect(result).toEqual({ result: "sent" });
+    expect(canSend.mock.calls[0]![3]).toEqual({
+      kind: "template",
+      approved: true,
+    });
+
+    /* And it went out as a template, with Meta's positional parameters intact. */
+    expect(sendWhatsAppTemplate).toHaveBeenCalledTimes(1);
+    expect(sendWhatsAppText).not.toHaveBeenCalled();
+    expect(sendWhatsAppTemplate.mock.calls[0]![1]).toMatchObject({
+      name: "appointment_reminder",
+      language: "en_US",
+      parameters: ["Thursday", "3pm"],
+    });
   });
 
   it("never holds a company scope while Meta is answering", async () => {

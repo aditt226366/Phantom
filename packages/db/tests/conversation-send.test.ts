@@ -239,8 +239,21 @@ describe("canSend", () => {
     });
   });
 
-  it("refuses a template because there are none yet, window or no window", async () => {
+  it("allows an approved template through a closed window", async () => {
     const thread = await seedThread(alpha, "a");
+
+    /*
+     * Closed on purpose. seedThread opens the window by default, and asserting
+     * this against an open one would pass without proving anything - the whole
+     * claim is that a template survives a window free-form does not, so the
+     * window has to be shut for the test to mean it.
+     */
+    await withCompany(alpha.id, (db) =>
+      db.conversation.updateMany({
+        where: { id: thread.conversationId },
+        data: { windowExpiresAt: new Date(NOW.getTime() - 60 * 60 * 1000) },
+      }),
+    );
 
     const result = await withCompany(alpha.id, (db, companyId) =>
       canSend(
@@ -252,10 +265,14 @@ describe("canSend", () => {
       ),
     );
 
-    /* The one arm 4b flips. Until then an open window does not help. */
+    /*
+     * The arm 4b flipped, asserted through canSend rather than only through
+     * sendPolicy - this is the path the worker actually takes, and it is the
+     * one that has to disagree with the free-form check above on a closed
+     * window. A template is the only thing allowed out there.
+     */
     expect(result?.decision).toEqual({
-      allowed: false,
-      reason: "template_not_available",
+      allowed: true,
     });
   });
 

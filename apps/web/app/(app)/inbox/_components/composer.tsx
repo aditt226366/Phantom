@@ -2,7 +2,8 @@
 
 import { useActionState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { sendMessageAction, type SendState } from "../actions";
+import { sendMessageAction, sendTemplateAction, type SendState } from "../actions";
+import { TemplatePicker, type PickableTemplate } from "./template-picker";
 
 /**
  * The composer, which closes with the window.
@@ -25,6 +26,8 @@ export function Composer({
   conversationId,
   closedReason,
   csrf,
+  templateCsrf,
+  templates,
 }: {
   conversationId: string;
   /** The sentence explaining why sending is refused, or null if it is not. */
@@ -39,6 +42,10 @@ export function Composer({
    * arrangement the app shell already uses for this exact field.
    */
   csrf: ReactNode;
+  /** A second field for the picker's own form. Server-rendered, like the first. */
+  templateCsrf: ReactNode;
+  /** Approved templates, which are the only ones that may be sent. */
+  templates: PickableTemplate[];
 }) {
   const [state, formAction, pending] = useActionState<SendState, FormData>(
     sendMessageAction,
@@ -81,14 +88,64 @@ export function Composer({
           {pending ? "Sending…" : "Send"}
         </Button>
 
-        {/* Disabled, present, and each says when. See the note above. */}
-        <Button type="button" variant="outline" disabled>
-          Templates arrive in 4b
-        </Button>
+        {/* Still disabled, still saying when. Outbound media is Phase 5 (P4):
+            a browser upload is a different trust boundary from reading a URL
+            Meta gave us with our own token. */}
         <Button type="button" variant="ghost" disabled>
           Sending files arrives in Phase 5
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The composer and the template picker, together.
+ *
+ * They are two forms rather than one, because they post to different actions
+ * and a single form would have to decide which - and the decision is the
+ * tenant's, made by which button they press.
+ *
+ * The picker renders whether the window is open or closed. Closed is the case
+ * it exists for; open is when somebody wants a consistent message rather than a
+ * typed one. What changes with the window is only which of the two is
+ * disabled - and 4a's disabled placeholder is gone, replaced by the thing it
+ * was promising.
+ */
+export function ComposerBlock({
+  conversationId,
+  closedReason,
+  csrf,
+  templateCsrf,
+  templates,
+}: {
+  conversationId: string;
+  closedReason: string | null;
+  csrf: ReactNode;
+  templateCsrf: ReactNode;
+  templates: PickableTemplate[];
+}) {
+  return (
+    <div className="flex flex-col gap-lg">
+      <Composer
+        conversationId={conversationId}
+        closedReason={closedReason}
+        csrf={csrf}
+        templateCsrf={templateCsrf}
+        templates={templates}
+      />
+
+      <div className="border-t border-hairline pt-base">
+        <p className="mb-sm text-caption-uppercase uppercase text-muted">
+          Or send a template
+        </p>
+        <TemplatePicker
+          templates={templates}
+          conversationId={conversationId}
+          action={sendTemplateAction}
+          csrf={templateCsrf}
+        />
+      </div>
+    </div>
   );
 }

@@ -4,7 +4,10 @@ import {
   usageDedupeKey,
   type WhatsAppMessageSendJob,
 } from "@whatsapp-os/core";
-import { sendWhatsAppText } from "@whatsapp-os/core/whatsapp";
+import {
+  sendWhatsAppTemplate,
+  sendWhatsAppText,
+} from "@whatsapp-os/core/whatsapp";
 import {
   canSend,
   recordSendAccepted,
@@ -58,6 +61,9 @@ export async function handleWhatsAppMessageSend(
         conversationId: true,
         body: true,
         wamid: true,
+        /* Present means this row is a template send. The payload holds the
+           name, language and the parameter values chosen at send time. */
+        templatePayload: true,
         conversation: {
           select: {
             contact: { select: { id: true, waId: true } },
@@ -114,8 +120,28 @@ export async function handleWhatsAppMessageSend(
    */
   const now = new Date();
 
+  /* Decided once, before the check and the call, so they cannot disagree. */
+  const template = readTemplatePayload(loaded.templatePayload);
+
   const sendability = await withCompany(companyId, (db, scoped) =>
-    canSend(db, scoped, loaded.conversationId, { kind: "freeform" }, now),
+    canSend(
+      db,
+      scoped,
+      loaded.conversationId,
+      /*
+       * The intent has to match what is actually about to be sent, or the
+       * boundary is checking the wrong question. A template row asked with a
+       * freeform intent would be refused the moment the window closed - which
+       * is the one case a template exists for.
+       *
+       * `approved: true` because the composer only lists approved templates and
+       * the row was written from one. Meta re-checks anyway, and an approval
+       * withdrawn between listing and sending comes back as a refusal with its
+       * own reason rather than as something guessed at here.
+       */
+      template ? { kind: "template", approved: true } : { kind: "freeform" },
+      now,
+    ),
   );
 
   if (!sendability) return { result: "unknown_message" };
@@ -135,11 +161,20 @@ export async function handleWhatsAppMessageSend(
     return { result: "declined" };
   }
 
-  /* 4. The call. No scope is open. */
-  const outcome = await sendWhatsAppText(secrets, {
-    to: sendability.waId,
-    body: loaded.body ?? "",
-  });
+  /* 4. The call. No scope is open. Same outcome union either way, so step 5
+     below does not branch - a template that times out becomes UNCONFIRMED by
+     exactly the path a text does. */
+  const outcome = template
+    ? await sendWhatsAppTemplate(secrets, {
+        to: sendability.waId,
+        name: template.name,
+        language: template.language,
+        parameters: template.parameters,
+      })
+    : await sendWhatsAppText(secrets, {
+        to: sendability.waId,
+        body: loaded.body ?? "",
+      });
 
   /* 5. Write what happened. */
   if (outcome.ok) {
@@ -289,4 +324,31 @@ async function reconcileWaId(
     stored,
     canonical,
   });
+}
+
+/**
+ * What a template row carries, or null if this is an ordinary text.
+ *
+ * Parsed defensively because `template_payload` is jsonb: the column will hold
+ * whatever was written, and a row half-written by an older build must not make
+ * the worker throw on every attempt. A payload it cannot read is treated as a
+ * text send, which is the safe direction - the message goes out as its body
+ * rather than as a template nobody could reconstruct.
+ */
+function readTemplatePayload(
+  raw: unknown,
+): { name: string; language: string; parameters: string[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const payload = raw as Record<string, unknown>;
+  const name = payload["name"];
+  const language = payload["language"];
+
+  if (typeof name !== "string" || typeof language !== "string") return null;
+
+  const parameters = Array.isArray(payload["parameters"])
+    ? payload["parameters"].filter((v): v is string => typeof v === "string")
+    : [];
+
+  return { name, language, parameters };
 }

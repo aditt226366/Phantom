@@ -17,7 +17,7 @@ import {
   statusDisplay,
 } from "@/lib/thread-display";
 import { SectionShell } from "../../_components/section";
-import { Composer } from "../_components/composer";
+import { ComposerBlock } from "../_components/composer";
 import { RetryButton } from "../_components/retry-button";
 import { ThreadRefresh } from "../_components/thread-refresh";
 
@@ -117,13 +117,22 @@ export default async function Page({
       messages,
       sendability,
       receipt: await readReceiptTarget(db, companyId, conversationId),
+      /* Approved only. The picker must not offer something Meta will refuse -
+         an unapproved template posted anyway counts against the number's
+         quality rating, which is the thing a tenant cannot get back. */
+      templates: await db.whatsAppTemplate.findMany({
+        where: { status: "APPROVED" },
+        orderBy: [{ name: "asc" }],
+        take: 50,
+        select: { id: true, name: true, language: true, components: true },
+      }),
     };
   });
 
   /* Rule 6: not yours means it does not exist. Same answer as never having. */
   if (!loaded) notFound();
 
-  const { conversation, messages, sendability, receipt } = loaded;
+  const { conversation, messages, sendability, receipt, templates } = loaded;
 
   if (receipt) {
     try {
@@ -179,10 +188,17 @@ export default async function Page({
       </ol>
 
       <div className="mt-lg">
-        <Composer
+        <ComposerBlock
           conversationId={conversation.id}
           closedReason={closedReason}
           csrf={<CsrfField />}
+          templateCsrf={<CsrfField />}
+          templates={templates.map((template) => ({
+            id: template.id,
+            name: template.name,
+            language: template.language,
+            body: templateBody(template.components),
+          }))}
         />
       </div>
     </SectionShell>
@@ -343,4 +359,26 @@ function MediaBlock({ media }: { media: NonNullable<ThreadMessage["media"]> }) {
       {media.fileName ?? "Attached file"}
     </a>
   );
+}
+
+/**
+ * The BODY text out of a stored component array.
+ *
+ * The picker needs it to count variables and to show what is about to go out.
+ * Defensive because the column is jsonb: a row written by an older build must
+ * render as a template with no variables rather than throwing the page.
+ */
+function templateBody(components: unknown): string {
+  if (!Array.isArray(components)) return "";
+  for (const component of components) {
+    if (
+      component &&
+      typeof component === "object" &&
+      (component as { type?: unknown }).type === "BODY" &&
+      typeof (component as { text?: unknown }).text === "string"
+    ) {
+      return (component as { text: string }).text;
+    }
+  }
+  return "";
 }

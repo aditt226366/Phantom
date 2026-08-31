@@ -6,6 +6,10 @@ import {
   SEND_JOB_OPTIONS,
   sendJobId,
 } from "@whatsapp-os/core/queues";
+import {
+  fillVariables,
+  templateVariables,
+} from "@whatsapp-os/core/whatsapp";
 import { advanceConversation, canSend, withCompany } from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
 import { requireSession } from "@/lib/auth/session";
@@ -255,4 +259,130 @@ export async function retryMessageAction(
   revalidatePath("/inbox");
 
   return {};
+}
+
+/* ------------------------------------------------------------------------- *
+ * Templates
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Send an approved template, which is the one thing allowed once the window
+ * has closed.
+ *
+ * Same shape as the free-form send and for the same reasons: canSend here is
+ * feedback and the worker's is the boundary, the row is written PENDING, and
+ * Redis is touched outside the scope. What differs is the intent - asked as
+ * `template`, because a template asked as free-form would be refused by the
+ * very window it exists to survive.
+ */
+export async function sendTemplateAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+
+  const conversationId = String(formData.get("conversationId") ?? "");
+  const templateId = String(formData.get("templateId") ?? "");
+  if (!conversationId || !templateId) return;
+
+  const now = new Date();
+
+  const created = await withCompany(session.companyId, async (db, companyId) => {
+    const template = await db.whatsAppTemplate.findFirst({
+      where: { id: templateId },
+      select: { id: true, name: true, language: true, status: true, components: true },
+    });
+
+    /* Rule 6, and the approval check together: a template that is not yours
+       does not exist, and one that is not approved cannot be sent. */
+    if (!template) return null;
+
+    const sendability = await canSend(
+      db,
+      companyId,
+      conversationId,
+      { kind: "template", approved: template.status === "APPROVED" },
+      now,
+    );
+
+    if (!sendability || !sendability.decision.allowed) return null;
+
+    /*
+     * Parameters in Meta's own order. templateVariables returns them sorted, so
+     * index 0 is {{1}} - the same ordering the picker collected them in and the
+     * same one Meta matches positionally. Getting this out of order would put
+     * the order number where the customer's name goes.
+     */
+    const body = extractBody(template.components);
+    const parameters = templateVariables(body).map((n) =>
+      String(formData.get(`parameter_${n}`) ?? ""),
+    );
+
+    const message = await db.message.create({
+      data: {
+        companyId,
+        conversationId,
+        direction: "OUTBOUND",
+        status: "PENDING",
+        type: "template",
+        /* The body as the customer will read it, so the thread shows the
+           message rather than a template name. The payload below is what
+           actually goes to Meta. */
+        body: fillVariables(body, parameters),
+        templatePayload: {
+          name: template.name,
+          language: template.language,
+          parameters,
+        },
+        occurredAt: now,
+        sentByUserId: session.userId,
+        sendAttempt: 0,
+      },
+      select: { id: true, sendAttempt: true },
+    });
+
+    await advanceConversation(db, companyId, conversationId, {
+      occurredAt: now,
+      preview: fillVariables(body, parameters),
+      inbound: false,
+      /* A template does not open a window either. Only the customer writing
+         does, which is the rule the whole 24 hours rests on. */
+      windowExpiresAt: null,
+      unread: 0,
+    });
+
+    return message;
+  });
+
+  if (!created) return;
+
+  await systemQueue.add(
+    JOB_NAMES.WHATSAPP_MESSAGE_SEND,
+    {
+      companyId: session.companyId,
+      messageId: created.id,
+      sendAttempt: created.sendAttempt,
+    },
+    {
+      jobId: sendJobId(created.id, created.sendAttempt),
+      ...SEND_JOB_OPTIONS,
+    },
+  );
+
+  revalidatePath(`/inbox/${conversationId}`);
+  revalidatePath("/inbox");
+}
+
+/** The BODY text out of a stored component array, or empty if there is none. */
+function extractBody(components: unknown): string {
+  if (!Array.isArray(components)) return "";
+  for (const component of components) {
+    if (
+      component &&
+      typeof component === "object" &&
+      (component as { type?: unknown }).type === "BODY" &&
+      typeof (component as { text?: unknown }).text === "string"
+    ) {
+      return (component as { text: string }).text;
+    }
+  }
+  return "";
 }

@@ -128,14 +128,22 @@ export function sendPolicy(facts: SendFacts, intent: SendIntent): SendDecision {
 
   if (intent.kind === "template") {
     /*
-     * The one arm 4b flips. Until the Template Studio exists there is nothing
-     * to send, so this refuses regardless of the window - a template is the
-     * only thing allowed outside it, and we have none.
+     * Flipped in 4b, and it was deleting a branch rather than changing a
+     * signature — `approved` has been on the intent since the arm was written.
      *
-     * The `approved` flag is already on the intent so that flipping this is
-     * deleting the first branch rather than changing a signature.
+     * A template is the ONE thing allowed outside the 24-hour window, which is
+     * the whole reason the window is survivable as a product: past it, this
+     * returns allowed and the free-form arm below does not. So the window check
+     * deliberately does not apply here, and that asymmetry is the feature.
+     *
+     * Approval is Meta's, not ours. An unapproved template posted anyway is
+     * refused by Meta and counts against the number's quality rating, so
+     * refusing here costs a round trip and protects the thing a tenant cannot
+     * get back.
      */
-    return { allowed: false, reason: "template_not_available" };
+    return intent.approved
+      ? { allowed: true }
+      : { allowed: false, reason: "template_not_approved" };
   }
 
   if (!isWindowOpen(facts.window)) {

@@ -132,6 +132,21 @@ export async function sendWhatsAppText(
     fetchImpl,
   );
 
+  return decodeSendResult(result);
+}
+
+/**
+ * One decode for every kind of send.
+ *
+ * Extracted when templates arrived, and shared rather than copied for the
+ * reason the copy would fail: the interesting outcome here is UNCONFIRMED - a
+ * transient failure with no status code, meaning Meta may or may not have
+ * processed the request - and a second implementation that got that one branch
+ * subtly wrong would send a real customer the same template twice. There is one
+ * set of endings, so a template that times out becomes UNCONFIRMED by exactly
+ * the path a text does.
+ */
+function decodeSendResult(result: GraphResult<SendResponse>): SendOutcome {
   if (!result.ok) {
     /*
      * A transient failure with no status code is a timeout or a socket error:
@@ -177,6 +192,70 @@ export async function sendWhatsAppText(
     messageStatus,
     held: messageStatus === HELD_STATUS,
   };
+}
+
+/**
+ * Send an approved template.
+ *
+ * The one thing that may go out after the 24-hour window has closed, which is
+ * what makes the window survivable as a product.
+ *
+ * `parameters` is the SEND-time shape and is not the submission's. The stored
+ * components describe the template; these fill it in for this one send. Meta
+ * matches them positionally against {{1}}, {{2}} and so on, so the order here
+ * is the numbering there - which is why templateVariables returns them sorted
+ * and why the composer collects them in that order.
+ */
+export async function sendWhatsAppTemplate(
+  secrets: Readonly<Record<string, string>>,
+  input: { to: string; name: string; language: string; parameters: string[] },
+  fetchImpl: FetchImpl = fetch,
+): Promise<SendOutcome> {
+  const phoneNumberId = secrets["WHATSAPP_PHONE_NUMBER_ID"] ?? "";
+  const accessToken = secrets["WHATSAPP_ACCESS_TOKEN"] ?? "";
+
+  if (!phoneNumberId || !accessToken) {
+    return {
+      ok: false,
+      delivery: "refused",
+      kind: "config",
+      error: "Phone number ID and access token are both required.",
+    };
+  }
+
+  const result: GraphResult<SendResponse> = await graphPost<SendResponse>(
+    `${encodeURIComponent(phoneNumberId)}/messages`,
+    {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: input.to,
+      type: "template",
+      template: {
+        name: input.name,
+        language: { code: input.language },
+        /* Omitted entirely when there are none: Meta rejects an empty
+           components array rather than ignoring it. */
+        ...(input.parameters.length > 0
+          ? {
+              components: [
+                {
+                  type: "body",
+                  parameters: input.parameters.map((text) => ({
+                    type: "text",
+                    text,
+                  })),
+                },
+              ],
+            }
+          : {}),
+      },
+    },
+    accessToken,
+    Object.values(secrets),
+    fetchImpl,
+  );
+
+  return decodeSendResult(result);
 }
 
 /**

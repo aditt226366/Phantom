@@ -124,16 +124,37 @@ describe("sendPolicy", () => {
     ).toEqual({ allowed: false, reason: "window_closed" });
   });
 
-  it("refuses a template until 4b, whatever the window says", () => {
-    /* The one arm 4b flips. Nothing exists to send yet, so the window is not
-       the reason and must not be reported as one. */
+  /*
+   * The arm 4b flipped, and the asymmetry is the feature rather than an
+   * oversight: a template is the ONE thing allowed outside the 24-hour window,
+   * which is what makes the window survivable as a product. The free-form check
+   * above and this one must disagree on a closed window, and that is asserted
+   * here rather than left to be noticed.
+   */
+  it("allows an approved template whatever the window says", () => {
     for (const window of [
       { kind: "open", hours: 5 } as const,
       { kind: "closed" } as const,
     ]) {
       expect(
         sendPolicy({ ...OPEN, window }, { kind: "template", approved: true }),
-      ).toEqual({ allowed: false, reason: "template_not_available" });
+      ).toEqual({ allowed: true });
+    }
+  });
+
+  /*
+   * Approval is Meta's and not ours. Posting an unapproved template anyway is
+   * refused by Meta AND counts against the number's quality rating, so this
+   * refusal protects something a tenant cannot get back.
+   */
+  it("refuses an unapproved template, open window or not", () => {
+    for (const window of [
+      { kind: "open", hours: 5 } as const,
+      { kind: "closed" } as const,
+    ]) {
+      expect(
+        sendPolicy({ ...OPEN, window }, { kind: "template", approved: false }),
+      ).toEqual({ allowed: false, reason: "template_not_approved" });
     }
   });
 

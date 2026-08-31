@@ -32,7 +32,12 @@ export { sendPolicy } from "./send-policy.ts";
 export type { SendDecision, SendFacts, SendIntent, SendRefusal } from "./send-policy.ts";
 /* The cap lives with the send/receive shapes in graph.ts; it is re-exported
    here because the callers that need it are the media ones. */
-export { MAX_MEDIA_BYTES, markWhatsAppRead, sendWhatsAppText } from "./graph.ts";
+export {
+  MAX_MEDIA_BYTES,
+  markWhatsAppRead,
+  sendWhatsAppTemplate,
+  sendWhatsAppText,
+} from "./graph.ts";
 export type { SendAccepted, SendOutcome, SendRefused } from "./graph.ts";
 export {
   downloadWhatsAppMedia,

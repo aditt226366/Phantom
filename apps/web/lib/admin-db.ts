@@ -346,6 +346,8 @@ export interface CompanyDetail {
   ownerLastLoginAt: Date | null;
   userCount: number;
   createdAt: Date;
+  /** Milliseconds between two sends of one broadcast. Pacing, not the limit. */
+  broadcastGapMs: number;
 }
 
 /** Null for an id that does not exist — the caller renders a 404. */
@@ -361,6 +363,7 @@ export async function getCompanyDetail(
       plan: true,
       deactivatedAt: true,
       createdAt: true,
+      broadcastGapMs: true,
       _count: { select: { users: true } },
       users: {
         where: { role: "OWNER" },
@@ -384,7 +387,43 @@ export async function getCompanyDetail(
     ownerLastLoginAt: company.users[0]?.lastLoginAt ?? null,
     userCount: company._count.users,
     createdAt: company.createdAt,
+    broadcastGapMs: company.broadcastGapMs,
   };
+}
+
+/**
+ * Change how fast this tenant's broadcasts send.
+ *
+ * Pacing, and NOT the limit - the messaging tier caps unique recipients per
+ * rolling 24 hours and no gap gets past it. What this changes is how hard a
+ * number is pushed within that, which is a judgement about a tenant's quality
+ * rating and therefore an operator's call rather than a tenant's.
+ *
+ * Bounded here as well as by a CHECK constraint. Zero would make a broadcast
+ * one burst - the behaviour the gap exists to prevent - and the constraint is
+ * the backstop that does not depend on this having validated. An hour is the
+ * upper end: past that a broadcast is a schedule rather than a send.
+ *
+ * A running broadcast is NOT re-paced. It copied the gap at start, so this
+ * takes effect on the next one - which is what stops an operator accidentally
+ * changing the speed of something already half sent.
+ */
+export const MIN_BROADCAST_GAP_MS = 100;
+export const MAX_BROADCAST_GAP_MS = 3_600_000;
+
+export async function setCompanyBroadcastGap(
+  companyId: string,
+  gapMs: number,
+): Promise<boolean> {
+  if (!Number.isInteger(gapMs)) return false;
+  if (gapMs < MIN_BROADCAST_GAP_MS || gapMs > MAX_BROADCAST_GAP_MS) return false;
+
+  const { count } = await adminPrisma.company.updateMany({
+    where: { id: companyId },
+    data: { broadcastGapMs: gapMs },
+  });
+
+  return count === 1;
 }
 
 /**

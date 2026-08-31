@@ -96,6 +96,12 @@ const REFUSAL_SENTENCES: Record<SendRefusal, string> = {
    */
   company_not_verified:
     "This workspace is not verified yet, so nothing is sent from it. Profile > Documents shows what is outstanding.",
+  /* A fact about the handset, not a choice the customer made - see the note on
+     contact_undeliverable in send-policy.ts for why the two are separate. */
+  contact_undeliverable:
+    "WhatsApp reports that this number cannot receive messages, so nothing further is sent to it.",
+  broadcast_cancelled:
+    "The broadcast this was part of was cancelled before this message went out.",
 };
 
 export function refusalSentence(reason: SendRefusal): string {

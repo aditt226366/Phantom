@@ -135,6 +135,14 @@ export const OUT_OF_BAND_DDL = new Set([
   /* EXTERNAL for the same reason whatsapp_media.bytes is: the download route
      slices this column to stream it. */
   "storage:kyc_documents.bytes=e",
+  /* Pacing has to be a pace. Zero would make a broadcast one burst - the
+     behaviour the gap exists to prevent - and a negative value is not a delay
+     BullMQ can schedule. Capped at a day, past which it is a schedule and not
+     a send. Both copies, because the broadcast freezes its own at start. */
+  "check:companies.companies_broadcast_gap_ms_sane",
+  "check:broadcasts.broadcasts_gap_ms_sane",
+  /* The cleaning pipeline's counts describe a file and cannot be negative. */
+  "check:broadcasts.broadcasts_counts_non_negative",
 ]);
 
 /**

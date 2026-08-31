@@ -359,6 +359,108 @@ const MEDIA_BYTES = Buffer.from(
 const MEDIA_SHA256 = createHash("sha256").update(MEDIA_BYTES).digest("hex");
 
 /* ------------------------------------------------------------------ */
+/* Broadcasts                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Three broadcasts, because the interesting screens are three different
+ * states of one page and a suite that photographs only a clean send never
+ * shows the screen an operator actually stares at.
+ *
+ *   draft      still in the wizard - the mapping and confirm steps render
+ *              from its source_rows, which only a draft still has.
+ *   running    part way through, with recipients in every stage at once.
+ *   finished   completed AND carrying real failures, grouped by reason.
+ *
+ * The failure rows are the point of the third one. A report with nothing in
+ * the "why messages failed" section is a report nobody has ever had to read,
+ * and the layout of that section - a long sentence beside a big number - is
+ * exactly the part most likely to be wrong at 390px.
+ */
+const BROADCAST = {
+  draft: "c000visualfixturebcast001",
+  running: "c000visualfixturebcast002",
+  finished: "c000visualfixturebcast003",
+};
+
+/**
+ * The uploaded file, as papaparse would hand it back.
+ *
+ * Literal, and deliberately imperfect: row three has no number at all, so the
+ * confirm screen photographs a non-zero "no usable number" count rather than
+ * four clean zeroes that tell a reader nothing about what the screen does when
+ * a list is messy.
+ */
+const BROADCAST_SOURCE_HEADERS = ["Name", "Mobile", "Order"];
+
+const BROADCAST_SOURCE_ROWS = [
+  { Name: "Anita Desai", Mobile: "98765 43210", Order: "NW-2291" },
+  { Name: "Vikram Shah", Mobile: "+91 98765 43211", Order: "NW-2288" },
+  { Name: "Rahul Nair", Mobile: "", Order: "NW-2284" },
+  { Name: "Fatima Sheikh", Mobile: "98765 43213", Order: "NW-2280" },
+  { Name: "Joseph Mathew", Mobile: "98765 43214", Order: "NW-2277" },
+];
+
+const BROADCAST_MAPPING = {
+  phone: "Mobile",
+  variables: { 1: "Name", 2: "Order" },
+};
+
+/** Literal instants, because the report prints started and finished. */
+const T_BROADCAST = {
+  draftCreated: "2026-08-15T04:30:00Z", //    15/08/2026 10:00:00
+  runningCreated: "2026-08-14T05:00:00Z", //  14/08/2026 10:30:00
+  runningStarted: "2026-08-14T05:02:00Z", //  14/08/2026 10:32:00
+  finishedCreated: "2026-08-13T04:15:00Z", // 13/08/2026 09:45:00
+  finishedStarted: "2026-08-13T04:20:00Z", // 13/08/2026 09:50:00
+  finishedEnded: "2026-08-13T05:05:00Z", //   13/08/2026 10:35:00
+};
+
+/**
+ * The finished broadcast's recipients, and what became of each.
+ *
+ * Two distinct failure reasons with different counts, so the grouped list
+ * renders more than one row and a version that printed the same number twice
+ * would be visibly wrong rather than plausibly right. The sentences are the
+ * real ones - describeRefusal's and Meta's - so the report photographs what a
+ * tenant would actually read.
+ */
+const FINISHED_RECIPIENTS = [
+  { phone: "+919876543220", status: "READ", error: null },
+  { phone: "+919876543221", status: "READ", error: null },
+  { phone: "+919876543222", status: "DELIVERED", error: null },
+  { phone: "+919876543223", status: "DELIVERED", error: null },
+  { phone: "+919876543224", status: "DELIVERED", error: null },
+  { phone: "+919876543225", status: "SENT", error: null },
+  {
+    phone: "+919876543226",
+    status: "FAILED",
+    error: "This number cannot receive WhatsApp messages.",
+  },
+  {
+    phone: "+919876543227",
+    status: "FAILED",
+    error: "This number cannot receive WhatsApp messages.",
+  },
+  {
+    phone: "+919876543228",
+    status: "FAILED",
+    error: "Message failed to send because more than 24 hours have passed since the customer last replied to this number.",
+  },
+];
+
+/** The running one: some sent, some delivered, the rest still queued. */
+const RUNNING_RECIPIENTS = [
+  { phone: "+919876543230", status: "DELIVERED" },
+  { phone: "+919876543231", status: "DELIVERED" },
+  { phone: "+919876543232", status: "SENT" },
+  { phone: "+919876543233", status: "SENT" },
+  { phone: "+919876543234", status: null },
+  { phone: "+919876543235", status: null },
+  { phone: "+919876543236", status: null },
+];
+
+/* ------------------------------------------------------------------ */
 /* KYC documents                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -743,6 +845,8 @@ try {
     "messages",
     "whatsapp_media",
     "kyc_documents",
+    "broadcasts",
+    "broadcast_recipients",
   ].filter((table) => !tables.has(table));
 
   if (missing.length > 0) {
@@ -1202,6 +1306,190 @@ try {
     );
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Broadcasts                                                         */
+  /* ---------------------------------------------------------------- */
+
+  /* The draft: still in the wizard, so it keeps its source rows. Only a draft
+     has them - confirming a broadcast clears them, which is what the mapping
+     and confirm pages 404 on for anything already sent. */
+  await client.query(
+    `INSERT INTO broadcasts
+       (id, company_id, name, template_id, whatsapp_number_id, status,
+        column_mapping, gap_ms, source_filename, source_rows, source_headers,
+        parsed_count, invalid_count, duplicate_count, existing_count,
+        opted_out_count, recipient_count, created_by_user_id, created_at,
+        updated_at)
+     VALUES ($1, $2, 'October offer list', $3, $4, 'DRAFT', $5::jsonb, 800,
+             'october-customers.csv', $6::jsonb, $7::jsonb,
+             5, 1, 0, 2, 0, 4, 'c000visualfixtureuser001', $8, $8)`,
+    [
+      BROADCAST.draft,
+      COMPANY.active,
+      FIXTURE.approvedTemplateId,
+      NUMBERS[0].id,
+      JSON.stringify(BROADCAST_MAPPING),
+      JSON.stringify(BROADCAST_SOURCE_ROWS),
+      JSON.stringify(BROADCAST_SOURCE_HEADERS),
+      T_BROADCAST.draftCreated,
+    ],
+  );
+
+  /*
+   * A contact, a conversation and a message per recipient - because that is
+   * exactly what a bulk recipient IS. Nothing here is a broadcast-shaped
+   * parallel row; the seed writes the same three tables the inbox reads.
+   */
+  let broadcastMessageId = 0;
+
+  async function seedBroadcastRun(input) {
+    await client.query(
+      `INSERT INTO broadcasts
+         (id, company_id, name, template_id, whatsapp_number_id, status,
+          column_mapping, gap_ms, source_filename, parsed_count, invalid_count,
+          duplicate_count, existing_count, opted_out_count, recipient_count,
+          created_by_user_id, started_at, finished_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::broadcast_status, $7::jsonb, 800, $8,
+               $9, $10, 0, 0, 0, $11, 'c000visualfixtureuser001', $12, $13,
+               $14, $14)`,
+      [
+        input.id,
+        COMPANY.active,
+        input.name,
+        FIXTURE.approvedTemplateId,
+        NUMBERS[0].id,
+        input.status,
+        JSON.stringify(BROADCAST_MAPPING),
+        input.filename,
+        input.recipients.length + input.invalid,
+        input.invalid,
+        input.recipients.length,
+        input.startedAt,
+        input.finishedAt,
+        input.createdAt,
+      ],
+    );
+
+    for (const [index, recipient] of input.recipients.entries()) {
+      const waId = recipient.phone.slice(1);
+      const contactId = `c000visualfixturebc${String(broadcastMessageId).padStart(6, "0")}`;
+      const conversationId = `c000visualfixturebv${String(broadcastMessageId).padStart(6, "0")}`;
+      const messageId = `c000visualfixturebm${String(broadcastMessageId).padStart(6, "0")}`;
+      const recipientId = `c000visualfixturebr${String(broadcastMessageId).padStart(6, "0")}`;
+      broadcastMessageId += 1;
+
+      await client.query(
+        `INSERT INTO contacts (id, company_id, wa_id, phone_e164, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5)`,
+        [contactId, COMPANY.active, waId, recipient.phone, input.createdAt],
+      );
+
+      const sent = recipient.status !== null;
+      const preview = `Hi Customer ${index + 1}, order NW-${2200 + index} has left our warehouse and should reach you in two working days.`;
+
+      /*
+       * last_message_at and the preview are set for a sent recipient, because
+       * materialiseRecipient calls advanceConversation and that is what it
+       * writes. A fixture that left them null photographed an inbox full of
+       * "No preview" threads sorting above the customers who had actually
+       * written in - which was a real bug in the send path, found by looking
+       * at the picture. window_expires_at stays null on purpose: a template
+       * does not open a 24-hour window.
+       */
+      await client.query(
+        `INSERT INTO conversations
+           (id, company_id, contact_id, whatsapp_number_id, unread_count,
+            last_message_at, last_message_preview, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $7)`,
+        [
+          conversationId,
+          COMPANY.active,
+          contactId,
+          NUMBERS[0].id,
+          sent ? input.startedAt : null,
+          sent ? preview : null,
+          input.createdAt,
+        ],
+      );
+
+      if (sent) {
+        await client.query(
+          `INSERT INTO messages
+             (id, company_id, conversation_id, broadcast_id, direction, status,
+              type, wamid, body, template_payload, error_source, error_title,
+              occurred_at, delivered_at, read_at, failed_at, send_attempt,
+              created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'OUTBOUND', $5::message_status, 'template',
+                   $6, $7, $8::jsonb, $9::message_failure_source, $10, $11,
+                   $12, $13, $14, 0, $11, $11)`,
+          [
+            messageId,
+            COMPANY.active,
+            conversationId,
+            input.id,
+            recipient.status,
+            `wamid.BROADCAST${messageId}`,
+            preview,
+            JSON.stringify({
+              name: "order_shipped",
+              language: "en_US",
+              parameters: [`Customer ${index + 1}`, `NW-${2200 + index}`],
+            }),
+            recipient.error ? "META" : null,
+            recipient.error ?? null,
+            input.startedAt,
+            recipient.status === "DELIVERED" || recipient.status === "READ"
+              ? input.startedAt
+              : null,
+            recipient.status === "READ" ? input.startedAt : null,
+            recipient.status === "FAILED" ? input.startedAt : null,
+          ],
+        );
+      }
+
+      await client.query(
+        `INSERT INTO broadcast_recipients
+           (id, company_id, broadcast_id, phone_e164, variables, state,
+            message_id, created_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::broadcast_recipient_state, $7, $8)`,
+        [
+          recipientId,
+          COMPANY.active,
+          input.id,
+          recipient.phone,
+          JSON.stringify([`Customer ${index + 1}`, `NW-${2200 + index}`]),
+          sent ? "SENT" : "PENDING",
+          sent ? messageId : null,
+          input.createdAt,
+        ],
+      );
+    }
+  }
+
+  await seedBroadcastRun({
+    id: BROADCAST.running,
+    name: "Diwali reminder",
+    status: "RUNNING",
+    filename: "diwali-list.csv",
+    recipients: RUNNING_RECIPIENTS,
+    invalid: 0,
+    createdAt: T_BROADCAST.runningCreated,
+    startedAt: T_BROADCAST.runningStarted,
+    finishedAt: null,
+  });
+
+  await seedBroadcastRun({
+    id: BROADCAST.finished,
+    name: "September restock",
+    status: "COMPLETED",
+    filename: "september-restock.csv",
+    recipients: FINISHED_RECIPIENTS,
+    invalid: 3,
+    createdAt: T_BROADCAST.finishedCreated,
+    startedAt: T_BROADCAST.finishedStarted,
+    finishedAt: T_BROADCAST.finishedEnded,
+  });
+
   /*
    * Unroutable deliveries, so the operator card photographs a real reading
    * rather than three zeroes. One of each reason, because they are different
@@ -1237,6 +1525,7 @@ try {
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +
       `${KYC_DOCUMENTS.length} approved KYC documents, ` +
+      `3 broadcasts, ` +
       `${BLOCKED_KYC_DOCUMENTS.length} for the unverified workspace.`,
   );
 } finally {

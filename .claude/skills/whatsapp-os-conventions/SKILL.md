@@ -687,6 +687,14 @@ Things worth knowing before touching it:
 Re-record with `npm run test:visual:update` — and then look at the images. A
 baseline nobody reviewed is a screenshot of a bug.
 
+**The clearest case so far that a rendered page reaches what no source check
+does.** Phase 5's `materialiseRecipient` never called `advanceConversation`.
+Typecheck, lint, every unit test and the whole db suite passed. The picture
+showed sixteen bulk threads reading "No preview", sorting *above* the customers
+who had actually written in, because `last_message_at` was null — which at ten
+thousand recipients is a buried inbox. Nothing but the image was going to say
+so.
+
 **The comparison is `threshold` for noise and a budget of zero for everything
 else, and the two are not interchangeable.** `threshold` (0.2, per pixel, YIQ)
 exists for rasteriser noise — antialiasing on glyph edges, subpixel hinting.
@@ -857,6 +865,45 @@ is per company, never per document — a per-document version would invite using
 it to tidy up a rejected upload — and it is behind a typed confirmation of the
 company name, because a confirm step protects against a misclick and only the
 typed name protects against confirming the wrong company.
+
+**Bulk messaging is not a second send path, and must never become one.** Every
+recipient goes through the existing primitive — `canSend`, `attempts: 1`, the
+three-way outcome, UNCONFIRMED, usage deduped on `messageId`.
+`materialiseRecipient` in `packages/db/src/broadcast-run.ts` is where bulk stops
+being special: after it a recipient is an ordinary outbound message row carrying
+`broadcast_id`, and the send job, the webhook and the inbox needed no change.
+
+Four things follow, each with a test:
+
+- **The gap is pacing; the messaging tier is the limit.** Confusing them is the
+  likeliest misunderstanding in that phase. The tier caps unique recipients per
+  rolling 24 hours and no amount of slowing down gets past it, so a run
+  schedules up to the remaining allowance and **pauses** rather than throwing
+  the remainder at Meta to be refused one message at a time.
+- **The schedule is data, not a loop.** Every send is enqueued with
+  `delay = index * gap`, so the queue holds the plan and a worker restart
+  resumes it for free. A resume carries `scheduledSoFar`, without which the
+  remainder goes out in one burst — at exactly the moment somebody paused
+  because something looked wrong.
+- **Pause is one UPDATE, because every send job re-reads the run's status.**
+  Nothing is removed from Redis: removing thousands of delayed jobs would be a
+  slow, racy sweep of a structure being consumed at the same time.
+- **The opt-out filter runs three times** — at import, at materialisation and in
+  `canSend` — and that is not redundancy. Hours pass between confirming and
+  sending, and an earlier recipient of the same run can mark a contact
+  undeliverable.
+
+`contacts.undeliverable_at` is deliberately separate from `opted_out_at`. An
+opt-out is the customer's decision; 131026 is a fact about a handset. Collapsing
+them would tell a business its own customers had unsubscribed when somebody had
+typed a landline into a spreadsheet.
+
+**A draft audience is not message rows.** `broadcast_recipients` holds the list
+before anybody has decided to send it. Putting un-sent intent into `messages`
+would need a pre-send member on `message_status` — a state describing rows that
+are not messages yet, in the one enum every delivery callback and every retry
+already reasons about. The audience becomes messages at start, and `message_id`
+is where the two meet.
 
 **Verse refuses off-topic questions and admits it is not human — and both are
 compliance, not manners.** Since **15 January 2026** general-purpose LLM chatbots

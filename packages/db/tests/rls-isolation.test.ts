@@ -897,6 +897,158 @@ describe("KYC documents", () => {
   });
 });
 
+describe("broadcasts and their audiences", () => {
+  /* A fixture, deliberately outside any `it` - seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  interface SeededBroadcast {
+    id: string;
+    templateId: string;
+    whatsappNumberId: string;
+  }
+
+  async function seedBroadcast(
+    company: SeededCompany,
+    label: string,
+  ): Promise<SeededBroadcast> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label },
+        select: { id: true },
+      });
+
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          phoneNumberId: `${label}-pn`,
+          displayNumber: "+91 98765 43210",
+          status: "CONNECTED",
+        },
+        select: { id: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name: `${label}_offer`,
+          language: "en_US",
+          category: "MARKETING",
+          status: "APPROVED",
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+        select: { id: true },
+      });
+
+      const broadcast = await db.broadcast.create({
+        data: {
+          companyId,
+          name: `${label} campaign`,
+          templateId: template.id,
+          whatsappNumberId: number.id,
+          gapMs: 800,
+          recipientCount: 1,
+        },
+        select: { id: true },
+      });
+
+      await db.broadcastRecipient.create({
+        data: {
+          companyId,
+          broadcastId: broadcast.id,
+          phoneE164: `+9198765432${label === "alpha" ? "10" : "11"}`,
+          variables: ["Anita"],
+        },
+      });
+
+      return {
+        id: broadcast.id,
+        templateId: template.id,
+        whatsappNumberId: number.id,
+      };
+    });
+  }
+
+  it("does not show one company's broadcasts to another", async () => {
+    await seedBroadcast(alpha, "alpha");
+    await seedBroadcast(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM broadcasts ORDER BY name`,
+    );
+
+    expect(rows.map((r) => r.name)).toEqual(["beta campaign"]);
+  });
+
+  /*
+   * The audience is a list of real people's phone numbers, so a leak here is a
+   * disclosure of a customer's contact book - and worse, it is the table a
+   * send job walks. A row visible across the boundary would not merely be read;
+   * it would be MESSAGED, from the wrong company's number.
+   */
+  it("does not show one company's audience to another", async () => {
+    await seedBroadcast(alpha, "alpha");
+    await seedBroadcast(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ phone_e164: string }>>`
+        SELECT phone_e164 FROM broadcast_recipients ORDER BY phone_e164`,
+    );
+
+    expect(rows.map((r) => r.phone_e164)).toEqual(["+919876543211"]);
+  });
+
+  it("refuses to write a broadcast into another company", async () => {
+    /* alpha's own template and number, so the foreign keys are satisfiable and
+       the only thing left that can refuse the insert is the policy. They come
+       back from the fixture rather than a lookup here, because a lookup in an
+       assertion body would go through the extension and prove nothing. */
+    const seeded = await seedBroadcast(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO broadcasts
+            (id, company_id, name, template_id, whatsapp_number_id, gap_ms,
+             updated_at)
+          VALUES ('smuggled', ${beta.id}, 'smuggled', ${seeded.templateId},
+                  ${seeded.whatsappNumberId}, 800, now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("refuses to write a recipient into another company", async () => {
+    const seeded = await seedBroadcast(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO broadcast_recipients
+            (id, company_id, broadcast_id, phone_e164, variables)
+          VALUES ('smuggled', ${beta.id}, ${seeded.id}, '+919999999999',
+                  '[]'::jsonb)`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides broadcasts and their audiences from the table's own owner", async () => {
+    await seedBroadcast(alpha, "alpha");
+
+    const broadcasts = await owner.query("SELECT * FROM broadcasts");
+    const recipients = await owner.query("SELECT * FROM broadcast_recipients");
+
+    expect(
+      broadcasts.rows,
+      "FORCE ROW LEVEL SECURITY is not in effect on broadcasts",
+    ).toEqual([]);
+    expect(
+      recipients.rows,
+      "FORCE ROW LEVEL SECURITY is not in effect on broadcast_recipients",
+    ).toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

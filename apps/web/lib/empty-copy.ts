@@ -26,7 +26,7 @@ export const EMPTY_COPY = {
   "ai-messaging":
     "A campaign sends an approved template to your leads, then lets Verse answer their replies from your knowledge base.",
   "bulk-messaging":
-    "Upload a contact list and send an approved template to everyone on it.",
+    "Upload a CSV of contacts, map its columns to an approved template, and see exactly who will be messaged before anything goes out.",
   "meta-ads":
     "Connect a Meta ad account to see your click-to-WhatsApp campaigns and match replies back to the ads that caused them.",
   configuration:

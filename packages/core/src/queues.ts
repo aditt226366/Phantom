@@ -37,6 +37,7 @@ export const JOB_NAMES = {
   WHATSAPP_NUMBERS_REFRESH: "whatsapp.numbers.refresh",
   WHATSAPP_TEMPLATE_SUBMIT: "whatsapp.template.submit",
   WHATSAPP_TEMPLATE_SYNC: "whatsapp.template.sync",
+  BROADCAST_START: "broadcast.start",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -201,6 +202,44 @@ export const whatsappNumbersRefreshJobSchema = z.object({
   companyId: z.string().min(1),
 });
 
+/**
+ * Turn one broadcast's audience into messages, and schedule every send.
+ *
+ * The payload carries an id and nothing else - not the audience. Ten thousand
+ * recipients would be a megabyte of Redis per broadcast and a second copy of
+ * the truth; the rows are already in the database, which is where this job
+ * reads them from in batches.
+ *
+ * Re-runnable by construction. It claims recipients that are still PENDING, so
+ * a job that dies half way through and is retried picks up where it stopped
+ * rather than sending the first half twice.
+ */
+export const broadcastStartJobSchema = z.object({
+  companyId: z.string().min(1),
+  broadcastId: z.string().min(1),
+  /**
+   * Where to resume from, as a count of recipients already scheduled.
+   *
+   * Present on a resume, so the delays continue the run rather than restarting
+   * the whole schedule at zero and sending the remainder in one burst.
+   */
+  scheduledSoFar: z.number().int().min(0).default(0),
+});
+
+export type BroadcastStartJob = z.infer<typeof broadcastStartJobSchema>;
+
+/**
+ * The job id for a broadcast run.
+ *
+ * Named with the attempt, for the reason sendJobId is: BullMQ keeps completed
+ * ids for an hour and refuses a job whose id it already holds, silently. A
+ * pause followed by a resume inside that hour would otherwise be dropped, and
+ * the Resume button would look dead.
+ */
+export function broadcastStartJobId(broadcastId: string, run: number): string {
+  return `broadcast:${broadcastId}:${run}`;
+}
+
 export type WhatsAppNumbersRefreshJob = z.infer<
   typeof whatsappNumbersRefreshJobSchema
 >;
@@ -246,6 +285,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.WHATSAPP_NUMBERS_REFRESH]: whatsappNumbersRefreshJobSchema,
   [JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT]: whatsappTemplateSubmitJobSchema,
   [JOB_NAMES.WHATSAPP_TEMPLATE_SYNC]: whatsappTemplateSyncJobSchema,
+  [JOB_NAMES.BROADCAST_START]: broadcastStartJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

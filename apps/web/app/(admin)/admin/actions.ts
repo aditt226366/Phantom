@@ -18,6 +18,7 @@ import {
   latestRepairRun,
   listCompanyIdsWithIntegrations,
   saveIntegrationSecrets,
+  setCompanyBroadcastGap,
   setCompanyDeactivated,
   startRepairRun,
   writeAdminAudit,
@@ -524,4 +525,48 @@ The link expires in one hour and can be used once.`,
   return {
     message: "If that user exists, a reset link has been sent to them.",
   };
+}
+
+/**
+ * Change how fast one tenant's broadcasts send.
+ *
+ * An operator's call rather than a tenant's, because it is a judgement about
+ * how hard to push a number against its quality rating - and the consequence
+ * of getting it wrong lands on the platform's relationship with Meta, not only
+ * on the tenant.
+ *
+ * It is pacing and NOT the limit. The messaging tier caps unique recipients
+ * per rolling 24 hours and no gap gets past it; this only changes how quickly
+ * a run works through what it is allowed.
+ *
+ * A broadcast already running is untouched - it copied the gap at start,
+ * deliberately, so that changing this cannot re-pace something half sent.
+ */
+export async function setBroadcastGapAction(formData: FormData): Promise<void> {
+  const session = await requireAdminSession();
+  await assertAdminCsrf(formData, session);
+
+  const companyId = formData.get("companyId")?.toString() ?? "";
+  const raw = formData.get("gapMs")?.toString() ?? "";
+  const gapMs = Number.parseInt(raw, 10);
+
+  if (!companyId || Number.isNaN(gapMs)) {
+    redirect(`/admin/companies/${companyId}`);
+  }
+
+  const changed = await setCompanyBroadcastGap(companyId, gapMs);
+
+  const context = await requestContext();
+  await writeAdminAudit({
+    adminUserId: session.adminUserId,
+    action: "admin.broadcast.gap.changed",
+    ...(context.ip ? { ip: context.ip } : {}),
+    /* The value and whether it landed. A rejected value is still a decision
+       somebody made, and its absence from the log would be the confusing
+       part when they say they changed it and nothing moved. */
+    metadata: { companyId, gapMs, applied: changed },
+  });
+
+  revalidatePath(`/admin/companies/${companyId}`);
+  redirect(`/admin/companies/${companyId}`);
 }

@@ -72,6 +72,19 @@ export const FIXTURE = {
    * visual.setup.ts has to put back exactly what the seed wrote.
    */
   ownerLastLoginAt: "2026-08-14T09:12:44Z",
+  /**
+   * Three broadcasts, because the interesting screens are three states of one
+   * flow and the fifth is a state of one page.
+   *
+   * The draft still holds its source rows, which is what the mapping and
+   * confirm steps render from - confirming clears them, so a sent broadcast
+   * has no wizard to return to. The finished one carries real failure rows,
+   * because a report with an empty "why messages failed" section is one nobody
+   * has ever had to read.
+   */
+  draftBroadcastId: "c000visualfixturebcast001",
+  runningBroadcastId: "c000visualfixturebcast002",
+  finishedBroadcastId: "c000visualfixturebcast003",
 } as const;
 
 /**
@@ -138,6 +151,37 @@ export const ROUTES: readonly VisualRoute[] = [
   },
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
+  { name: "bulk-import", path: "/bulk-messaging/new", audience: "tenant" },
+  {
+    name: "bulk-mapping",
+    path: `/bulk-messaging/${FIXTURE.draftBroadcastId}/map`,
+    audience: "tenant",
+  },
+  {
+    name: "bulk-confirm",
+    path: `/bulk-messaging/${FIXTURE.draftBroadcastId}/confirm`,
+    audience: "tenant",
+  },
+  {
+    /* A draft opened at its report URL. It has no report yet, so it says so
+       and points at the confirm step - the state somebody lands on by
+       following a stale link from the history list. */
+    name: "bulk-draft",
+    path: `/bulk-messaging/${FIXTURE.draftBroadcastId}`,
+    audience: "tenant",
+  },
+  {
+    name: "bulk-running",
+    path: `/bulk-messaging/${FIXTURE.runningBroadcastId}`,
+    audience: "tenant",
+  },
+  {
+    /* Finished, and carrying failures grouped by reason. The screen an
+       operator actually stares at. */
+    name: "bulk-finished",
+    path: `/bulk-messaging/${FIXTURE.finishedBroadcastId}`,
+    audience: "tenant",
+  },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
   {
     name: "template-library",

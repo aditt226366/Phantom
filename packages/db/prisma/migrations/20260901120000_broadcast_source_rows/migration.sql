@@ -1,0 +1,38 @@
+-- The uploaded file, between the import step and the confirm step.
+--
+-- ---------------------------------------------------------------------------
+-- Why this is stored at all
+-- ---------------------------------------------------------------------------
+--
+-- The wizard is three real routes - import, map, confirm - rather than one page
+-- holding the file in client state. That follows the reasoning already written
+-- on CompanyTabs: real routes mean the back button works, a step is linkable
+-- into a support thread, and every step runs its own guard and its own query,
+-- which is what rule 4 asks for and what a client-side stepper quietly
+-- prevents.
+--
+-- Real routes need the parsed file to survive between them. It cannot live in
+-- broadcast_recipients yet, because building those rows requires the mapping
+-- and the mapping is what step two is for. So the rows sit here for the
+-- duration of the wizard.
+--
+-- ---------------------------------------------------------------------------
+-- And why it does not stay
+-- ---------------------------------------------------------------------------
+--
+-- Set back to NULL the moment the audience is built. This is a customer list -
+-- names, numbers, order values - and keeping a second copy of it indefinitely,
+-- in a column nothing reads, is the kind of quiet data retention that is
+-- indefensible when somebody asks what you hold. The recipients ARE the
+-- retained copy, and they hold only what a message needed.
+--
+-- jsonb rather than text: the shape is an array of row objects and every read
+-- wants it parsed. TOAST handles the size - a ten thousand row list is a
+-- megabyte or two out of line, which is what TOAST is for.
+--
+-- Capped by the import path at a row count rather than by a constraint here.
+-- A CHECK on jsonb_array_length would be evaluated on every write of a large
+-- value for a limit the only writer already enforces.
+
+ALTER TABLE "broadcasts" ADD COLUMN "source_rows" JSONB;
+ALTER TABLE "broadcasts" ADD COLUMN "source_headers" JSONB;

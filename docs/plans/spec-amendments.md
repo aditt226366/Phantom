@@ -9,8 +9,15 @@ them — schema shapes, sequencing, what blocks what — is not re-derived from 
 conversation nobody can find.
 
 Status: **A4 is done** — Phase 3 shipped and is tagged; see `phase-3.md`. A6 is
-in force and was run against dev and test at that tag. A1, A2, A3 and A5 have
-not started. Phases 4a and 4b are complete; see `phase-4.md`.
+in force and has been run against dev and test at every tag since. A1, A2, A3
+and A5 have not started. Phases 4a, 4b and 5 are complete; see `phase-4.md` and
+`phase-5.md`.
+
+One thing Phase 5 settled that A1 depends on: **bulk messaging did not create a
+second send path**, and the flow builder must not either. Every outbound message
+in the system goes through one primitive, and `materialiseRecipient` is the
+worked example of adding a new *producer* of messages without adding a new way
+to send them.
 
 ---
 

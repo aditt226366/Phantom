@@ -102,7 +102,35 @@ test.describe("coverage", () => {
      * Deliberately uncovered rather than quietly missing — its card is the
      * same one /forgot-password and /sign-in render, and those are in.
      */
-    const EXCLUDED = new Map([["/reset-password", "needs a live reset token"]]);
+    const EXCLUDED = new Map([
+      ["/reset-password", "needs a live reset token"],
+      /*
+       * The wizard steps exist only for a DRAFT broadcast.
+       *
+       * Confirming a broadcast clears its source rows - deliberately, because
+       * they are a second copy of a customer list - so the mapping and confirm
+       * pages 404 for anything already sent. The walker pairs every
+       * [broadcastId] value with every page under it, so the four combinations
+       * that cannot render are named here rather than photographed as error
+       * pages.
+       */
+      [
+        `/bulk-messaging/${FIXTURE.runningBroadcastId}/map`,
+        "the mapping step exists only while a broadcast is a draft",
+      ],
+      [
+        `/bulk-messaging/${FIXTURE.runningBroadcastId}/confirm`,
+        "the confirm step exists only while a broadcast is a draft",
+      ],
+      [
+        `/bulk-messaging/${FIXTURE.finishedBroadcastId}/map`,
+        "the mapping step exists only while a broadcast is a draft",
+      ],
+      [
+        `/bulk-messaging/${FIXTURE.finishedBroadcastId}/confirm`,
+        "the confirm step exists only while a broadcast is a draft",
+      ],
+    ]);
 
     /**
      * What a dynamic segment stands for.
@@ -132,6 +160,13 @@ test.describe("coverage", () => {
         [FIXTURE.conversationId, FIXTURE.closedConversationId],
       ],
       ["[templateId]", [FIXTURE.rejectedTemplateId]],
+      /* Two values: the same page.tsx renders a running broadcast and a
+         finished one, and they are completely different pictures - only the
+         second has a failure breakdown on it. */
+      [
+        "[broadcastId]",
+        [FIXTURE.draftBroadcastId, FIXTURE.runningBroadcastId, FIXTURE.finishedBroadcastId],
+      ],
     ]);
 
     const found: string[] = [];

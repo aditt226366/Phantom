@@ -17,9 +17,11 @@ import { TemplatePicker, type PickableTemplate } from "./template-picker";
  *                          picker rather than nothing is the reason it renders
  *                          at all - it is what somebody reaches for when the
  *                          24 hours have run out
- *   attach                 P4: outbound media is Phase 5, because a browser
- *                          upload is a different trust boundary from reading
- *                          a URL Meta gave us with our own token
+ *   attach                 disabled, and deliberately undated. Outbound media
+ *                          is a subsystem of its own - see the note on the
+ *                          control - and a browser upload is a different trust
+ *                          boundary from reading a URL Meta gave us with our
+ *                          own token
  *   send                   disabled with the textarea when the window is shut
  */
 export function Composer({
@@ -88,11 +90,23 @@ export function Composer({
           {pending ? "Sending…" : "Send"}
         </Button>
 
-        {/* Still disabled, still saying when. Outbound media is Phase 5 (P4):
-            a browser upload is a different trust boundary from reading a URL
-            Meta gave us with our own token. */}
+        {/*
+          Still disabled, and no longer naming a phase.
+
+          It said "arrives in Phase 5" for two phases and Phase 5 shipped
+          without it, which is the failure mode a dated promise has: the copy
+          keeps its confidence while the date quietly stops being true. Outbound
+          media turned out to be a subsystem rather than a feature - a
+          magic-number table across image, document and video, Meta's own
+          upload endpoint with per-type size caps, and a browser as the source
+          of the bytes, which is a completely different trust boundary from
+          reading a URL Meta gave us with our own token.
+
+          So this now says what is true and nothing more. The next phase to
+          build it deletes this control rather than editing a date on it.
+        */}
         <Button type="button" variant="ghost" disabled>
-          Sending files arrives in Phase 5
+          Sending files is not available yet
         </Button>
       </div>
     </form>

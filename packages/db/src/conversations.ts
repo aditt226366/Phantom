@@ -85,7 +85,7 @@ export async function canSend(
     select: {
       id: true,
       windowExpiresAt: true,
-      contact: { select: { waId: true, optedOutAt: true } },
+      contact: { select: { waId: true, optedOutAt: true, undeliverableAt: true } },
       whatsappNumber: { select: { phoneNumberId: true, status: true } },
       company: { select: { deactivatedAt: true } },
     },
@@ -153,6 +153,13 @@ export async function canSend(
         numberStatus: row.whatsappNumber.status,
         companyDeactivated: row.company.deactivatedAt !== null,
         contactOptedOut: row.contact.optedOutAt !== null,
+        /*
+         * Read here so the send path refuses a dead handset for its own
+         * reason. Bulk filters these at import too, and this is the check that
+         * is true at the moment the message would actually go - a contact can
+         * be marked undeliverable by an earlier recipient of the same run.
+         */
+        contactUndeliverable: row.contact.undeliverableAt !== null,
       },
       intent,
     ),

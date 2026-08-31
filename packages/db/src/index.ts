@@ -88,6 +88,34 @@ export type {
   CurrentKycDocuments,
   KycDocumentUpload,
 } from "./kyc.ts";
+export {
+  broadcastProgress,
+  broadcastRunState,
+  markContactUndeliverable,
+  pauseBroadcastAtTierLimit,
+  pauseBroadcastForRateLimit,
+  insertRecipientBatch,
+  resolveAudience,
+  skipRecipient,
+  uniqueRecipientsSince,
+  waIdForE164,
+  RECIPIENT_BATCH,
+} from "./broadcasts.ts";
+export {
+  broadcastForRun,
+  completeBroadcastIfDone,
+  materialiseRecipient,
+  pendingRecipients,
+} from "./broadcast-run.ts";
+export type {
+  MaterialisedRecipient,
+  TemplateForSend,
+} from "./broadcast-run.ts";
+export type {
+  BroadcastProgress,
+  ResolvedAudience,
+  RunState,
+} from "./broadcasts.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";
@@ -112,6 +140,8 @@ export type {
   WhatsAppWebhookEvent,
   UnroutableWebhook,
   KycDocument,
+  Broadcast,
+  BroadcastRecipient,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -133,4 +163,6 @@ export {
   UnroutableReason,
   KycDocumentKind,
   KycDocumentStatus,
+  BroadcastStatus,
+  BroadcastRecipientState,
 } from "./generated/prisma/enums.ts";

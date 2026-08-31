@@ -73,6 +73,19 @@ const recordUsage =
   vi.fn<
     (db: unknown, companyId: string, input: { kind: string; dedupeKey: string }) => Promise<unknown>
   >();
+/** What the broadcast this message belongs to says. "runnable" unless set. */
+const broadcastRunState =
+  vi.fn<
+    (db: unknown, companyId: string, broadcastId: string) => Promise<string>
+  >();
+const markContactUndeliverable =
+  vi.fn<
+    (db: unknown, companyId: string, contactId: string, at: Date) => Promise<void>
+  >();
+const pauseBroadcastForRateLimit =
+  vi.fn<
+    (db: unknown, companyId: string, broadcastId: string) => Promise<boolean>
+  >();
 
 /** Rises while a company scope is open, so a call inside one is visible. */
 let openScopes = 0;
@@ -104,6 +117,12 @@ vi.mock("@whatsapp-os/db", () => ({
   recordSendUnconfirmed,
   recordSendDeclined,
   recordUsage,
+  broadcastRunState: (...args: Parameters<typeof broadcastRunState>) => {
+    sequence.push("broadcastRunState");
+    return broadcastRunState(...args);
+  },
+  markContactUndeliverable,
+  pauseBroadcastForRateLimit,
 }));
 
 vi.mock("@whatsapp-os/core/whatsapp", () => ({
@@ -137,12 +156,17 @@ const { handleWhatsAppMessageSend } = await import("../src/jobs/whatsapp-send.ts
 
 const JOB = { companyId: "c1", messageId: "m1", sendAttempt: 0 };
 
-function messageRow(over: { wamid?: string | null; waId?: string } = {}) {
+function messageRow(
+  over: { wamid?: string | null; waId?: string; broadcastId?: string | null } = {},
+) {
   return {
     id: "m1",
     conversationId: "cnv-1",
     body: "hello",
     wamid: over.wamid ?? null,
+    /* Null means an ordinary send. A broadcast recipient carries the run, and
+       the job has to consult its status before doing anything at all. */
+    broadcastId: over.broadcastId ?? null,
     conversation: {
       contact: { id: "ct-1", waId: over.waId ?? "wa-customer" },
       whatsappNumber: {
@@ -168,6 +192,9 @@ beforeEach(() => {
     recordSendUnconfirmed,
     recordSendDeclined,
     recordUsage,
+    broadcastRunState,
+    markContactUndeliverable,
+    pauseBroadcastForRateLimit,
   ]) {
     mock.mockReset();
   }
@@ -181,6 +208,9 @@ beforeEach(() => {
   updateContact.mockResolvedValue({});
   canSend.mockResolvedValue({ waId: "wa-customer", decision: { allowed: true } });
   recordUsage.mockResolvedValue({});
+  broadcastRunState.mockResolvedValue("runnable");
+  markContactUndeliverable.mockResolvedValue(undefined);
+  pauseBroadcastForRateLimit.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -463,5 +493,194 @@ describe("Meta does not answer", () => {
     await expect(handleWhatsAppMessageSend(JOB)).resolves.toEqual({
       result: "unconfirmed",
     });
+  });
+});
+
+describe("a message that is part of a broadcast", () => {
+  /**
+   * The pause check, and why it is where it is.
+   *
+   * Thousands of sends sit in Redis with their delays already computed.
+   * Removing them on a pause would be a slow, racy sweep of a structure being
+   * consumed at the same time; letting every job wake up and ask costs one
+   * indexed read and is exact. That only works if the read actually happens,
+   * and a job that skipped it would keep draining a paused campaign with no
+   * error anywhere - the definition of a silent failure.
+   */
+  it("does not consult a broadcast for an ordinary send", async () => {
+    findFirstMessage.mockResolvedValue(messageRow());
+    sendWhatsAppText.mockResolvedValue({ ok: true, wamid: "w", held: false, waId: null });
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(broadcastRunState).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing while the broadcast is paused", async () => {
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    broadcastRunState.mockResolvedValue("paused");
+
+    const outcome = await handleWhatsAppMessageSend({
+      companyId: "c1",
+      messageId: "m1",
+      sendAttempt: 0,
+    });
+
+    expect(outcome.result).toBe("broadcast_paused");
+    expect(sendWhatsAppText, "sent while paused").not.toHaveBeenCalled();
+    expect(sendWhatsAppTemplate, "sent while paused").not.toHaveBeenCalled();
+  });
+
+  it("leaves a paused message untouched, so a resume can pick it up", async () => {
+    /*
+     * Nothing is written at all. The row stays PENDING, which is what lets a
+     * resume re-enqueue it - marking it failed would lose the recipients that
+     * happened to be mid-flight when somebody pressed Pause.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    broadcastRunState.mockResolvedValue("paused");
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(recordSendDeclined).not.toHaveBeenCalled();
+    expect(recordSendUnconfirmed).not.toHaveBeenCalled();
+    expect(recordSendAccepted).not.toHaveBeenCalled();
+  });
+
+  it("declines with a reason when the broadcast was cancelled", async () => {
+    /* Recorded rather than dropped: the message row exists and somebody will
+       look at it, and a row with no status and no reason is the shape of a bug
+       where "the campaign was cancelled" is the shape of an answer. */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    broadcastRunState.mockResolvedValue("stopped");
+
+    const outcome = await handleWhatsAppMessageSend({
+      companyId: "c1",
+      messageId: "m1",
+      sendAttempt: 0,
+    });
+
+    expect(outcome.result).toBe("declined");
+    expect(recordSendDeclined.mock.calls[0]?.[3]).toBe("broadcast_cancelled");
+    expect(sendWhatsAppText).not.toHaveBeenCalled();
+  });
+
+  it("checks the run before decrypting or asking canSend", async () => {
+    /*
+     * Ordering, not correctness - both refuse. A paused broadcast should not
+     * be doing key material work, and a cancelled one should not be reading
+     * credentials at all.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    broadcastRunState.mockResolvedValue("paused");
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(sequence).toEqual(["broadcastRunState"]);
+    expect(canSend).not.toHaveBeenCalled();
+  });
+
+  it("sends normally when the broadcast is running", async () => {
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    sendWhatsAppText.mockResolvedValue({ ok: true, wamid: "w", held: false, waId: null });
+
+    const outcome = await handleWhatsAppMessageSend({
+      companyId: "c1",
+      messageId: "m1",
+      sendAttempt: 0,
+    });
+
+    expect(outcome.result).toBe("sent");
+    expect(broadcastRunState).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what a refusal means beyond one message", () => {
+  /**
+   * Two of Meta's codes say something about more than the message that
+   * produced them, and acting on it is the difference between learning and
+   * repeating the same mistake once per campaign.
+   */
+  function refuse(code: number) {
+    sendWhatsAppText.mockResolvedValue({
+      ok: false,
+      delivery: "refused",
+      kind: "config",
+      error: "refused",
+      details: { code },
+    });
+  }
+
+  it("remembers a handset that cannot receive WhatsApp", async () => {
+    /*
+     * 131026, on the CONTACT rather than the recipient row, because it is a
+     * fact about the number. resolveAudience drops them at import from then
+     * on, so a future broadcast never spends a send to be told again.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    refuse(131026);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(markContactUndeliverable).toHaveBeenCalledTimes(1);
+    expect(markContactUndeliverable.mock.calls[0]?.[2]).toBe("ct-1");
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("pauses the run on every documented rate limit", async () => {
+    for (const code of [131049, 130472, 131056, 133016]) {
+      pauseBroadcastForRateLimit.mockClear();
+      findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+      refuse(code);
+
+      await handleWhatsAppMessageSend({
+        companyId: "c1",
+        messageId: "m1",
+        sendAttempt: 0,
+      });
+
+      expect(
+        pauseBroadcastForRateLimit,
+        `${code} did not pause the run`,
+      ).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("does not pause for an ordinary failure", async () => {
+    /*
+     * The important negative. If an unrecognised code paused the run, one bad
+     * recipient would stop a broadcast to ten thousand people - and the
+     * symptom would be a campaign that mysteriously halts.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    refuse(131047);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+    expect(markContactUndeliverable).not.toHaveBeenCalled();
+  });
+
+  it("does not pause anything for a message sent by hand", async () => {
+    /* An operator sending one message has already seen the failure, and
+       pausing something they are not running would act on a state that does
+       not exist. */
+    findFirstMessage.mockResolvedValue(messageRow());
+    refuse(133016);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("still marks a handset undeliverable outside a broadcast", async () => {
+    /* The contact fact is not campaign-scoped: learning it from an inbox send
+       has to protect every future broadcast too. */
+    findFirstMessage.mockResolvedValue(messageRow());
+    refuse(131026);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(markContactUndeliverable).toHaveBeenCalledTimes(1);
   });
 });

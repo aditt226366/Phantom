@@ -35,11 +35,29 @@ export const EMPTY_COPY = {
     "Replies from your contacts arrive here. Conversations Verse cannot answer are handed over with the history attached.",
   /* Two, because the tab changes what "empty" means: no templates at all, or
      none that came from Meta. Both are distinct from every other section and
-     from each other, which is what the guard checks. */
-  "template-messaging":
+     from each other, which is what the guard checks.
+
+     Keyed by path rather than by section name since the Studio moved: the
+     guard resolves a key to app/(app)/<key>/page.tsx, so the key IS the route
+     and a stale one fails rather than quietly checking nothing.
+
+     A "#variant" suffix marks a second copy for the same page. It used to be
+     a "-library" suffix the guard stripped, which worked for exactly one
+     variant and would have silently mis-resolved a route that genuinely ended
+     in those characters. The marker cannot appear in a path, so splitting on
+     it is unambiguous. */
+  "configuration/templates":
     "A template is a message Meta has approved in advance. You need one to reach somebody who has not written to you in the last 24 hours.",
-  "template-messaging-library":
+  "configuration/templates#library":
     "Sync to pull in any templates already on your WhatsApp Business Account, including ones made in Meta Business Manager.",
+  /* The section A1 reserves for the flow builder. Not the Studio, which now
+     lives in Configuration - this describes what is actually coming. */
+  "template-messaging":
+    "A flow is a decision tree built from WhatsApp's reply buttons and lists, where every branch is a rule somebody drew rather than a model's guess.",
+  /* The inbox's two views. The default is threads a customer has written in;
+     the second is every thread, including the one-way ones a broadcast makes. */
+  "inbox#all":
+    "No conversations at all yet, including any a broadcast started. Threads appear here the moment a message goes out or arrives.",
 } as const;
 
 export type EmptySection = keyof typeof EMPTY_COPY;

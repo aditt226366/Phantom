@@ -29,6 +29,19 @@ export interface NavSection {
 export const NAV_SECTIONS: readonly NavSection[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "AI Messaging", href: "/ai-messaging", icon: Sparkles },
+  /*
+   * Reserved for the flow builder (A1), not for the Template Studio.
+   *
+   * The Studio moved to Configuration > Templates because a template is a
+   * shared asset - the inbox picker, bulk messaging and the flow builder all
+   * draw on the same approved templates - and a shared asset is configuration
+   * rather than a section of its own.
+   *
+   * The section stays in the nav because A1 reserves it, and because the
+   * alternative is a nav that loses an item now and grows it back later. It
+   * renders what ai-messaging and meta-ads render: an honest description of
+   * what will be there.
+   */
   { label: "Template Messaging", href: "/template-messaging", icon: FileText },
   { label: "Bulk Messaging", href: "/bulk-messaging", icon: Send },
   { label: "Meta Ads", href: "/meta-ads", icon: Megaphone },

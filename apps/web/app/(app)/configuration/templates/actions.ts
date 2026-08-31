@@ -58,10 +58,10 @@ export async function createTemplateAction(formData: FormData): Promise<void> {
   await assertFeatureAccess();
 
   const draft = parseDraft(String(formData.get("draft") ?? ""));
-  if (!draft) redirect("/template-messaging?error=malformed");
+  if (!draft) redirect("/configuration/templates?error=malformed");
 
   if (validateTemplate(draft).length > 0) {
-    redirect("/template-messaging?error=invalid");
+    redirect("/configuration/templates?error=invalid");
   }
 
   const components = buildComponents(draft);
@@ -106,7 +106,7 @@ export async function createTemplateAction(formData: FormData): Promise<void> {
     return template.id;
   });
 
-  if (!created) redirect("/template-messaging?error=not_connected");
+  if (!created) redirect("/configuration/templates?error=not_connected");
 
   /* Outside the scope: Redis is not worth a held connection. */
   await systemQueue.add(
@@ -115,8 +115,8 @@ export async function createTemplateAction(formData: FormData): Promise<void> {
     { jobId: templateSubmitJobId(created, 0) },
   );
 
-  revalidatePath("/template-messaging");
-  redirect(`/template-messaging/${created}`);
+  revalidatePath("/configuration/templates");
+  redirect(`/configuration/templates/${created}`);
 }
 
 /**
@@ -146,9 +146,9 @@ export async function resubmitTemplateAction(formData: FormData): Promise<void> 
   const templateId = String(formData.get("templateId") ?? "");
   const draft = parseDraft(String(formData.get("draft") ?? ""));
 
-  if (!templateId || !draft) redirect("/template-messaging?error=malformed");
+  if (!templateId || !draft) redirect("/configuration/templates?error=malformed");
   if (validateTemplate(draft).length > 0) {
-    redirect(`/template-messaging/${templateId}?error=invalid`);
+    redirect(`/configuration/templates/${templateId}?error=invalid`);
   }
 
   const components = buildComponents(draft);
@@ -196,7 +196,7 @@ export async function resubmitTemplateAction(formData: FormData): Promise<void> 
     return db.whatsAppTemplateEdit.count({ where: { companyId, templateId } });
   });
 
-  if (attempt === null) redirect("/template-messaging?error=gone");
+  if (attempt === null) redirect("/configuration/templates?error=gone");
 
   await systemQueue.add(
     JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT,
@@ -204,9 +204,9 @@ export async function resubmitTemplateAction(formData: FormData): Promise<void> 
     { jobId: templateSubmitJobId(templateId, attempt) },
   );
 
-  revalidatePath("/template-messaging");
-  revalidatePath(`/template-messaging/${templateId}`);
-  redirect(`/template-messaging/${templateId}`);
+  revalidatePath("/configuration/templates");
+  revalidatePath(`/configuration/templates/${templateId}`);
+  redirect(`/configuration/templates/${templateId}`);
 }
 
 /**
@@ -232,6 +232,6 @@ export async function syncTemplatesAction(formData: FormData): Promise<void> {
     companyId: session.companyId,
   });
 
-  revalidatePath("/template-messaging");
-  redirect("/template-messaging?view=library");
+  revalidatePath("/configuration/templates");
+  redirect("/configuration/templates?view=library");
 }

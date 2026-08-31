@@ -109,3 +109,56 @@ export function sourceLabel(source: string): string {
 export function previewLabel(preview: string | null): string {
   return preview ?? "No preview";
 }
+
+/* ------------------------------------------------------------------------- *
+ * Which conversations the inbox shows
+ * ------------------------------------------------------------------------- */
+
+export type InboxView = "replies" | "all";
+
+/** `?view=all` and nothing else. Anything unrecognised falls back to the default. */
+export function parseInboxView(raw: string | string[] | undefined): InboxView {
+  return raw === "all" ? "all" : "replies";
+}
+
+/**
+ * The default inbox is threads a customer has actually written in.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the default changed
+ * ---------------------------------------------------------------------------
+ *
+ * Bulk messaging creates a conversation per recipient, which is correct - a
+ * customer who replies must land in the inbox beside everybody else, and does.
+ * The consequence is that a ten thousand recipient broadcast puts ten thousand
+ * one-way threads at the top of the list, and every genuine conversation is
+ * buried under them.
+ *
+ * The model is not the problem, so the model does not change. What changes is
+ * the default view: the inbox's job is conversations that need a person, and a
+ * thread nobody has replied to needs nobody. "All conversations" is one click
+ * away and shows exactly what it did before.
+ *
+ * ---------------------------------------------------------------------------
+ * Why both clauses, when one currently implies the other
+ * ---------------------------------------------------------------------------
+ *
+ * `unread_count` is only ever incremented for an inbound message, so today
+ * `unreadCount > 0` implies `lastInboundAt` is set and the second clause adds
+ * nothing. It is here anyway because the two facts mean different things: one
+ * is "the customer has ever written", the other is "somebody here has not read
+ * it yet". A thread with unread messages belongs in this view on its own
+ * merits, and it should not stop appearing because a future change to how
+ * `last_inbound_at` is written breaks an implication nothing states.
+ *
+ * A where fragment rather than an inline object, so the decision is testable
+ * without rendering a page - which is the rule that has cost this repository
+ * the same lesson twice.
+ */
+export function inboxWhere(view: InboxView): Record<string, unknown> {
+  if (view === "all") return {};
+
+  return {
+    OR: [{ lastInboundAt: { not: null } }, { unreadCount: { gt: 0 } }],
+  };
+}

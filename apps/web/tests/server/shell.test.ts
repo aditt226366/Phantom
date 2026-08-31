@@ -146,7 +146,14 @@ describe("empty states", () => {
    */
   it("is used by the page it names", () => {
     for (const key of Object.keys(EMPTY_COPY)) {
-      const section = key.replace(/-library$/, "");
+      /*
+       * A key is a route, optionally with a "#variant" for a second copy on
+       * the same page. It used to be a "-library" suffix stripped by regex,
+       * which handled exactly one variant and would have mis-resolved a route
+       * genuinely ending in those characters - resolving to a page that does
+       * not exist, or worse, to one that does.
+       */
+      const section = key.split("#")[0] ?? key;
       expect(pageCode(section), `${key} is not rendered`).toContain("EMPTY_COPY");
     }
   });

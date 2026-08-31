@@ -17,7 +17,7 @@ import {
   rejectionExplanation,
   templateTone,
 } from "@/lib/template-display";
-import { SectionHeader, SectionShell } from "../../_components/section";
+import { SectionHeader, SectionShell } from "../../../_components/section";
 import { Studio } from "../_components/studio";
 import { resubmitTemplateAction } from "../actions";
 import { FeatureBlocked } from "@/components/brand/feature-blocked";
@@ -103,7 +103,7 @@ export default async function Page({
     <SectionShell>
       <header className="mb-lg">
         <Link
-          href="/template-messaging"
+          href="/configuration/templates"
           className="text-caption text-muted underline-offset-4 hover:text-ink hover:underline"
         >
           Back to templates

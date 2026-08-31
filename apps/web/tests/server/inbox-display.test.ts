@@ -6,6 +6,8 @@ import {
   sourceLabel,
   windowLabel,
   windowVariant,
+  inboxWhere,
+  parseInboxView,
 } from "../../lib/inbox-display.ts";
 
 describe("contactLabel", () => {
@@ -88,5 +90,57 @@ describe("previewLabel", () => {
   it("names the absence rather than rendering an empty line", () => {
     expect(previewLabel(null)).toBe("No preview");
     expect(previewLabel("Yes please.")).toBe("Yes please.");
+  });
+});
+
+describe("which conversations the inbox shows", () => {
+  /**
+   * The default view is the fix for a consequence of the model, not a change
+   * to it. Bulk messaging creates a conversation per recipient - correctly,
+   * because a customer who replies must land beside everybody else - and the
+   * result is that a ten thousand recipient broadcast buries every genuine
+   * conversation under one-way threads.
+   *
+   * Asserted as a value rather than by rendering, per the rule this repository
+   * has learned twice: a page test that grepped for a class or a word would
+   * pass on a filter that silently matched nothing.
+   */
+  it("defaults to threads a customer has written in", () => {
+    expect(inboxWhere("replies")).toEqual({
+      OR: [{ lastInboundAt: { not: null } }, { unreadCount: { gt: 0 } }],
+    });
+  });
+
+  it("filters nothing on the all view", () => {
+    /*
+     * An empty object, not a clause that happens to match everything. The
+     * second view has to be exactly what the inbox showed before this change,
+     * or "all conversations" is a promise the page does not keep.
+     */
+    expect(inboxWhere("all")).toEqual({});
+  });
+
+  it("keeps unread threads even if the inbound clause ever stops implying them", () => {
+    /*
+     * Today unread_count is only incremented for an inbound message, so the
+     * second clause is redundant. It is deliberate: the two facts mean
+     * different things, and a thread somebody has not read belongs in this
+     * view on its own merits rather than on an implication nothing states.
+     */
+    const where = inboxWhere("replies") as {
+      OR: Array<Record<string, unknown>>;
+    };
+
+    expect(where.OR).toHaveLength(2);
+    expect(where.OR).toContainEqual({ unreadCount: { gt: 0 } });
+  });
+
+  it("reads only the view it knows, and defaults for everything else", () => {
+    expect(parseInboxView("all")).toBe("all");
+    expect(parseInboxView(undefined)).toBe("replies");
+    expect(parseInboxView("nonsense")).toBe("replies");
+    /* A repeated query parameter arrives as an array. It must not be read as
+       "all" by accident, and must not throw. */
+    expect(parseInboxView(["all", "replies"])).toBe("replies");
   });
 });

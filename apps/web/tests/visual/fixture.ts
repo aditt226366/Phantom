@@ -140,6 +140,13 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "dashboard", path: "/dashboard", audience: "tenant" },
   { name: "inbox", path: "/inbox", audience: "tenant" },
   {
+    /* The second view, which is what the inbox used to show by default - the
+       one-way threads a broadcast creates are only here. */
+    name: "inbox-all",
+    path: "/inbox?view=all",
+    audience: "tenant",
+  },
+  {
     name: "inbox-thread-open",
     path: `/inbox/${FIXTURE.conversationId}`,
     audience: "tenant",
@@ -182,17 +189,23 @@ export const ROUTES: readonly VisualRoute[] = [
     path: `/bulk-messaging/${FIXTURE.finishedBroadcastId}`,
     audience: "tenant",
   },
-  { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
   {
-    name: "template-library",
-    path: "/template-messaging?view=library",
+    /* The section A1 reserves for the flow builder. Not the Studio. */
+    name: "template-messaging",
+    path: "/template-messaging",
     audience: "tenant",
   },
-  { name: "template-studio-new", path: "/template-messaging/new", audience: "tenant" },
+  { name: "templates", path: "/configuration/templates", audience: "tenant" },
+  {
+    name: "template-library",
+    path: "/configuration/templates?view=library",
+    audience: "tenant",
+  },
+  { name: "template-studio-new", path: "/configuration/templates/new", audience: "tenant" },
   {
     /* The rejected one: Meta's reason, the explanation, and the quota. */
     name: "template-rejected",
-    path: `/template-messaging/${FIXTURE.rejectedTemplateId}`,
+    path: `/configuration/templates/${FIXTURE.rejectedTemplateId}`,
     audience: "tenant",
   },
   { name: "meta-ads", path: "/meta-ads", audience: "tenant" },

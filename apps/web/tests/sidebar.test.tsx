@@ -104,14 +104,27 @@ describe("active item", () => {
   });
 
   it("keeps the parent marked on a nested route", () => {
-    pathname = "/template-messaging/new";
+    /*
+     * Two levels deep, and the parent is Configuration since the Template
+     * Studio moved there. Template Messaging is a sibling section reserved for
+     * the flow builder, and marking it here would highlight a section the
+     * reader is not in.
+     */
+    pathname = "/configuration/templates/new";
     render(<Harness />);
+
+    expect(
+      screen
+        .getByRole("link", { name: "Configuration" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
 
     expect(
       screen
         .getByRole("link", { name: "Template Messaging" })
         .getAttribute("aria-current"),
-    ).toBe("page");
+      "the reserved section was marked for a Configuration route",
+    ).toBeNull();
   });
 });
 

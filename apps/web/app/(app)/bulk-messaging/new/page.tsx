@@ -67,7 +67,7 @@ export default async function NewBroadcastPage() {
           }
           description={
             templates.length === 0
-              ? "A broadcast reaches people who have not written to you, and WhatsApp only allows an approved template for that. Create one in Template Messaging and send it for approval first."
+              ? "A broadcast reaches people who have not written to you, and WhatsApp only allows an approved template for that. Create one in Configuration › Templates and send it for approval first."
               : "Connect a WhatsApp number in Configuration before sending to a list."
           }
         />

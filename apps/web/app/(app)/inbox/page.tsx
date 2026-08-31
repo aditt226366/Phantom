@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import type * as React from "react";
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { describeWindow } from "@whatsapp-os/core/whatsapp";
 import { withCompany } from "@whatsapp-os/db";
 import { Badge } from "@/components/ui/badge";
@@ -9,11 +11,14 @@ import { EMPTY_COPY } from "@/lib/empty-copy";
 import { formatTimestamp } from "@/lib/format";
 import {
   contactLabel,
+  inboxWhere,
   needsHuman,
+  parseInboxView,
   previewLabel,
   sourceLabel,
   windowLabel,
   windowVariant,
+  type InboxView,
 } from "@/lib/inbox-display";
 import { SectionHeader, SectionShell } from "../_components/section";
 import { FeatureBlocked } from "@/components/brand/feature-blocked";
@@ -44,7 +49,11 @@ export const metadata: Metadata = { title: "Inbox" };
  * to collapse to one pane on a phone anyway, and a layout that only exists
  * above a breakpoint is a layout nobody looks at.
  */
-export default async function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   /* Not the layout. Layouts are cached per segment; this is the boundary. */
   const session = await requireSession();
   /*
@@ -68,8 +77,16 @@ export default async function Page() {
    */
   const now = new Date();
 
+  const view = parseInboxView((await searchParams)["view"]);
+
   const conversations = await withCompany(session.companyId, (db) =>
     db.conversation.findMany({
+      /*
+       * The default view drops threads nobody has written in - see inboxWhere.
+       * A broadcast creates one conversation per recipient, and without this
+       * a ten thousand recipient run buries every genuine conversation.
+       */
+      where: inboxWhere(view),
       /* The index is (company_id, last_message_at DESC). Tie-broken on id
          because Meta's timestamps are whole seconds, so ties are real. */
       orderBy: [{ lastMessageAt: "desc" }, { id: "asc" }],
@@ -98,8 +115,23 @@ export default async function Page() {
     <SectionShell>
       <SectionHeader
         title="Inbox"
-        lede="Every conversation on your numbers, most recent first."
+        lede={
+          view === "all"
+            ? "Every conversation on your numbers, including the one-way threads a broadcast creates."
+            : "Conversations a customer has written in, most recent first."
+        }
       />
+
+      {/* Real links, not client state: each view is a URL, so the back button
+          works and a filtered inbox is shareable into a support thread. */}
+      <nav aria-label="Inbox views" className="mb-lg flex gap-lg border-b border-hairline">
+        <ViewTab href="/inbox" active={view === "replies"}>
+          Replies
+        </ViewTab>
+        <ViewTab href="/inbox?view=all" active={view === "all"}>
+          All conversations
+        </ViewTab>
+      </nav>
 
       {conversations.length > 0 ? (
         <ul className="flex flex-col gap-sm">
@@ -114,11 +146,51 @@ export default async function Page() {
       ) : (
         <EmptyState
           tone="mint"
-          title="Nothing in the inbox"
-          description={EMPTY_COPY.inbox}
+          title={
+            view === "all" ? "No conversations yet" : "No replies yet"
+          }
+          /*
+           * Different copy per view, because "empty" means two different
+           * things. On the default view it usually means a broadcast went out
+           * and nobody has written back yet - which is not the same as having
+           * no conversations at all, and telling somebody it is would send
+           * them looking for a fault.
+           */
+          description={view === "all" ? EMPTY_COPY["inbox#all"] : EMPTY_COPY.inbox}
+          action={
+            view === "replies" ? (
+              <Button asChild variant="outline">
+                <Link href="/inbox?view=all">See all conversations</Link>
+              </Button>
+            ) : undefined
+          }
         />
       )}
     </SectionShell>
+  );
+}
+
+function ViewTab({
+  href,
+  active,
+  children,
+}: {
+  href: "/inbox" | "/inbox?view=all";
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={`-mb-px inline-block border-b-2 pb-sm text-nav-link transition-colors ${
+        active
+          ? "border-ink text-ink"
+          : "border-transparent text-muted hover:text-ink"
+      }`}
+    >
+      {children}
+    </Link>
   );
 }
 

@@ -241,8 +241,9 @@ describe("the feature gate", () => {
         "inbox/[conversationId]/page.tsx",
         "inbox/page.tsx",
         "meta-ads/page.tsx",
-        "template-messaging/[templateId]/page.tsx",
-        "template-messaging/new/page.tsx",
+        "configuration/templates/[templateId]/page.tsx",
+        "configuration/templates/new/page.tsx",
+        "configuration/templates/page.tsx",
         "template-messaging/page.tsx",
       ].sort(),
     );

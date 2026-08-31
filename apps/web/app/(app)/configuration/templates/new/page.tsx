@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CsrfField } from "@/components/ui/csrf-field";
 import { requireSession } from "@/lib/auth/session";
-import { SectionHeader, SectionShell } from "../../_components/section";
+import { SectionHeader, SectionShell } from "../../../_components/section";
 import { createTemplateAction } from "../actions";
 import { Studio } from "../_components/studio";
 import { FeatureBlocked } from "@/components/brand/feature-blocked";
@@ -37,7 +37,7 @@ export default async function Page() {
     <SectionShell>
       <header className="mb-lg">
         <Link
-          href="/template-messaging"
+          href="/configuration/templates"
           className="text-caption text-muted underline-offset-4 hover:text-ink hover:underline"
         >
           Back to templates

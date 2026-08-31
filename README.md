@@ -1,4 +1,4 @@
-# whatsapp-os
+# phantom-os
 
 A Next.js 16 App Router monorepo with a background worker, a multi-tenant
 Postgres layer enforced by row-level security, authentication, and a design

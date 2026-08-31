@@ -85,6 +85,20 @@ export const FIXTURE = {
   draftBroadcastId: "c000visualfixturebcast001",
   runningBroadcastId: "c000visualfixturebcast002",
   finishedBroadcastId: "c000visualfixturebcast003",
+  /**
+   * Two bindings, and the second is the one worth the fixture.
+   *
+   * The healthy one photographs the live feed with more than one badge in it.
+   * The lost one is a binding whose sheet was never shared with the service
+   * account - the state a tenant genuinely stares at, and the one least likely
+   * to be looked at during development, because everything works on the
+   * machine where the share was set up by the person building the feature.
+   *
+   * The same argument as the unverified workspace above: a fixture that only
+   * seeds happy paths never photographs the common case.
+   */
+  leadSourceId: "c000visualfixtureleadsrc1",
+  lostLeadSourceId: "c000visualfixtureleadsrc2",
 } as const;
 
 /**
@@ -212,6 +226,47 @@ export const ROUTES: readonly VisualRoute[] = [
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },
   { name: "configuration-numbers", path: "/configuration/numbers", audience: "tenant" },
+  {
+    name: "lead-sources",
+    path: "/configuration/lead-sources",
+    audience: "tenant",
+  },
+  {
+    /* The binding form, carrying the service account address in full - the
+       control a tenant has to use before anything else here works. */
+    name: "lead-source-new",
+    path: "/configuration/lead-sources/new",
+    audience: "tenant",
+  },
+  {
+    /* Active, with recent sends in several states. */
+    name: "lead-source-active",
+    path: `/configuration/lead-sources/${FIXTURE.leadSourceId}`,
+    audience: "tenant",
+  },
+  {
+    /*
+     * The mapping screen, with a live preview of what three real rows would
+     * receive. Its sheet comes from the fixture reader in
+     * lib/lead-sources/sheets.ts - there is no network in the gate, and this
+     * is the screen a wrong column is invisible on until you read the
+     * sentence.
+     */
+    name: "lead-source-map",
+    path: `/configuration/lead-sources/${FIXTURE.leadSourceId}/map`,
+    audience: "tenant",
+  },
+  {
+    /*
+     * The lost-access state, and the reason it is seeded rather than left to
+     * be imagined. A binding that cannot see its sheet looks exactly like one
+     * with no new leads - both show nothing happening - and the difference is
+     * a customer list nobody is being contacted from.
+     */
+    name: "lead-source-lost-access",
+    path: `/configuration/lead-sources/${FIXTURE.lostLeadSourceId}`,
+    audience: "tenant",
+  },
   { name: "profile-personal-details", path: "/profile/personal-details", audience: "tenant" },
   { name: "profile-documents", path: "/profile/documents", audience: "tenant" },
 

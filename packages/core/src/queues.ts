@@ -38,6 +38,7 @@ export const JOB_NAMES = {
   WHATSAPP_TEMPLATE_SUBMIT: "whatsapp.template.submit",
   WHATSAPP_TEMPLATE_SYNC: "whatsapp.template.sync",
   BROADCAST_START: "broadcast.start",
+  LEAD_SOURCE_POLL: "lead-source.poll",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -245,6 +246,55 @@ export type WhatsAppNumbersRefreshJob = z.infer<
 >;
 
 /**
+ * Read one bound spreadsheet and act on the rows that are new.
+ *
+ * ---------------------------------------------------------------------------
+ * One repeatable job per binding, and no sweeping poller
+ * ---------------------------------------------------------------------------
+ *
+ * The obvious design is a single job that wakes every thirty seconds and polls
+ * every active binding. It is not available here, and the reason is the same
+ * one that shapes integration.verify and vault.reseal: this process connects as
+ * app_runtime with NO company context, so `SELECT * FROM lead_sources` returns
+ * zero rows, succeeds, and looks exactly like "nothing to do". A sweeper would
+ * run for ever and poll nothing, silently.
+ *
+ * So the fan-out lives where a company id can be established, which is the web
+ * side after requireSession(). Creating a binding registers a BullMQ job
+ * scheduler carrying its companyId; deleting one removes the scheduler. The
+ * queue holds the schedule, so a worker restart resumes every binding for free.
+ *
+ * The companyId in this payload is the third of the three trusted origins in
+ * CLAUDE.md rule 3 - it is here because a server action put it here after
+ * resolving a session, and everything downstream depends on nothing but our own
+ * code being able to write to Redis.
+ */
+export const leadSourcePollJobSchema = z.object({
+  companyId: z.string().min(1),
+  leadSourceId: z.string().min(1),
+});
+
+export type LeadSourcePollJob = z.infer<typeof leadSourcePollJobSchema>;
+
+/**
+ * The scheduler id for one binding's poll.
+ *
+ * Deterministic and derived from the binding id, because upsertJobScheduler is
+ * an upsert on this key: changing a binding's interval re-registers under the
+ * same id and replaces the schedule rather than adding a second one. A random
+ * or timestamped id would leave the old schedule running, and the binding would
+ * quietly poll twice as often - which is a quota problem for every other tenant
+ * before it is a visible problem for this one.
+ *
+ * It is also what removal needs. A binding deleted without its scheduler
+ * removed is a job that wakes for ever, finds nothing, and logs a not-found on
+ * every tick.
+ */
+export function leadSourceSchedulerId(leadSourceId: string): string {
+  return `lead-source:${leadSourceId}`;
+}
+
+/**
  * The send job runs ONCE. Everything else keeps the default five attempts.
  *
  * Meta's /messages endpoint has no idempotency key and no "did this land"
@@ -286,6 +336,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.WHATSAPP_TEMPLATE_SUBMIT]: whatsappTemplateSubmitJobSchema,
   [JOB_NAMES.WHATSAPP_TEMPLATE_SYNC]: whatsappTemplateSyncJobSchema,
   [JOB_NAMES.BROADCAST_START]: broadcastStartJobSchema,
+  [JOB_NAMES.LEAD_SOURCE_POLL]: leadSourcePollJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

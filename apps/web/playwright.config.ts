@@ -195,6 +195,19 @@ export default defineConfig({
       DATABASE_URL_APP: testAppDatabaseUrl(),
       DATABASE_URL_ADMIN: testAdminDatabaseUrl(),
       APP_URL: FIXTURE_APP_URL,
+      /*
+       * The one page in the app that calls Google before it can render.
+       *
+       * There is no network in the gate, so without this the mapping screen
+       * spends the full ten-second provider timeout and then photographs an
+       * error state - twice, at two viewports, on every run - and the screen
+       * most worth looking at is the one screen never looked at.
+       *
+       * Read only by lib/lead-sources/sheets.ts, which explains what the hook
+       * can and cannot reach. The value is a fixed sentinel rather than a path
+       * or a payload, so it can only ever produce one obviously-fake sheet.
+       */
+      LEAD_SHEET_FIXTURE: "northwind-visual-fixture",
     },
   },
 });

@@ -132,6 +132,87 @@ export const webEnvSchema = sharedEnvSchema.extend({
    * an admin panel. Used by exactly one module, packages/db/src/admin-client.ts.
    */
   DATABASE_URL_ADMIN: postgresUrl("DATABASE_URL_ADMIN").optional(),
+
+  /**
+   * Makes the lead-source mapping screen read a literal instead of Google.
+   *
+   * Scaffolding, and the only piece of it in the application's environment. It
+   * exists because that screen is the one page in the app that calls a provider
+   * before it can render, so the screenshot suite - which has no network -
+   * would otherwise spend the full ten-second provider timeout at two viewports
+   * on every run and photograph an error state. The screen most worth looking
+   * at would be the one screen never looked at.
+   *
+   * Set by apps/web/playwright.config.ts and by nothing else. It is declared
+   * here rather than read straight from process.env so that the refinement
+   * below can exist: a boot-time check beats a comment asking people not to.
+   */
+  LEAD_SHEET_FIXTURE: z.string().optional(),
+}).superRefine((env, ctx) => {
+  /**
+   * The fixture must never be live.
+   *
+   * An environment variable is inherited far more easily than anyone plans: a
+   * copied .env, a shared compose file, a CI runner promoted to a deploy, a
+   * container image built from a developer's shell. The failure that would
+   * produce is quiet and specific - a real tenant's mapping screen showing
+   * Anita Desai and Vikram Shah, and that tenant mapping their columns against
+   * five rows of a fixture rather than their own spreadsheet.
+   *
+   * Nothing downstream would notice. The mapping saved from a fictional preview
+   * is structurally valid, the poll reads the real sheet with it, and the first
+   * symptom is messages filled from the wrong columns.
+   *
+   * ---------------------------------------------------------------------------
+   * Why NODE_ENV alone is the wrong test, discovered by writing it
+   * ---------------------------------------------------------------------------
+   *
+   * The obvious condition is "refuse when NODE_ENV is production", and it
+   * refuses the screenshot suite: `next start` IS production mode, and that
+   * suite is the only legitimate consumer of this variable. Shipping that
+   * version would have meant the fixture could never be used at all.
+   *
+   * So the second half is the database. An application serving `whatsapp_os_test`
+   * is not serving tenants - there are none in it, the fixture truncates it on
+   * every run, and `db-nuke.mjs` already treats that name as the marker of a
+   * database that may be destroyed. A production deploy points at a production
+   * database by definition, so an inherited variable there still refuses.
+   *
+   * Both halves are needed. NODE_ENV alone blocks the suite; the database alone
+   * would permit a developer's production-mode build against a test database,
+   * which is fine, and would also permit nothing worth worrying about - the
+   * pairing is what makes the refusal precise rather than merely strict.
+   *
+   * It fails to boot rather than warning. parseEnv exits non-zero, so in
+   * production the deploy does not come up: loud, immediate and attributable,
+   * which is the opposite of every property the silent version has.
+   */
+  if (env.LEAD_SHEET_FIXTURE === undefined) return;
+  if (env.NODE_ENV !== "production") return;
+
+  /* The test database, by name. Parsing the URL rather than matching a
+     substring, so a production database that merely CONTAINS the string -
+     `whatsapp_os_testing`, a user called `whatsapp_os_test` - does not let the
+     fixture through. */
+  let servingTestDatabase = false;
+  try {
+    const name = new URL(env.DATABASE_URL_APP).pathname.replace(/^\//, "");
+    servingTestDatabase = name === "whatsapp_os_test";
+  } catch {
+    servingTestDatabase = false;
+  }
+
+  if (servingTestDatabase) return;
+
+  ctx.addIssue({
+    code: "custom",
+    path: ["LEAD_SHEET_FIXTURE"],
+    message:
+      "LEAD_SHEET_FIXTURE must not be set in production. It makes the lead-source " +
+      "mapping screen read a fixture instead of the tenant's real spreadsheet, so a " +
+      "mapping saved from it would be filled from the wrong columns. It is set by " +
+      "apps/web/playwright.config.ts and by nothing else - unset it.",
+  });
 });
 
 /** Worker-only additions. */

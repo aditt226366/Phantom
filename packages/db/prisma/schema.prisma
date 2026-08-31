@@ -122,6 +122,8 @@ model Company {
   kycDocuments           KycDocument[]
   broadcasts             Broadcast[]
   broadcastRecipients    BroadcastRecipient[]
+  leadSources            LeadSource[]
+  leadSourceRows         LeadSourceRow[]
 
   @@map("companies")
 }
@@ -183,6 +185,7 @@ model User {
   templateEdits           WhatsAppTemplateEdit[]   @relation("TemplateEdits")
   messagesSent            Message[]                @relation("MessagesSent")
   broadcastsCreated       Broadcast[]              @relation("BroadcastsCreated")
+  leadSourcesCreated      LeadSource[]             @relation("LeadSourcesCreated")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -571,6 +574,7 @@ model WhatsAppNumber {
   integration   Integration    @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   conversations Conversation[]
   broadcasts    Broadcast[]
+  leadSources   LeadSource[]
 
   /// The natural key. Meta's phone_number_id is globally unique, but scoping it
   /// per company keeps the uniqueness a tenant fact rather than a global one -
@@ -849,6 +853,10 @@ model Message {
   conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   media        WhatsAppMedia? @relation(fields: [mediaId], references: [id], onDelete: SetNull)
   broadcast    Broadcast?     @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
+  /// The lead-source rows that point at this message. At most one in practice;
+  /// a list because Prisma models the back side of an optional relation that
+  /// way, not because a message can belong to two bindings.
+  leadSourceRows LeadSourceRow[]
   /// SetNull for the same reason as Conversation.assignedUser: deleting an
   /// employee must not delete the messages they sent to customers.
   sentBy       User?          @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
@@ -1184,6 +1192,7 @@ model WhatsAppTemplate {
   createdBy   User?       @relation("TemplatesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
   edits       WhatsAppTemplateEdit[]
   broadcasts  Broadcast[]
+  leadSources LeadSource[]
 
   /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
   @@unique([companyId, name, language])
@@ -1507,6 +1516,215 @@ model BroadcastRecipient {
   /// constraint violation rather than a doubled send.
   @@unique([broadcastId, phoneE164])
   @@map("broadcast_recipients")
+}
+
+/// What a binding does when a new row appears.
+///
+/// One member today. A1's flow builder and A2's AI layer are both meant to
+/// become alternative actions on the same binding - the same sheet, the same
+/// mapping, the same cleaning, a different thing at the end - so the kind is a
+/// column from the start rather than an assumption spread across a poll job, a
+/// form and a report. The CHECK in 20260902090000 ties each arm to the target
+/// it needs.
+enum LeadSourceAction {
+  TEMPLATE
+
+  @@map("lead_source_action")
+}
+
+/// Whether a binding is polling, and why it is not.
+///
+/// ERROR is a state the tenant has to see rather than a log line: a binding
+/// that has lost access to its sheet looks identical to one with no new leads,
+/// and the difference is a customer list nobody is being contacted from.
+enum LeadSourceStatus {
+  ACTIVE
+  PAUSED
+  ERROR
+
+  @@map("lead_source_status")
+}
+
+/// What happened to one row of the sheet.
+///
+/// SKIPPED is not a failure and carries its own reason - opted out, or a
+/// handset that cannot receive WhatsApp. A row that became a message is SENT
+/// here regardless of what Meta then said; the message's own status ladder is
+/// what says whether it arrived.
+enum LeadSourceRowState {
+  SENT
+  SKIPPED
+
+  @@map("lead_source_row_state")
+}
+
+/// A bound spreadsheet, and what it does with a new row.
+model LeadSource {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// What the tenant called it. Defaults to the tab name.
+  name String
+
+  /// Google's own id, parsed out of whatever was pasted.
+  spreadsheetId String @map("spreadsheet_id")
+  /// The tab TITLE, because that is what the values API takes as a range.
+  ///
+  /// The gid is kept beside it only to link back into Google at the right tab.
+  /// Reading by gid would silently follow a rename; reading by title turns a
+  /// renamed tab into a visible error on the binding, which is the honest
+  /// outcome - the tenant renamed something and needs to say what they meant.
+  tab      String
+  sheetGid Int?   @map("sheet_gid")
+
+  action LeadSourceAction @default(TEMPLATE)
+  /// The mapping, and anything else the action needs.
+  ///
+  /// jsonb because the variable count comes from the template rather than from
+  /// us - the same reason broadcasts.column_mapping is.
+  actionConfig Json @map("action_config")
+
+  /// Required for a TEMPLATE binding, by CHECK constraint rather than by
+  /// convention. Cold recipients, so template-only.
+  templateId       String? @map("template_id")
+  whatsappNumberId String  @map("whatsapp_number_id")
+
+  status              LeadSourceStatus @default(ACTIVE)
+  pollIntervalSeconds Int              @default(30) @map("poll_interval_seconds")
+
+  /// Data rows already looked at.
+  cursorCount Int @default(0) @map("cursor_count")
+  /// Hash of the last row seen, over every cell rather than the mapped ones.
+  ///
+  /// Without it the count is wrong in both directions and silent in both: a
+  /// deletion puts it past the end of the sheet and the binding never sends
+  /// again, and a mid-sheet insert shifts an already-sent row into its place
+  /// while the new one above it is never looked at.
+  cursorAnchor String? @map("cursor_anchor")
+
+  rowsSeen     Int @default(0) @map("rows_seen")
+  rowsSent     Int @default(0) @map("rows_sent")
+  rowsSkipped  Int @default(0) @map("rows_skipped")
+  rowsRejected Int @default(0) @map("rows_rejected")
+  /// Rows another binding on the same spreadsheet had already claimed.
+  rowsDuplicate Int @default(0) @map("rows_duplicate")
+
+  /// Rejects by reason, aggregated: {"unparseable_phone": 12}.
+  ///
+  /// Not a row per reject. A broken mapping rejects every row of a growing
+  /// sheet on every poll, so the table would grow without bound - and it would
+  /// be a second copy of phone numbers we chose not to keep.
+  rejectReasons Json @default("{}") @map("reject_reasons")
+
+  lastPolledAt DateTime? @db.Timestamptz(3) @map("last_polled_at")
+  lastSentAt   DateTime? @db.Timestamptz(3) @map("last_sent_at")
+  /// Already scrubbed by the adapter. Safe to show a tenant.
+  lastError   String?   @map("last_error")
+  lastErrorAt DateTime? @db.Timestamptz(3) @map("last_error_at")
+
+  /// Quota back-off. A poll that finds this in the future does nothing.
+  ///
+  /// In the database rather than only in Redis, so it survives a worker restart
+  /// and so the binding's page can say why nothing is happening.
+  backoffUntil DateTime? @db.Timestamptz(3) @map("backoff_until")
+
+  /// The unguessable segment of this binding's optional Apps Script URL.
+  ///
+  /// Per binding rather than reusing the integration's, so deleting a binding
+  /// revokes exactly its own script - and so rotating it cannot silently break
+  /// the WhatsApp webhook, which lives in that other column.
+  ///
+  /// Resolved by app_resolve_company's `lead_source` kind, because a request
+  /// from Apps Script carries no session and a company id may never come from
+  /// a request body.
+  webhookKey String @unique @default(dbgenerated("replace((gen_random_uuid())::text, '-'::text, ''::text)")) @map("webhook_key")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template       WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  whatsappNumber WhatsAppNumber    @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
+  createdBy      User?             @relation("LeadSourcesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  rows           LeadSourceRow[]
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([companyId, status])
+  @@map("lead_sources")
+}
+
+/// One lead the system has acted on.
+///
+/// -------------------------------------------------------------------------
+/// This table exists for its unique index and nothing else
+/// -------------------------------------------------------------------------
+///
+/// A poll reads a spreadsheet somebody else is editing, on a schedule, for
+/// ever. Every mechanism above the database - a cursor, an anchor, a Set of
+/// hashes - is an optimisation that can be wrong, and the cost of being wrong
+/// is a real customer receiving the same WhatsApp message twice. That cannot
+/// be un-sent.
+///
+/// So the guarantee is one unique index, checked inside the transaction that
+/// creates the message. Not a "have we seen this" query run beforehand: that
+/// has a window between the check and the insert, and a poll running every
+/// thirty seconds beside a retrying job will find it.
+///
+/// It deliberately holds no copy of the sheet. The hash, the number it resolved
+/// to, and what happened - the spreadsheet is the tenant's, and a shadow of it
+/// is retention nobody asked for.
+model LeadSourceRow {
+  id           String @id @default(cuid())
+  companyId    String @map("company_id")
+  leadSourceId String @map("lead_source_id")
+
+  /// Denormalised from the binding, because a join cannot carry a unique index.
+  spreadsheetId String @map("spreadsheet_id")
+  /// Which tab of it, for the same reason.
+  ///
+  /// Part of the key since 20260904090000. Two bindings on different tabs of
+  /// one workbook is an ordinary setup - separate sheets of enquiries feeding
+  /// separate templates - and without this the second one is permanently dead:
+  /// every row it reads collides with a hash the first already claimed.
+  tab String
+
+  /// sha256 over the E.164 number and the template's variable values.
+  ///
+  /// Deliberately not the row's position: an insert at the top shifts every row
+  /// below it, and a position-sensitive hash would re-send the entire sheet to
+  /// everybody on it.
+  rowHash String @map("row_hash")
+
+  phoneE164 String @map("phone_e164")
+
+  state LeadSourceRowState @default(SENT)
+  /// Why nothing was sent. Null unless state is SKIPPED, by CHECK constraint.
+  skipReason String? @map("skip_reason")
+
+  /// The message this became. Null when the row was skipped.
+  messageId String? @map("message_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  leadSource LeadSource @relation(fields: [leadSourceId], references: [id], onDelete: Cascade)
+  message    Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  /// The guarantee. Per (spreadsheet, tab) rather than per binding: two
+  /// bindings on the SAME tab would otherwise both message every row, and the
+  /// customer hears from the business twice for one enquiry. The binding that
+  /// loses counts it as a duplicate and its page says so, so it is not silent.
+  ///
+  /// The tab is in the index rather than in rowHash because a hash input cannot
+  /// be added to hashes already written - and re-hashing every stored row makes
+  /// all of them look new, which is a message to every customer a tenant has
+  /// ever imported.
+  @@unique([companyId, spreadsheetId, tab, rowHash])
+  /// The binding's live feed: its most recent rows, newest first.
+  @@index([companyId, leadSourceId, createdAt(sort: Desc)])
+  @@map("lead_source_rows")
 }
 
 model UsageEvent {

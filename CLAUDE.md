@@ -58,6 +58,11 @@ bypass. Company ids originate in exactly three places:
 | `resolveCompany()` | SECURITY DEFINER, and the only lookup with no scope |
 | **a job payload** | the producer put it there, and the producer is one of the two above |
 
+`resolveCompany()` has seven kinds as of Phase 6. The two webhook kinds disagree
+about suspension deliberately: `webhook` resolves for a deactivated company
+because Meta disables a subscription that keeps failing, and `lead_source`
+refuses one because that request only ever causes us to *send*.
+
 The third arrived with Phase 4a's worker and is the one worth being careful
 about, because it is the only one that has been *serialised*. Every job carries
 `companyId` and the worker opens `withCompany` with it, having never seen a

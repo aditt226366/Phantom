@@ -10,14 +10,30 @@ conversation nobody can find.
 
 Status: **A4 is done** — Phase 3 shipped and is tagged; see `phase-3.md`. A6 is
 in force and has been run against dev and test at every tag since. A1, A2, A3
-and A5 have not started. Phases 4a, 4b and 5 are complete; see `phase-4.md` and
-`phase-5.md`.
+and A5 have not started. Phases 4a, 4b, 5 and 6 are complete; see `phase-4.md`,
+`phase-5.md` and `phase-6.md`.
 
 One thing Phase 5 settled that A1 depends on: **bulk messaging did not create a
 second send path**, and the flow builder must not either. Every outbound message
 in the system goes through one primitive, and `materialiseRecipient` is the
 worked example of adding a new *producer* of messages without adding a new way
 to send them.
+
+Phase 6 is where that stopped being a claim about one commit and became
+structure. Lead sources are the **second** producer, and the shared half is now
+`materialiseOutboundTemplate` in `packages/db/src/outbound.ts` — contact upsert,
+the last opt-out filter, conversation upsert, the message row and the
+conversation advance. Both producers call it; what stays with each is only its
+own bookkeeping.
+
+A1 and A2 inherit two things from that, and should not rebuild either:
+
+- **The producer.** A flow node that sends is a caller of
+  `materialiseOutboundTemplate`, not a new way to write a message row.
+- **The action field.** `lead_sources.action` is a discriminated enum column
+  with one member today, and A1's flow builder and A2's AI layer are the
+  intended second and third. A binding is meant to keep its sheet, its mapping
+  and its cleaning while changing what happens at the end.
 
 ---
 

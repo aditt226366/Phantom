@@ -20,6 +20,7 @@ import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
+import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -103,6 +104,16 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.BROADCAST_START:
       return handleBroadcastStart(
         parseJobPayload(JOB_NAMES.BROADCAST_START, job.data),
+      );
+
+    case JOB_NAMES.LEAD_SOURCE_POLL:
+      /*
+       * Delivered by a job scheduler registered per binding, because this
+       * process cannot enumerate companies - a sweeping poller would select
+       * zero rows, succeed, and look exactly like "nothing to do".
+       */
+      return handleLeadSourcePoll(
+        parseJobPayload(JOB_NAMES.LEAD_SOURCE_POLL, job.data),
       );
 
     default:

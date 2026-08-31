@@ -1,6 +1,5 @@
 import type { CompanyClient } from "./with-company.ts";
-import { advanceConversation } from "./conversations.ts";
-import { waIdForE164 } from "./broadcasts.ts";
+import { materialiseOutboundTemplate } from "./outbound.ts";
 
 /**
  * Turning one recipient into a message, which is where bulk stops being
@@ -27,21 +26,16 @@ export interface TemplateForSend {
 }
 
 /**
- * Find or create the contact and conversation, then write the message.
+ * Make one recipient into a message, and mark the recipient row as claimed.
  *
- * find-or-create rather than create, because a bulk recipient is very often
- * somebody the business already knows - and a second contact row for one
- * person splits their history and their 24-hour window in half.
+ * The message itself is materialiseOutboundTemplate's, shared with the lead
+ * source producer since Phase 6 - contact upsert, the last opt-out filter,
+ * conversation upsert, the message row and the conversation advance are one
+ * behaviour and two copies of it would drift. What is left here is the only
+ * part that is about bulk: moving this recipient from PENDING to SENT.
  *
- * The conversation is per (contact, number), which is the existing unique. A
- * customer messaged by two different numbers of the same business genuinely
- * has two threads; a customer messaged twice by one number has one.
- *
- * windowExpiresAt is untouched. A template does not open a 24-hour window -
- * only the customer writing does - and a broadcast is the coldest possible
- * send. Advancing the window here would make every recipient look reachable by
- * free-form text for a day, which is exactly the mistake sendPolicy exists to
- * prevent.
+ * "SENT" on the recipient means "handed to the queue", not "Meta took it".
+ * What Meta said is on the message row.
  */
 export async function materialiseRecipient(
   db: CompanyClient,
@@ -58,106 +52,32 @@ export async function materialiseRecipient(
     createdByUserId: string | null;
   },
 ): Promise<MaterialisedRecipient | null> {
-  const waId = waIdForE164(input.phoneE164);
-
-  const contact = await db.contact.upsert({
-    where: { companyId_waId: { companyId, waId } },
-    create: { companyId, waId, phoneE164: input.phoneE164 },
-    /*
-     * Empty. Being messaged is not new information about somebody, and
-     * rewriting the row would bump updated_at for nothing - and could
-     * overwrite a display name a person here typed with a value from a
-     * spreadsheet column that is not a name.
-     */
-    update: {},
-    select: { id: true, optedOutAt: true, undeliverableAt: true },
-  });
-
-  /*
-   * The last filter, at the last moment.
-   *
-   * The import already dropped these, and hours may have passed since. A
-   * contact can opt out between confirming a broadcast and the queue reaching
-   * them - and an earlier recipient of this very run can mark this same
-   * contact undeliverable. Returning null here means no message row is ever
-   * created, which is cleaner than creating one for the send job to refuse.
-   */
-  if (contact.optedOutAt !== null || contact.undeliverableAt !== null) {
-    return null;
-  }
-
-  const conversation = await db.conversation.upsert({
-    where: {
-      companyId_contactId_whatsappNumberId: {
-        companyId,
-        contactId: contact.id,
-        whatsappNumberId: input.whatsappNumberId,
-      },
-    },
-    create: {
-      companyId,
-      contactId: contact.id,
-      whatsappNumberId: input.whatsappNumberId,
-    },
-    update: {},
-    select: { id: true },
-  });
-
-  const message = await db.message.create({
-    data: {
-      companyId,
-      conversationId: conversation.id,
-      broadcastId: input.broadcastId,
-      direction: "OUTBOUND",
-      status: "PENDING",
-      type: "template",
-      /* What the customer will read, so the thread shows the message rather
-         than a template name. The payload below is what goes to Meta. */
-      body: input.renderedBody,
-      templatePayload: {
-        name: input.template.name,
-        language: input.template.language,
-        parameters: input.variables,
-      },
-      occurredAt: input.occurredAt,
-      sentByUserId: input.createdByUserId,
-      sendAttempt: 0,
-    },
-    select: { id: true, sendAttempt: true },
-  });
-
-  /*
-   * The same advance every other send path makes.
-   *
-   * Without it a bulk thread shows "No preview" in the inbox and sorts by a
-   * null last_message_at, which puts ten thousand silent threads ABOVE the
-   * customers who actually wrote in. The screenshot suite caught exactly that,
-   * which is what it is for - every source-level check passed, and the page
-   * was wrong.
-   *
-   * windowExpiresAt stays null. A template does not open a 24-hour window -
-   * only the customer writing does - and advancing it here would make every
-   * recipient look reachable by free-form text for a day. That is the one
-   * field this deliberately does not touch, and it is the reason this calls
-   * advanceConversation rather than writing the columns directly.
-   */
-  await advanceConversation(db, companyId, conversation.id, {
+  const outbound = await materialiseOutboundTemplate(db, companyId, {
+    whatsappNumberId: input.whatsappNumberId,
+    phoneE164: input.phoneE164,
+    variables: input.variables,
+    template: { name: input.template.name, language: input.template.language },
+    renderedBody: input.renderedBody,
     occurredAt: input.occurredAt,
-    preview: input.renderedBody,
-    inbound: false,
-    windowExpiresAt: null,
-    unread: 0,
+    createdByUserId: input.createdByUserId,
+    broadcastId: input.broadcastId,
   });
+
+  /*
+   * Opted out or undeliverable. No message row was created, and the caller
+   * marks the recipient SKIPPED with the reason a report will show.
+   */
+  if (!outbound) return null;
 
   await db.broadcastRecipient.updateMany({
     where: { id: input.recipientId, companyId, state: "PENDING" },
-    data: { state: "SENT", messageId: message.id },
+    data: { state: "SENT", messageId: outbound.messageId },
   });
 
   return {
     recipientId: input.recipientId,
-    messageId: message.id,
-    sendAttempt: message.sendAttempt,
+    messageId: outbound.messageId,
+    sendAttempt: outbound.sendAttempt,
   };
 }
 

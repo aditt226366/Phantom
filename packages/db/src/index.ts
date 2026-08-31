@@ -111,6 +111,22 @@ export type {
   MaterialisedRecipient,
   TemplateForSend,
 } from "./broadcast-run.ts";
+export { materialiseOutboundTemplate } from "./outbound.ts";
+export type { OutboundTemplate, OutboundTemplateInput } from "./outbound.ts";
+export {
+  claimLeadRow,
+  isDuplicateLead,
+  leadSourceForPoll,
+  recentLeadRows,
+  recordPoll,
+  recordPollFailure,
+  LEAD_SKIP_OPTED_OUT,
+} from "./lead-sources.ts";
+export type {
+  LeadClaimInput,
+  LeadClaimOutcome,
+  PollCounts,
+} from "./lead-sources.ts";
 export type {
   BroadcastProgress,
   ResolvedAudience,
@@ -142,6 +158,8 @@ export type {
   KycDocument,
   Broadcast,
   BroadcastRecipient,
+  LeadSource,
+  LeadSourceRow,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -165,4 +183,7 @@ export {
   KycDocumentStatus,
   BroadcastStatus,
   BroadcastRecipientState,
+  LeadSourceAction,
+  LeadSourceStatus,
+  LeadSourceRowState,
 } from "./generated/prisma/enums.ts";

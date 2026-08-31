@@ -126,6 +126,18 @@ test.describe("coverage", () => {
         `/bulk-messaging/${FIXTURE.finishedBroadcastId}/map`,
         "the mapping step exists only while a broadcast is a draft",
       ],
+      /*
+       * The mapping screen is photographed for the healthy binding only.
+       *
+       * The lost one exists to show what a tenant sees when the share is
+       * missing, and its mapping screen is that same message in a second
+       * place - which is a screenshot of the error handling, not of the
+       * mapping. One picture of each is the point.
+       */
+      [
+        `/configuration/lead-sources/${FIXTURE.lostLeadSourceId}/map`,
+        "the mapping screen is photographed once, for the binding that can read its sheet",
+      ],
       [
         `/bulk-messaging/${FIXTURE.finishedBroadcastId}/confirm`,
         "the confirm step exists only while a broadcast is a draft",
@@ -167,6 +179,10 @@ test.describe("coverage", () => {
         "[broadcastId]",
         [FIXTURE.draftBroadcastId, FIXTURE.runningBroadcastId, FIXTURE.finishedBroadcastId],
       ],
+      /* Two values: an active binding and one that has lost access to its
+         sheet. They are the same page.tsx and completely different pictures -
+         only the second carries an error somebody has to act on. */
+      ["[leadSourceId]", [FIXTURE.leadSourceId, FIXTURE.lostLeadSourceId]],
     ]);
 
     const found: string[] = [];

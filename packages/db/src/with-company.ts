@@ -75,6 +75,8 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "KycDocument",
   "Broadcast",
   "BroadcastRecipient",
+  "LeadSource",
+  "LeadSourceRow",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

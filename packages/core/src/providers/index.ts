@@ -5,9 +5,24 @@ import type { FetchImpl, VerificationOutcome } from "./types.ts";
 
 export * from "./types.ts";
 export {
+  cachedAccessToken,
+  checkSheetAccess,
+  clearAccessTokenCache,
+  exchangeAccessToken,
+  isQuotaFailure,
+  listSheetTabs,
   normalisePrivateKey,
+  readSheetValues,
+  retryAfterMs,
   signServiceAccountJwt,
   verifyGoogleSheets,
+} from "./google-sheets.ts";
+export type {
+  AccessTokenOutcome,
+  GoogleAccessToken,
+  SheetTab,
+  TabsOutcome,
+  ValuesOutcome,
 } from "./google-sheets.ts";
 export {
   decodeGraphFailure,

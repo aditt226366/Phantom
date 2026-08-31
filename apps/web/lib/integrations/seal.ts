@@ -3,6 +3,7 @@ import {
   createKeyring,
   decrypt,
   encrypt,
+  isSecretField,
   last4Of,
   secretAad,
   type Keyring,
@@ -64,9 +65,26 @@ export function seal(
 /**
  * Open a stored secret.
  *
- * Called from exactly one path: immediately before a provider call, outside
- * any transaction. Nothing renders the result, nothing returns it to a
- * browser, and nothing logs it.
+ * Called immediately before a provider call, outside any transaction. Nothing
+ * logs the result.
+ *
+ * ---------------------------------------------------------------------------
+ * One value is rendered, and it is the only one
+ * ---------------------------------------------------------------------------
+ *
+ * This used to say nothing renders the result, which was true until lead
+ * sources needed to show the tenant which address to share their spreadsheet
+ * with. GOOGLE_SERVICE_ACCOUNT_EMAIL is declared `secret: false` in
+ * INTEGRATION_FIELDS for exactly that reason: it is Google's public identifier
+ * for the service account, knowing it grants nothing, and a tenant who cannot
+ * see it cannot complete the setup at all - which presents as a binding that
+ * silently never reads their sheet.
+ *
+ * The rule that keeps this narrow is `isSecretField`, which fails closed for
+ * any key nobody declared. A caller that wants to render a stored value has to
+ * pass it through openRenderable below rather than this, and openRenderable
+ * refuses everything else - so widening this is a diff in this file rather than
+ * a page quietly printing an access token.
  */
 export function open(
   companyId: string,
@@ -79,4 +97,27 @@ export function open(
     keyring(),
     secretAad(companyId, integrationId, key),
   );
+}
+
+/**
+ * Open a stored secret that is about to be shown to somebody.
+ *
+ * The only path to the plaintext of a value a page renders, and it refuses any
+ * key `isSecretField` does not clear. That check fails closed for a key nobody
+ * declared, so a credential added later cannot reach a browser by being passed
+ * to the wrong helper - it has to be declared non-secret first, in
+ * INTEGRATION_FIELDS, which is a reviewed diff.
+ *
+ * Returns null rather than throwing. A page that cannot show the service
+ * account address should say so, not 500.
+ */
+export function openRenderable(
+  companyId: string,
+  integrationId: string,
+  key: string,
+  ciphertext: string,
+): string | null {
+  if (isSecretField(key)) return null;
+
+  return open(companyId, integrationId, key, ciphertext);
 }

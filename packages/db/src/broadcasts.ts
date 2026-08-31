@@ -292,3 +292,72 @@ export async function broadcastProgress(
       .sort((a, b) => b.count - a.count),
   };
 }
+
+/* ------------------------------------------------------------------------- *
+ * What Meta's refusals change
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Remember that a handset cannot receive WhatsApp, so no future broadcast
+ * tries it again.
+ *
+ * On the CONTACT rather than on the recipient row, because it is a fact about
+ * the number and not about this campaign. Recorded once, honoured for ever, and
+ * resolveAudience drops it at import from then on - which is the difference
+ * between learning something and repeating a mistake per campaign.
+ *
+ * Never overwritten if already set: the first time we were told is the honest
+ * timestamp, and refreshing it on every retry would lose when it happened.
+ */
+export async function markContactUndeliverable(
+  db: CompanyClient,
+  companyId: string,
+  contactId: string,
+  at: Date,
+): Promise<void> {
+  await db.contact.updateMany({
+    where: { id: contactId, companyId, undeliverableAt: null },
+    data: { undeliverableAt: at },
+  });
+}
+
+/**
+ * Stop a running broadcast because Meta is rate limiting the number.
+ *
+ * PAUSED rather than CANCELLED: nothing is wrong with the list, and the run
+ * should be resumable once the window moves. Every delayed job still in Redis
+ * reads this and declines, so the back-off takes effect on the very next
+ * message rather than after the remaining thousands have been attempted
+ * against a wall.
+ *
+ * Guarded on RUNNING, so a broadcast somebody has already paused or cancelled
+ * is not moved by a late-arriving refusal.
+ */
+export async function pauseBroadcastForRateLimit(
+  db: CompanyClient,
+  companyId: string,
+  broadcastId: string,
+): Promise<boolean> {
+  const { count } = await db.broadcast.updateMany({
+    where: { id: broadcastId, companyId, status: "RUNNING" },
+    data: { status: "PAUSED" },
+  });
+
+  return count === 1;
+}
+
+/**
+ * Schedule no more than the number's remaining 24-hour allowance.
+ *
+ * The tier is the real ceiling and the pace cannot dodge it, so the run stops
+ * at the limit rather than throwing the remainder at Meta to be refused. What
+ * is left stays PENDING and resumes tomorrow, which is why this pauses instead
+ * of completing.
+ */
+export async function pauseBroadcastAtTierLimit(
+  db: CompanyClient,
+  companyId: string,
+  broadcastId: string,
+): Promise<boolean> {
+  return pauseBroadcastForRateLimit(db, companyId, broadcastId);
+}

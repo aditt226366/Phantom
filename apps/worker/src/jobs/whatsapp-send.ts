@@ -4,6 +4,7 @@ import {
   usageDedupeKey,
   type WhatsAppMessageSendJob,
 } from "@whatsapp-os/core";
+import { classifyBulkError } from "@whatsapp-os/core/bulk";
 import {
   sendWhatsAppTemplate,
   sendWhatsAppText,
@@ -11,6 +12,8 @@ import {
 import {
   broadcastRunState,
   canSend,
+  markContactUndeliverable,
+  pauseBroadcastForRateLimit,
   recordSendAccepted,
   recordSendDeclined,
   recordSendRefused,
@@ -292,6 +295,61 @@ export async function handleWhatsAppMessageSend(
         integrationId: number.integrationId,
       }),
     );
+
+    /*
+     * What the refusal means beyond this one message.
+     *
+     * Two of Meta's codes carry information about something other than the
+     * message that produced them, and acting on it is the difference between
+     * learning and repeating:
+     *
+     *   131026  the handset cannot receive WhatsApp. Remembered on the CONTACT,
+     *           so every future broadcast drops them at import rather than
+     *           spending a send to be told again.
+     *   131049, 130472, 131056, 133016
+     *           the number is being rate limited. The run pauses, so the
+     *           remaining thousands are not thrown at a wall - every delayed
+     *           job reads the status and declines, which makes the back-off
+     *           take effect on the very next message.
+     *
+     * Only for a broadcast. An operator sending one message by hand has
+     * already seen the failure, and pausing something they are not running
+     * would be acting on a state that does not exist.
+     */
+    const action = classifyBulkError(readCode(outcome.details));
+
+    if (action === "undeliverable") {
+      await withCompany(companyId, (db, scoped) =>
+        markContactUndeliverable(
+          db,
+          scoped,
+          loaded.conversation.contact.id,
+          new Date(),
+        ),
+      );
+
+      log.info("contact marked undeliverable", {
+        companyId,
+        messageId,
+        contactId: loaded.conversation.contact.id,
+      });
+    }
+
+    if (action === "backoff" && loaded.broadcastId) {
+      const paused = await withCompany(companyId, (db, scoped) =>
+        pauseBroadcastForRateLimit(db, scoped, loaded.broadcastId!),
+      );
+
+      log.warn("broadcast paused by a rate limit", {
+        companyId,
+        messageId,
+        broadcastId: loaded.broadcastId,
+        code: readCode(outcome.details),
+        /* False means somebody had already paused or cancelled it, which is
+           not a problem - it is the guard doing its job. */
+        paused,
+      });
+    }
 
     log.warn("Meta refused the message", {
       companyId,

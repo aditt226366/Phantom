@@ -44,12 +44,15 @@ const materialiseRecipient =
   >();
 const skipRecipient = vi.fn<() => Promise<void>>();
 const completeBroadcastIfDone = vi.fn<() => Promise<boolean>>();
+const pauseBroadcastAtTierLimit = vi.fn<() => Promise<boolean>>();
+const uniqueRecipientsSince = vi.fn<() => Promise<number>>();
+const findFirstNumber = vi.fn<() => Promise<{ messagingTier: string | null } | null>>();
 
 vi.mock("@whatsapp-os/db", () => ({
   withCompany: async (
     companyId: string,
     callback: (db: unknown, id: string) => unknown,
-  ) => callback({}, companyId),
+  ) => callback({ whatsAppNumber: { findFirst: findFirstNumber } }, companyId),
   RECIPIENT_BATCH: 500,
   broadcastForRun: () => broadcastForRun(),
   broadcastRunState: () => broadcastRunState(),
@@ -61,6 +64,8 @@ vi.mock("@whatsapp-os/db", () => ({
   ) => materialiseRecipient(db, companyId, input),
   skipRecipient: () => skipRecipient(),
   completeBroadcastIfDone: () => completeBroadcastIfDone(),
+  pauseBroadcastAtTierLimit: () => pauseBroadcastAtTierLimit(),
+  uniqueRecipientsSince: () => uniqueRecipientsSince(),
 }));
 
 const { handleBroadcastStart } = await import("../src/jobs/broadcast-start.ts");
@@ -104,6 +109,11 @@ beforeEach(() => {
   pendingRecipients.mockReset().mockResolvedValue([]);
   skipRecipient.mockReset();
   completeBroadcastIfDone.mockReset().mockResolvedValue(false);
+  pauseBroadcastAtTierLimit.mockReset().mockResolvedValue(true);
+  uniqueRecipientsSince.mockReset().mockResolvedValue(0);
+  /* Unlimited by default, so the pacing tests are about pacing. The tier tests
+     below set a real one. */
+  findFirstNumber.mockReset().mockResolvedValue({ messagingTier: "TIER_UNLIMITED" });
   materialiseRecipient
     .mockReset()
     .mockImplementation(async (_db, _c, input) => ({
@@ -278,5 +288,87 @@ describe("the job ids", () => {
     expect(add.mock.calls[0]?.[2].jobId).toBe(
       "send:m-r0:0",
     );
+  });
+});
+
+describe("the messaging tier", () => {
+  /**
+   * The ceiling the pace cannot dodge.
+   *
+   * A broadcast paced perfectly and larger than the tier does not fail at the
+   * end - it fails partway through, having already messaged part of the list,
+   * with every refusal costing the number's quality rating. Scheduling up to
+   * the limit and stopping is the same outcome without the damage.
+   */
+  it("schedules only what is left in the 24-hour window", async () => {
+    findFirstNumber.mockResolvedValue({ messagingTier: "TIER_250" });
+    uniqueRecipientsSince.mockResolvedValue(248);
+    oneBatch(recipients(5));
+
+    const outcome = await handleBroadcastStart({
+      companyId: "c1",
+      broadcastId: "b1",
+      scheduledSoFar: 0,
+    });
+
+    expect(outcome.result).toBe("tier_exhausted");
+    expect(add).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses rather than leaving a run that has quietly stopped", async () => {
+    /*
+     * A RUNNING broadcast that is not sending is indistinguishable from a
+     * broken one, and the operator needs to know the reason is a limit rather
+     * than a fault. The remaining recipients stay PENDING for a resume.
+     */
+    findFirstNumber.mockResolvedValue({ messagingTier: "TIER_250" });
+    uniqueRecipientsSince.mockResolvedValue(250);
+    oneBatch(recipients(3));
+
+    await handleBroadcastStart({ companyId: "c1", broadcastId: "b1", scheduledSoFar: 0 });
+
+    expect(pauseBroadcastAtTierLimit).toHaveBeenCalledTimes(1);
+    expect(add, "sent past an exhausted tier").not.toHaveBeenCalled();
+  });
+
+  it("does not cap a number whose tier it cannot read", async () => {
+    /*
+     * Failing closed would stop a tenant broadcasting because a metadata
+     * refresh has not run - a self-inflicted outage for a limit Meta enforces
+     * itself. The send job's back-off is what catches it instead.
+     */
+    findFirstNumber.mockResolvedValue({ messagingTier: null });
+    uniqueRecipientsSince.mockResolvedValue(99_999);
+    oneBatch(recipients(3));
+
+    const outcome = await handleBroadcastStart({
+      companyId: "c1",
+      broadcastId: "b1",
+      scheduledSoFar: 0,
+    });
+
+    expect(outcome.result).toBe("scheduled");
+    expect(add).toHaveBeenCalledTimes(3);
+  });
+
+  it("counts only this pass against the allowance", async () => {
+    /*
+     * scheduledSoFar carries the pacing across a resume, and it must NOT be
+     * counted against the tier: recipients scheduled yesterday are already
+     * inside the `used` figure, so counting them twice would halve the
+     * allowance on every resume until nothing could be sent at all.
+     */
+    findFirstNumber.mockResolvedValue({ messagingTier: "TIER_250" });
+    uniqueRecipientsSince.mockResolvedValue(0);
+    oneBatch(recipients(3));
+
+    const outcome = await handleBroadcastStart({
+      companyId: "c1",
+      broadcastId: "b1",
+      scheduledSoFar: 240,
+    });
+
+    expect(outcome.result).toBe("scheduled");
+    expect(add).toHaveBeenCalledTimes(3);
   });
 });

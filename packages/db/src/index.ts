@@ -91,6 +91,9 @@ export type {
 export {
   broadcastProgress,
   broadcastRunState,
+  markContactUndeliverable,
+  pauseBroadcastAtTierLimit,
+  pauseBroadcastForRateLimit,
   insertRecipientBatch,
   resolveAudience,
   skipRecipient,

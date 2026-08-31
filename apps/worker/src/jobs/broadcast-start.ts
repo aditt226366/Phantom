@@ -5,7 +5,7 @@ import {
   sendJobId,
   type BroadcastStartJob,
 } from "@whatsapp-os/core";
-import { sendDelayMs } from "@whatsapp-os/core/bulk";
+import { sendDelayMs, tierHeadroom } from "@whatsapp-os/core/bulk";
 import { fillVariables } from "@whatsapp-os/core/whatsapp";
 import {
   RECIPIENT_BATCH,
@@ -13,8 +13,10 @@ import {
   broadcastRunState,
   completeBroadcastIfDone,
   materialiseRecipient,
+  pauseBroadcastAtTierLimit,
   pendingRecipients,
   skipRecipient,
+  uniqueRecipientsSince,
   withCompany,
 } from "@whatsapp-os/db";
 import { systemQueue } from "../queue.ts";
@@ -54,7 +56,9 @@ export type BroadcastStartResult =
   | "scheduled"
   | "not_found"
   | "not_runnable"
-  | "template_not_approved";
+  | "template_not_approved"
+  /** Stopped at the number's 24-hour tier limit, with recipients still to go. */
+  | "tier_exhausted";
 
 export async function handleBroadcastStart(
   payload: BroadcastStartJob,
@@ -96,8 +100,46 @@ export async function handleBroadcastStart(
     return { result: "template_not_approved", scheduled: 0 };
   }
 
+  /*
+   * The tier, which is the real ceiling.
+   *
+   * The gap shapes the rate and Meta has no opinion about it; the tier caps
+   * unique recipients per rolling 24 hours and no amount of slowing down gets
+   * past it. So the run schedules up to what is left and stops, rather than
+   * throwing the remainder at Meta to be refused one message at a time - which
+   * is the same outcome with a damaged quality rating attached.
+   *
+   * An unknown tier does not cap. Failing closed would stop a tenant
+   * broadcasting because a metadata refresh has not run, and Meta enforces its
+   * own limit anyway - the back-off in the send job is what catches it.
+   */
+  const numberRow = await withCompany(companyId, (db, scoped) =>
+    db.whatsAppNumber.findFirst({
+      where: { id: broadcast.whatsappNumberId, companyId: scoped },
+      select: { messagingTier: true },
+    }),
+  );
+
+  const used = await withCompany(companyId, (db, scoped) =>
+    uniqueRecipientsSince(
+      db,
+      scoped,
+      broadcast.whatsappNumberId,
+      new Date(Date.now() - 24 * 60 * 60 * 1000),
+    ),
+  );
+
+  const headroom = tierHeadroom(
+    numberRow?.messagingTier,
+    used,
+    broadcast.recipientCount,
+  );
+
   const body = extractBody(broadcast.template.components);
   let scheduled = payload.scheduledSoFar;
+  /* Counts only what THIS pass enqueued, because the allowance was measured
+     now - recipients scheduled yesterday are already inside `used`. */
+  let scheduledThisRun = 0;
 
   for (;;) {
     /*
@@ -127,6 +169,28 @@ export async function handleBroadcastStart(
     if (batch.length === 0) break;
 
     for (const recipient of batch) {
+      /*
+       * Stop at the tier, leaving the rest PENDING for a resume tomorrow.
+       *
+       * PAUSED rather than left RUNNING, because a running broadcast that has
+       * quietly stopped sending is indistinguishable from a broken one - and
+       * the operator needs to know the reason is a limit rather than a fault.
+       */
+      if (headroom.remaining !== null && scheduledThisRun >= headroom.remaining) {
+        await withCompany(companyId, (db, scoped) =>
+          pauseBroadcastAtTierLimit(db, scoped, broadcastId),
+        );
+
+        log.warn("broadcast paused at the messaging tier limit", {
+          companyId,
+          broadcastId,
+          scheduled,
+          remaining: headroom.remaining,
+        });
+
+        return { result: "tier_exhausted", scheduled };
+      }
+
       const now = new Date();
 
       const materialised = await withCompany(companyId, (db, scoped) =>
@@ -187,6 +251,7 @@ export async function handleBroadcastStart(
       );
 
       scheduled += 1;
+      scheduledThisRun += 1;
     }
   }
 

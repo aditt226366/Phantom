@@ -78,6 +78,14 @@ const broadcastRunState =
   vi.fn<
     (db: unknown, companyId: string, broadcastId: string) => Promise<string>
   >();
+const markContactUndeliverable =
+  vi.fn<
+    (db: unknown, companyId: string, contactId: string, at: Date) => Promise<void>
+  >();
+const pauseBroadcastForRateLimit =
+  vi.fn<
+    (db: unknown, companyId: string, broadcastId: string) => Promise<boolean>
+  >();
 
 /** Rises while a company scope is open, so a call inside one is visible. */
 let openScopes = 0;
@@ -113,6 +121,8 @@ vi.mock("@whatsapp-os/db", () => ({
     sequence.push("broadcastRunState");
     return broadcastRunState(...args);
   },
+  markContactUndeliverable,
+  pauseBroadcastForRateLimit,
 }));
 
 vi.mock("@whatsapp-os/core/whatsapp", () => ({
@@ -183,6 +193,8 @@ beforeEach(() => {
     recordSendDeclined,
     recordUsage,
     broadcastRunState,
+    markContactUndeliverable,
+    pauseBroadcastForRateLimit,
   ]) {
     mock.mockReset();
   }
@@ -197,6 +209,8 @@ beforeEach(() => {
   canSend.mockResolvedValue({ waId: "wa-customer", decision: { allowed: true } });
   recordUsage.mockResolvedValue({});
   broadcastRunState.mockResolvedValue("runnable");
+  markContactUndeliverable.mockResolvedValue(undefined);
+  pauseBroadcastForRateLimit.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -578,5 +592,95 @@ describe("a message that is part of a broadcast", () => {
 
     expect(outcome.result).toBe("sent");
     expect(broadcastRunState).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what a refusal means beyond one message", () => {
+  /**
+   * Two of Meta's codes say something about more than the message that
+   * produced them, and acting on it is the difference between learning and
+   * repeating the same mistake once per campaign.
+   */
+  function refuse(code: number) {
+    sendWhatsAppText.mockResolvedValue({
+      ok: false,
+      delivery: "refused",
+      kind: "config",
+      error: "refused",
+      details: { code },
+    });
+  }
+
+  it("remembers a handset that cannot receive WhatsApp", async () => {
+    /*
+     * 131026, on the CONTACT rather than the recipient row, because it is a
+     * fact about the number. resolveAudience drops them at import from then
+     * on, so a future broadcast never spends a send to be told again.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    refuse(131026);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(markContactUndeliverable).toHaveBeenCalledTimes(1);
+    expect(markContactUndeliverable.mock.calls[0]?.[2]).toBe("ct-1");
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("pauses the run on every documented rate limit", async () => {
+    for (const code of [131049, 130472, 131056, 133016]) {
+      pauseBroadcastForRateLimit.mockClear();
+      findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+      refuse(code);
+
+      await handleWhatsAppMessageSend({
+        companyId: "c1",
+        messageId: "m1",
+        sendAttempt: 0,
+      });
+
+      expect(
+        pauseBroadcastForRateLimit,
+        `${code} did not pause the run`,
+      ).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("does not pause for an ordinary failure", async () => {
+    /*
+     * The important negative. If an unrecognised code paused the run, one bad
+     * recipient would stop a broadcast to ten thousand people - and the
+     * symptom would be a campaign that mysteriously halts.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ broadcastId: "b1" }));
+    refuse(131047);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+    expect(markContactUndeliverable).not.toHaveBeenCalled();
+  });
+
+  it("does not pause anything for a message sent by hand", async () => {
+    /* An operator sending one message has already seen the failure, and
+       pausing something they are not running would act on a state that does
+       not exist. */
+    findFirstMessage.mockResolvedValue(messageRow());
+    refuse(133016);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(pauseBroadcastForRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("still marks a handset undeliverable outside a broadcast", async () => {
+    /* The contact fact is not campaign-scoped: learning it from an inbox send
+       has to protect every future broadcast too. */
+    findFirstMessage.mockResolvedValue(messageRow());
+    refuse(131026);
+
+    await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
+
+    expect(markContactUndeliverable).toHaveBeenCalledTimes(1);
   });
 });

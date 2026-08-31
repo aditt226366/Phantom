@@ -32,8 +32,26 @@ export function toCsv(
   header: readonly string[],
   rows: ReadonlyArray<readonly string[]>,
 ): string {
-  const lines = [header, ...rows].map((row) => row.map(quote).join(","));
-  return `\uFEFF${lines.join(ROW_SEPARATOR)}${ROW_SEPARATOR}`;
+  return `\uFEFF${csvRows([header, ...rows])}`;
+}
+
+/**
+ * Rows only - no BOM and no header.
+ *
+ * For a streamed export, where the first chunk carries both and every later
+ * chunk must carry neither. A BOM in the middle of a file is a stray character
+ * in somebody's spreadsheet, and a repeated header is a row of data that says
+ * "phone".
+ *
+ * Exported rather than left to the caller to assemble, because the version
+ * that strips a header back off a toCsv() result is the one that breaks
+ * silently the first time a field happens to match the pattern being stripped.
+ */
+export function csvRows(rows: ReadonlyArray<readonly string[]>): string {
+  if (rows.length === 0) return "";
+
+  const lines = rows.map((row) => row.map(quote).join(","));
+  return `${lines.join(ROW_SEPARATOR)}${ROW_SEPARATOR}`;
 }
 
 /**

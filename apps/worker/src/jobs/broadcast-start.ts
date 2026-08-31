@@ -6,6 +6,7 @@ import {
   type BroadcastStartJob,
 } from "@whatsapp-os/core";
 import { sendDelayMs } from "@whatsapp-os/core/bulk";
+import { fillVariables } from "@whatsapp-os/core/whatsapp";
 import {
   RECIPIENT_BATCH,
   broadcastForRun,
@@ -226,18 +227,4 @@ function extractBody(components: unknown): string {
   }
 
   return "";
-}
-
-/**
- * Render {{1}}, {{2}} into the body for the thread's copy of the message.
- *
- * What Meta receives is the parameter array, not this string - so a mistake
- * here is a wrong preview rather than a wrong message. It is still worth
- * getting right: the thread is where a person checks what a customer was told.
- */
-function fillVariables(body: string, values: readonly string[]): string {
-  return body.replace(/\{\{(\d+)\}\}/g, (match, position: string) => {
-    const value = values[Number(position) - 1];
-    return value === undefined ? match : value;
-  });
 }

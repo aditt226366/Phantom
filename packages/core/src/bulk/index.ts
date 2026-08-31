@@ -21,7 +21,7 @@ export type {
   ColumnMapping,
   RejectReason,
 } from "./audience.ts";
-export { toCsv, safeCsvFilename } from "./csv.ts";
+export { toCsv, csvRows, safeCsvFilename } from "./csv.ts";
 export {
   classifyBulkError,
   describeDuration,

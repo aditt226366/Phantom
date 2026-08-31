@@ -1,4 +1,5 @@
 import type { CompanyClient } from "./with-company.ts";
+import { advanceConversation } from "./conversations.ts";
 import { waIdForE164 } from "./broadcasts.ts";
 
 /**
@@ -123,6 +124,29 @@ export async function materialiseRecipient(
       sendAttempt: 0,
     },
     select: { id: true, sendAttempt: true },
+  });
+
+  /*
+   * The same advance every other send path makes.
+   *
+   * Without it a bulk thread shows "No preview" in the inbox and sorts by a
+   * null last_message_at, which puts ten thousand silent threads ABOVE the
+   * customers who actually wrote in. The screenshot suite caught exactly that,
+   * which is what it is for - every source-level check passed, and the page
+   * was wrong.
+   *
+   * windowExpiresAt stays null. A template does not open a 24-hour window -
+   * only the customer writing does - and advancing it here would make every
+   * recipient look reachable by free-form text for a day. That is the one
+   * field this deliberately does not touch, and it is the reason this calls
+   * advanceConversation rather than writing the columns directly.
+   */
+  await advanceConversation(db, companyId, conversation.id, {
+    occurredAt: input.occurredAt,
+    preview: input.renderedBody,
+    inbound: false,
+    windowExpiresAt: null,
+    unread: 0,
   });
 
   await db.broadcastRecipient.updateMany({

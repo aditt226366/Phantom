@@ -1416,6 +1416,18 @@ model Broadcast {
   /// contacts, 4 opted out" is the audit of one upload and cannot be derived
   /// from the recipients that survived it.
   sourceFilename String? @map("source_filename")
+
+  /// The parsed upload, for the life of the wizard only.
+  ///
+  /// The import step writes it, the mapping step reads headers and a preview
+  /// out of it, and confirming builds the recipients and sets it back to NULL.
+  /// It is a customer list - names, numbers, order values - and keeping a
+  /// second copy in a column nothing reads would be quiet data retention that
+  /// is indefensible when somebody asks what you hold.
+  sourceRows    Json? @map("source_rows")
+  /// The CSV's header row, kept separately so the mapping screen can offer the
+  /// columns in file order rather than whatever order a JSON object iterates.
+  sourceHeaders Json? @map("source_headers")
   parsedCount    Int     @default(0) @map("parsed_count")
   invalidCount   Int     @default(0) @map("invalid_count")
   duplicateCount Int     @default(0) @map("duplicate_count")

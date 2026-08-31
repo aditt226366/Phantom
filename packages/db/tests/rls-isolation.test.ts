@@ -1049,6 +1049,189 @@ describe("broadcasts and their audiences", () => {
   });
 });
 
+describe("lead sources and the rows they have claimed", () => {
+  /* A fixture, deliberately outside any `it` - seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  interface SeededLeadSource {
+    id: string;
+    templateId: string;
+    whatsappNumberId: string;
+  }
+
+  async function seedLeadSource(
+    company: SeededCompany,
+    label: string,
+  ): Promise<SeededLeadSource> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: `${label}-leads` },
+        select: { id: true },
+      });
+
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          phoneNumberId: `${label}-leads-pn`,
+          displayNumber: "+91 98765 43210",
+          status: "CONNECTED",
+        },
+        select: { id: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name: `${label}_welcome`,
+          language: "en_US",
+          category: "MARKETING",
+          status: "APPROVED",
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+        },
+        select: { id: true },
+      });
+
+      const source = await db.leadSource.create({
+        data: {
+          companyId,
+          name: `${label} sheet`,
+          spreadsheetId: `${label}-spreadsheet`,
+          tab: "Leads",
+          actionConfig: { kind: "TEMPLATE", templateId: template.id, mapping: {} },
+          templateId: template.id,
+          whatsappNumberId: number.id,
+        },
+        select: { id: true },
+      });
+
+      await db.leadSourceRow.create({
+        data: {
+          companyId,
+          leadSourceId: source.id,
+          spreadsheetId: `${label}-spreadsheet`,
+          rowHash: `${label}-hash`,
+          phoneE164: `+9198765432${label === "alpha" ? "10" : "11"}`,
+          state: "SKIPPED",
+          skipReason: "fixture",
+        },
+      });
+
+      return {
+        id: source.id,
+        templateId: template.id,
+        whatsappNumberId: number.id,
+      };
+    });
+  }
+
+  it("does not show one company's lead sources to another", async () => {
+    await seedLeadSource(alpha, "alpha");
+    await seedLeadSource(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM lead_sources ORDER BY name`,
+    );
+
+    expect(rows.map((r) => r.name)).toEqual(["beta sheet"]);
+  });
+
+  /*
+   * A claimed row is a real person's phone number and the fact that this
+   * business contacted them. A leak here is a disclosure of one tenant's
+   * customer list to another - and this is also the table the unique index
+   * lives on, so a row visible across the boundary is a row that could
+   * suppress or duplicate somebody else's send.
+   */
+  it("does not show one company's claimed rows to another", async () => {
+    await seedLeadSource(alpha, "alpha");
+    await seedLeadSource(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ phone_e164: string }>>`
+        SELECT phone_e164 FROM lead_source_rows ORDER BY phone_e164`,
+    );
+
+    expect(rows.map((r) => r.phone_e164)).toEqual(["+919876543211"]);
+  });
+
+  it("refuses to write a lead source into another company", async () => {
+    /* alpha's own template and number, so the foreign keys are satisfiable and
+       the only thing left that can refuse the insert is the policy. */
+    const seeded = await seedLeadSource(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO lead_sources
+            (id, company_id, name, spreadsheet_id, tab, action_config,
+             template_id, whatsapp_number_id, updated_at)
+          VALUES ('smuggled', ${beta.id}, 'smuggled', 'sheet', 'Leads',
+                  '{}'::jsonb, ${seeded.templateId}, ${seeded.whatsappNumberId},
+                  now())`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("refuses to write a claimed row into another company", async () => {
+    const seeded = await seedLeadSource(alpha, "alpha");
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO lead_source_rows
+            (id, company_id, lead_source_id, spreadsheet_id, row_hash,
+             phone_e164, state, skip_reason)
+          VALUES ('smuggled', ${beta.id}, ${seeded.id}, 'sheet', 'h',
+                  '+919999999999', 'SKIPPED', 'smuggled')`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  /*
+   * The unique index is scoped by company_id, and this is what says so.
+   *
+   * Without company_id in the index, one tenant's claimed hash would suppress
+   * another tenant's - two businesses whose sheets happen to hold the same
+   * customer with the same message, and the second one silently never sends.
+   * The policy alone would not catch it: a unique violation is raised before
+   * the row is ever checked against a policy.
+   */
+  it("lets two companies claim the same lead independently", async () => {
+    await seedLeadSource(alpha, "alpha");
+    await seedLeadSource(beta, "beta");
+
+    await withCompany(alpha.id, (db) =>
+      db.$executeRaw`
+        UPDATE lead_source_rows SET spreadsheet_id = 'shared', row_hash = 'same'`,
+    );
+
+    await expect(
+      withCompany(beta.id, (db) =>
+        db.$executeRaw`
+          UPDATE lead_source_rows SET spreadsheet_id = 'shared', row_hash = 'same'`,
+      ),
+    ).resolves.toBe(1);
+  });
+
+  it("hides lead sources and their rows from the table's own owner", async () => {
+    await seedLeadSource(alpha, "alpha");
+
+    const sources = await owner.query("SELECT * FROM lead_sources");
+    const rows = await owner.query("SELECT * FROM lead_source_rows");
+
+    expect(
+      sources.rows,
+      "FORCE ROW LEVEL SECURITY is not in effect on lead_sources",
+    ).toEqual([]);
+    expect(
+      rows.rows,
+      "FORCE ROW LEVEL SECURITY is not in effect on lead_source_rows",
+    ).toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

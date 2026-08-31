@@ -143,6 +143,21 @@ export const OUT_OF_BAND_DDL = new Set([
   "check:broadcasts.broadcasts_gap_ms_sane",
   /* The cleaning pipeline's counts describe a file and cannot be negative. */
   "check:broadcasts.broadcasts_counts_non_negative",
+  /* The discriminated action, in the schema. A TEMPLATE binding must name a
+     template; a second action kind gets its own arm here, and the absence of
+     one is a migration that fails rather than a binding that polls a sheet and
+     does nothing with what it finds. */
+  "check:lead_sources.lead_sources_action_has_its_target",
+  /* Ten seconds to a day. Sheets meters reads per PROJECT, so a binding polling
+     every second would consume the whole allowance and take every other
+     tenant's bindings down with it. Mirrors POLL_INTERVAL_MIN/MAX_SECONDS. */
+  "check:lead_sources.lead_sources_poll_interval_sane",
+  "check:lead_sources.lead_sources_counts_non_negative",
+  /* A skipped row explains itself and a sent one does not pretend to. Without
+     it a row can be SENT carrying a skip reason, or SKIPPED with neither a
+     reason nor a message - which renders as a blank cell in the report
+     somebody is reading to find out why a customer was never contacted. */
+  "check:lead_source_rows.lead_source_rows_state_matches_reason",
 ]);
 
 /**

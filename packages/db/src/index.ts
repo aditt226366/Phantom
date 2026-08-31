@@ -88,6 +88,21 @@ export type {
   CurrentKycDocuments,
   KycDocumentUpload,
 } from "./kyc.ts";
+export {
+  broadcastProgress,
+  broadcastRunState,
+  insertRecipientBatch,
+  resolveAudience,
+  skipRecipient,
+  uniqueRecipientsSince,
+  waIdForE164,
+  RECIPIENT_BATCH,
+} from "./broadcasts.ts";
+export type {
+  BroadcastProgress,
+  ResolvedAudience,
+  RunState,
+} from "./broadcasts.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";

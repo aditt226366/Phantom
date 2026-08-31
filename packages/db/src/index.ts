@@ -71,6 +71,22 @@ export type {
   MediaPut,
   MediaStateName,
 } from "./media-store.ts";
+export {
+  currentKycDocuments,
+  listKycDocuments,
+  statKycDocument,
+  putKycDocument,
+  readKycDocument,
+  KycDocumentTruncatedError,
+  KYC_DOCUMENT_KINDS,
+  MAX_KYC_DOCUMENT_BYTES,
+} from "./kyc.ts";
+export type {
+  KycKind,
+  KycDocumentStat,
+  CurrentKycDocuments,
+  KycDocumentUpload,
+} from "./kyc.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";

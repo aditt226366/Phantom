@@ -76,12 +76,14 @@ database is: reachable only from inside, and everything downstream assumes so.
 Anything that ever accepts a job from outside this system has to re-derive the
 company id rather than read it.
 
-Raw SQL is confined to seven files in `packages/db/src` — `client.ts`,
+Raw SQL is confined to eight files in `packages/db/src` — `client.ts`,
 `with-company.ts`, `resolve-company.ts`, `company.ts`, `vault.ts`,
-`media-store.ts` and `conversations.ts` — each because the statement it needs
-has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
+`media-store.ts`, `kyc.ts` and `conversations.ts` — each because the statement
+it needs has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
 credential loses a concurrent save irrecoverably. `substring()` over `bytea`,
-without which a chunked read materialises the whole file. `GREATEST`, without
+without which a chunked read materialises the whole file — twice, over two
+tables that must not share rows, because generalising one site to take a table
+name from its caller is a worse shape than two sites naming their own. `GREATEST`, without
 which advancing a conversation becomes three statements with two gaps in them —
 and two webhook deliveries for the same thread interleave in those gaps, leaving
 the newest timestamp beside the older message's preview. One UPDATE evaluates

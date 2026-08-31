@@ -275,22 +275,44 @@ test of a module that uses it. Scripts that import such a module run with
 - `migrate-test.mjs` takes an advisory lock; two projects run the same
   `globalSetup` and concurrent `ALTER ROLE` can deadlock.
 
-**A worker fork dies occasionally in full runs, and it is not a false green.**
-Many occurrences through Phase 4a, all identical: `Error: [vitest-pool]: Worker
-forks emitted error / Caused by: Error: Worker exited unexpectedly`, always the
-**db** project, always in a full `vitest run`.
+**A worker fork dies occasionally in full runs, and it is memory exhaustion.**
+`Error: [vitest-pool]: Worker forks emitted error / Caused by: Error: Worker
+exited unexpectedly`, in a full `vitest run`, with **zero tests failing** and a
+non-zero exit.
 
-**It is not always `auth-schema.test.ts`, and it is not always the db project.**
-Both claims were in these notes and both are false. Three consecutive crashes
-closing Phase 4a were `conversation-send.test.ts`; across ten measured gate runs
-afterwards, every worker that died belonged to **web-server** —
-`company-deactivation.test.ts` and `webhook-throttle.test.ts`. The signature is
-what to match on: **a file that never reports, zero tests failing, a non-zero
-exit.** Find it by diffing reported names against the files on disk, per
-project, rather than assuming which one.
+It was investigated across two phases as a race, and it is not one. The machine
+runs out of physical memory and the OS refuses or kills a fork. Four
+measurements settle it, and they are recorded because the symptom is so unlike
+the cause that the next person will start where the last one did:
 
-**It takes two things, and removing either one stops it.** Measured over
-fifteen full gates, five per configuration:
+- **`Failed to start forks worker for <file>`.** A worker that could not be
+  *created*. That is an allocation failure and nothing else.
+- **A `truncateAll()` hook timed out at 120 seconds.** That statement takes
+  milliseconds against an idle database.
+- **One run reported `Duration 27486s`** — 7.6 hours, with `tests 27264s`,
+  against the 80s the same suite takes when healthy. No race is three orders of
+  magnitude.
+- **The visual suite's admin sign-in timed out at 60s.** Argon2id is
+  *memory-hard by design*, so it is the first thing to fail under pressure and
+  the last thing anyone suspects.
+
+The state at the time: 11.4 GB resident of 15.7 GB physical, 0.8 GB free, 31 GB
+of pagefile in use. Everything was paging to disk.
+
+**Both mitigations work, and both work for a reason other than the one recorded
+in their commits.** `3f2ddc3` and `9992fb6` describe concurrency; they are
+actually footprint reductions, and the messages are left alone rather than
+rewritten because they are inside a tag:
+
+- **sequential projects** (`fileParallelism: false` + `maxWorkers: 1` at the
+  root) halves peak concurrent memory. Note `fileParallelism: false` **per
+  project** does not serialise *across* projects — that was the original
+  mistake, and it is why db and web-server ran together for months.
+- **`pool: "threads"` on web-server** gives one shared V8 heap instead of a
+  fresh one per file. That is why it helped where threads-on-db did not: db was
+  not the project losing workers.
+
+Both are kept. Measured over fifteen full gates, five per configuration:
 
 | config | crashed | healthy wall |
 | --- | --- | --- |
@@ -298,99 +320,34 @@ fifteen full gates, five per configuration:
 | **sequential + web-server on threads** | **0 in 5** | **~140s** |
 | parallel + web-server on threads | 1 in 5 (db) | ~135s |
 
-The third row settles it. Moving web-server to threads and letting the projects
-overlap again did not fix anything — the crash moved to `db`, the *other* forked
-project on the same database. So the serialisation was never merely masking a
-pool problem, and the pool was never merely masking a concurrency problem. It
-needs **a forked worker on a database-touching file AND cross-project overlap**.
+**Freeing memory removes the catastrophe but not the crash.** With ~2.6 GB free
+the suite returned to 80s of test execution and one run in two still lost a
+worker. So memory is the cause of the *severity* and very likely of the crash
+itself, but the headroom on this machine is not enough to prove the second half.
+Treat a recurrence as pressure, not as a race.
 
-Both are therefore kept, and the wall-clock objection went away when measured:
-threads are enough faster than forks that serialising costs about five seconds
-against the parallel configuration, not the ~165s it cost while everything was
-forked.
+**Diagnosing one:** match on the signature — a file that never reports, zero
+tests failing, a non-zero exit — and find it by diffing reported names against
+the files on disk **per project**. Do not go by filename: it has been
+`auth-schema.test.ts`, `conversation-send.test.ts`,
+`company-deactivation.test.ts`, `webhook-throttle.test.ts` and
+`read-receipts.test.ts` at different times, and two older notes claiming "always
+the db project" and "always auth-schema" were both simply wrong.
 
-Two notes for anyone changing this. `fileParallelism: false` **per project**
-does not serialise across projects — that was the original mistake, and it is
-why db and web-server ran together for months. And `db` is left on forks
-deliberately: it has never crashed while web-server was forked, so switching it
-too would make the next measurement unreadable.
+Two other presentations of the same thing, so they are not chased separately:
 
-**It can also present as a named test failing with `read ECONNRESET`**, rather
-than as a file that silently never reports. Seen once, on
-`integrations-tab.test.ts`, in the same run as the usual worker death. Postgres
-was checked at the time and is not the cause — no FATAL, no termination, no
-restart, no OOM — so the reset is the worker dying and taking its socket down
-with it, not the database closing the connection. A symptom of the death, not a
-second bug: do not go looking for a connection leak on the strength of it.
+- **A named test failing with `read ECONNRESET`.** Postgres was checked at the
+  time — no FATAL, no termination, no restart, no OOM, zero container restarts
+  — so the reset is the worker dying and taking its socket down, not the
+  database closing it.
+- **`Could not read the test report at …report.json` (exit 127).** Vitest died
+  before writing the report. Every file had already reported ✓.
 
-Not cross-project parallelism alone, not the db project, not Postgres. Still
-not being chased further, by agreement.
+**What to do about it:** free memory. On a 16 GB machine, browsers and the WSL
+VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
+moved this one from 0.8 GB free to 2.6 GB and from 7.6 hours to 80 seconds. The
+gate's single retry absorbs what is left.
 
-What the investigation ruled out, so the fifth occurrence starts from here:
-
-- **Not a false green.** Vitest reports the dead worker as a failed test file
-  and exits non-zero. Measured by killing a worker deliberately — exit 1,
-  `Test Files 1 failed`. The runs that *looked* green were runs whose exit code
-  was never read, because the output was piped to `tail`. Read `$?`, not the
-  summary line.
-- **Not reproducible in isolation.** `vitest run --project db` five times at
-  140 tests and three times again at 171: clean every run. It only happens when
-  db runs alongside the other projects, and it became noticeably more frequent
-  as the db suite grew - two consecutive full runs crashed at 171 tests, having
-  been roughly one in five before.
-- **Not the native module.** `@node-rs/argon2` belongs to `web-server`, and
-  every `web-server` file reported normally in each crashed run.
-- **Not heap. Measured, not assumed.** `--logHeapUsage --reporter=verbose`
-  over all 171 db tests: the post-GC floor does not climb. Every db-touching
-  file floors at 37�40 MB and the catalog-only files at 12�16 MB, so the
-  average per-file floor is *lower* in the second half of the run (29 MB) than
-  the first (39 MB). There is no accumulation inside the single fork, so
-  nothing to fix by disconnecting per file and nothing to paper over with
-  `--max-old-space-size`.
-
-  One outlier worth knowing before re-measuring: `media-store.test.ts` peaks at
-  358 MB, from multi-megabyte fixture buffers and the chunks the streaming test
-  reassembles. It is transient garbage � the floor after it is 39 MB like
-  everything else � but it is by far the largest moment in the suite, and it is
-  the first thing that will look suspicious to whoever reads this next.
-
-- **Not `parseEnv`.** `process.exit()` in a fork produces exactly this
-  signature, and `parseEnv` exits on bad configuration � but walking
-  `auth-schema.test.ts`'s import graph (41 files) finds no call to it anywhere.
-  `migrate-test.mjs` does call `process.exit`, and cannot be the cause: it is
-  spawned as a child and checked through `result.status`.
-
-  A guard is installed permanently anyway � `tests/no-silent-exit.ts`, first in
-  every project's `setupFiles`. It replaces `process.exit` with a throw and
-  logs unhandled rejections to stderr, so the next silent death arrives as a
-  named failure with a file and line instead of a vanished worker. Verified by
-  probe: `process.exit(1)` in a test now fails that test by name.
-
-- **Not the double `globalSetup`, though that was real and is fixed.** `db`
-  and `web-server` used to declare the same `globalSetup`, so `migrate-test.mjs`
-  ran twice per run � the second execution issuing `ALTER ROLE` against a
-  database the first project's workers were already querying. It is now hoisted
-  to the root config and runs once, verified. The crash continued at 2 in 5.
-
-- **Not anything at the JavaScript level � and this is the useful part.** With
-  the guard installed, two crashed runs produced *no* `SilentExitError`, no
-  `unhandledRejection`, no `uncaughtException`, and no Node fatal message
-  ("out of memory", "FATAL ERROR", an assertion). The guard's silence is
-  evidence: the worker is not exiting, not throwing, and not rejecting. It is
-  dying below JavaScript, which is why there has never been a stack to find.
-
-  There is no obvious native code to blame: Prisma 7 here uses the pure-JS
-  `@prisma/adapter-pg` over `pg`, and `find` turns up no `.node` or `.wasm`
-  under `node_modules/@prisma`.
-
-One side effect worth recognising: a run that crashes can leave the *next* run's
-`migrate-test.mjs` failing with "Could not prepare the test database" � seen
-once, transient, with no advisory lock still held afterwards. Re-run before
-believing Postgres is down.
-
-Practical effect: a short test count with a non-zero exit is this, and a re-run
-is the right response. A short count with a **zero** exit is something else
-entirely — see `npm run test:gate`.
 
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own

@@ -4,9 +4,9 @@ Working plan, updated as the phase runs. Written down because the decisions
 below cost more to re-derive than to record, and several of them reverse
 something that looked obvious.
 
-Status: **4a complete, tagged `phase-4a`.** Every layer ships: schema, core,
-worker, and a web layer carrying the webhook route, the media route, the visual
-fixture, the numbers page, the inbox, the thread and the retry action.
+Status: **complete. `phase-4a` and `phase-4b` both tagged.** The product sends
+and receives WhatsApp messages, and can start a conversation outside the
+24-hour window with an approved template.
 
 **Screenshots are back in the gate** as of commit 24. `.githooks/SKIP_VISUAL` is
 deleted and every commit from there on is photographed at 1440 and 390.
@@ -337,21 +337,13 @@ Both numberings appear below where it matters.
 
 ### Remaining — 4a
 
-**One commit of the original 4a list is deliberately not in the tag.**
+**One commit of the original 4a list missed that tag and landed in 4b**:
+`8f13cfb`, the admin Overview counts (P6). Nothing depended on it, which is why
+the tag did not wait, and it carries the phase's operator-visibility promise.
 
-| # (new) | # (orig) | Subject |
-| --- | --- | --- |
-| 26 | 29 | `feat(web): show an operator the deliveries that never landed` |
-
-P6 said operator visibility is a commit rather than a claim, and it still is —
-this is the only thing in the phase that was planned and is not built. It is an
-admin-console read over counts that already exist in `unroutable_webhooks` and
-`whatsapp_webhook_events`; nothing depends on it, which is why the tag did not
-wait. It carries forward rather than being dropped.
-
-Two commits in the tag were not planned at all. Both are the screenshot suite
-telling the truth about itself once its budget was taken away, and both are
-recorded in C12.
+Two commits in the 4a tag were not planned at all. Both are the screenshot
+suite telling the truth about itself once its budget was taken away, and both
+are recorded in C12.
 
 **Webhook-key rotation is deferred and unscheduled.** The schema comment has
 always put the control on Configuration > Numbers; commit 28 renders the URL and
@@ -360,13 +352,42 @@ the new URL into Meta — accumulating exactly the failures C2 exists to avoid �
 so it needs a confirmation step, copy that says so, and the P1 cache evicted
 alongside. A commit, not a button.
 
-### Remaining — 4b
+### Done — 4b
 
-`whatsapp_templates` and the edit log; the one component shape the preview and
-the submission share; category price copy; create/read at Meta; the submit job;
-the derived edit quota; the template-status webhook branch; the seed; the split
-screen; submit-and-review; the Library tab; the template send that replaces
-4a's disabled picker; the gate. Thirteen commits, tag `phase-4b`.
+| # | Hash | Subject |
+| --- | --- | --- |
+| 1 | `3f67b93` | `feat(db): templates, and an append-only record of every edit` |
+| 2 | `f6a990e` | `feat(core): one component shape, for the preview and the submission both` |
+| 3 | `200d8a1` | `feat(core): create a template at Meta, and read what it says back` |
+| 4 | `7ecdd4d` | `feat(db): the edit quota, counted rather than stored` |
+| 5 | `7ee9897` | `feat(worker): submit a template and remember what Meta called it` |
+| 6 | `25a99d2` | `feat(core+db): Meta's verdict on a template, applied when it arrives` |
+| 7 | `f7d443b` | `test(web): seed an approved template and a rejected one` |
+| 8 | `a370422` | `feat(web): the Template Studio, and a list that shows Meta's verdict` |
+| 9 | `ea01e1e` | `feat(web): fix a rejected template and send it back` |
+| 10 | `e0ac6ad` | `feat(web): a second tab for the templates Meta already has` |
+| 11 | `0f93d18` | `feat(web+core): a template can be sent once the window has closed` |
+| 12 | `24eec1f` | `chore(core): the WABA id becomes required, in the commit that needs it` |
+| 13 | `8f13cfb` | `feat(web): show an operator the deliveries that never landed` (4a's 26) |
+
+Plus `3f2ddc3`, which closed the fork-crash investigation and is described in
+C13 rather than here.
+
+**What 4b changed about 4a.** `0f93d18` is the one that finishes the earlier
+tag: the composer's disabled template picker is gone, replaced by a real one,
+and `sendPolicy`'s template arm returns allowed through a closed window. The
+asymmetry is the feature — a template is the only thing permitted out there,
+which is what makes the 24 hours survivable as a product rather than a cliff.
+
+**What the Library tab is not.** Meta's global pre-written catalogue is a
+separate endpoint and is not wired up. The tab shows the WABA's own templates,
+including ones made in Business Manager, which skip review here because they
+have already had it. The page says so in as many words, so nobody infers a
+catalogue that does not exist.
+
+**Deferred, and named rather than dropped:** webhook-key rotation (still, from
+4a), and outbound media in the composer (P4, Phase 5). Both render as disabled
+controls that say when they arrive.
 
 ---
 
@@ -401,6 +422,50 @@ helps against that - so detection at the start of the next run is the durable
 answer rather than prevention.
 
 ---
+
+### C13. The fork crash was memory exhaustion, not a race
+
+Chased across both tags as a concurrency problem. It is not one. The machine
+runs out of physical memory and the OS refuses or kills a fork.
+
+Four measurements settle it, and they are recorded because the symptom is so
+unlike the cause that the next person will start where the last one did:
+
+- **`Failed to start forks worker for <file>`** — a worker that could not be
+  *created*, which is an allocation failure and nothing else;
+- **a `truncateAll()` hook timed out at 120 seconds**, against an idle database
+  where that statement takes milliseconds;
+- **one run reported `Duration 27486s`** — 7.6 hours, `tests 27264s`, against
+  the 80s the same suite takes healthy. No race is three orders of magnitude;
+- **the visual suite's admin sign-in timed out at 60s**, and Argon2id is
+  *memory-hard by design* — the first thing to fail under pressure and the last
+  thing anyone suspects.
+
+State at the time: 11.4 GB resident of 15.7 GB physical, 0.8 GB free, 31 GB of
+pagefile. Everything was paging to disk.
+
+**Both mitigations work for a reason other than the one their commits give.**
+`9992fb6` (sequential projects) and `3f2ddc3` (web-server on threads) describe
+concurrency; they are footprint reductions — one halves peak concurrent memory,
+the other gives one shared V8 heap instead of a fresh one per file. That also
+explains the result that looked strange at the time: threads on *db* did not
+help, because db was not the project losing workers.
+
+The commit messages are **left as they are**. Rewriting tagged history costs
+more than a wrong mechanism in an old message, and this correction is in the
+conventions file where somebody hitting the crash will actually look.
+
+**Freeing memory removes the catastrophe but not the crash.** With ~2.6 GB free
+the suite returned to 80s of test execution and one run in two still lost a
+worker. So memory is certainly the cause of the severity and very likely of the
+crash itself; the headroom on this machine is not enough to prove the second
+half. A recurrence is pressure, not a race.
+
+**Do not diagnose by filename.** It has been `auth-schema.test.ts`,
+`conversation-send.test.ts`, `company-deactivation.test.ts`,
+`webhook-throttle.test.ts` and `read-receipts.test.ts`. Two earlier notes here
+claiming "always the db project" and "always auth-schema" were both wrong. Match
+the signature — a file that never reports, zero tests failing, a non-zero exit.
 
 ### C12. The screenshot budget was hiding two things, and one was the suite
 
@@ -671,18 +736,28 @@ it still could not match a checkout holding CRLF, LF and mixed-ending files.
 `. Both failed safe — "matched nothing" is a
 refusal — so no break had ever been silently unobserved.
 
-**The destructive policy audit was re-run at the end of the phase**, which is
-what the conventions file asks for rather than only when the tests are written.
-RLS dropped on all 16 tenant tables, `rls-isolation.test.ts` run, policies
-restored, test database rebuilt afterwards.
+**The destructive policy audit was run at the end of each tag**, which is what
+the conventions file asks for rather than only when the tests are written. RLS
+dropped on every tenant table, `rls-isolation.test.ts` run, policies restored,
+test database rebuilt afterwards.
 
-**33 of 38 tests failed. Exactly 5 survived, and they are the five in
-`NOT_POLICY_TESTS`** — the role-attribute checks, the fixture sanity check, the
-ownership catalog fact, and the TRUNCATE grant. No sixth, which is the finding
-the audit exists to produce. The count is unchanged from Phase 2 while the suite
-itself has grown, so every assertion Phase 4a added over conversations,
-messages, media and webhook events is proving the boundary rather than the
-convention.
+| at | tenant tables | result |
+| --- | --- | --- |
+| `phase-4a` | 16 | 33 of 38 failed, **5 survived** |
+| `phase-4b` | 18 | 37 of 42 failed, **5 survived** |
+
+**The same five both times, and they are the five in `NOT_POLICY_TESTS`** — the
+role-attribute checks, the fixture sanity check, the ownership catalog fact, and
+the TRUNCATE grant. No sixth, which is the finding the audit exists to produce.
+
+The count held at five while the suite grew from 38 assertions to 42 and the
+tenant tables from 16 to 18. So every assertion added over conversations,
+messages, media, webhook events, templates and the edit log is proving the
+boundary rather than the convention.
+
+`npm run db:verify` was run against **both** dev and test at the tag: all four
+catalog invariants hold on each, and both databases are at 29 migrations with
+both template tables present.
 
 ---
 

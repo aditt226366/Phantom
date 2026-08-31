@@ -12,6 +12,7 @@
     "./env": "./src/env.ts",
     "./queues": "./src/queues.ts",
     "./integrations": "./src/integrations.ts",
+    "./kyc": "./src/kyc/index.ts",
     "./redact": "./src/redact.ts",
     "./time": "./src/time.ts",
     "./whatsapp": "./src/whatsapp/index.ts",

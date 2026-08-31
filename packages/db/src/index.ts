@@ -73,12 +73,13 @@ export type {
 } from "./media-store.ts";
 export {
   currentKycDocuments,
+  currentKycStatuses,
   listKycDocuments,
   statKycDocument,
   putKycDocument,
   readKycDocument,
   KycDocumentTruncatedError,
-  KYC_DOCUMENT_KINDS,
+  KYC_KINDS,
   MAX_KYC_DOCUMENT_BYTES,
 } from "./kyc.ts";
 export type {

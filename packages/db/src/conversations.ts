@@ -1,3 +1,4 @@
+import { canUseFeatures } from "@whatsapp-os/core/kyc";
 import {
   describeWindow,
   sendPolicy,
@@ -7,6 +8,7 @@ import {
   type SendIntent,
   type WindowState,
 } from "@whatsapp-os/core/whatsapp";
+import { currentKycStatuses } from "./kyc.ts";
 import type { CompanyClient } from "./with-company.ts";
 
 /**
@@ -92,6 +94,55 @@ export async function canSend(
   if (!row) return null;
 
   const window = describeWindow(row.windowExpiresAt, now);
+
+  /*
+   * A4: the send path inherits the feature gate rather than restating it.
+   *
+   * canUseFeatures is the owner, and it is called here rather than having
+   * sendPolicy grow its own notion of verification - the composer, this
+   * function, the worker and every blocked page then agree by construction. A
+   * send path with a second opinion about whether a company is verified is how
+   * a tenant ends up blocked from six sections and able to message customers
+   * from the seventh.
+   *
+   * Read here, per call, and never cached: an approval can be revoked while a
+   * worker is draining a queue, and the next message must be refused.
+   *
+   * It runs before sendPolicy because it outranks every reason sendPolicy has.
+   * An unverified company being told "the 24-hour window has closed, send a
+   * template" would be advice toward a feature that is also shut.
+   */
+  const access = canUseFeatures({
+    companyDeactivated: row.company.deactivatedAt !== null,
+    documents: await currentKycStatuses(db, companyId),
+  });
+
+  if (!access.allowed) {
+    /*
+     * Flattened to one code deliberately. Which document is outstanding is a
+     * question for Profile > Documents, which shows all three with their own
+     * reasons; on a failed message bubble it would be an instruction the
+     * sender usually cannot act on - the person composing is often not the
+     * person who files the paperwork.
+     *
+     * The exception is a suspended workspace, which keeps its own long-
+     * standing refusal: it is not a KYC problem and reporting it as one would
+     * send an operator looking for a document that is already approved.
+     */
+    return {
+      conversationId: row.id,
+      window,
+      decision: {
+        allowed: false,
+        reason:
+          access.reason === "company_deactivated"
+            ? "company_deactivated"
+            : "company_not_verified",
+      },
+      phoneNumberId: row.whatsappNumber.phoneNumberId,
+      waId: row.contact.waId,
+    };
+  }
 
   return {
     conversationId: row.id,

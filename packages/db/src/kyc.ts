@@ -1,3 +1,4 @@
+import { KYC_KINDS, type KycKind, type KycStatuses } from "@whatsapp-os/core/kyc";
 import type { KycDocumentKind, KycDocumentStatus } from "./generated/prisma/enums.ts";
 import { withCompany, type CompanyClient } from "./with-company.ts";
 
@@ -30,17 +31,17 @@ import { withCompany, type CompanyClient } from "./with-company.ts";
  * download. So the read opens its own short scope per chunk.
  */
 
-/**
- * The three, in the order every surface renders them.
+/*
+ * The vocabulary comes from @whatsapp-os/core/kyc, not from the Prisma enum.
  *
- * Ordered here rather than sorted at each call site: a tenant seeing GST, PAN,
- * Aadhaar on one screen and Aadhaar, GST, PAN on the next has to re-read both.
- * Enum member order in schema.prisma is not a rendering decision and must not
- * quietly become one.
+ * The order the three are rendered in is a product decision, and the gate that
+ * decides on their statuses is pure and lives in core. Re-declaring the list
+ * here would give the database's opinion of the ordering and the gate's a way
+ * to diverge, which is the kind of drift nobody sees until a page lists them
+ * one way and a blocked state another.
  */
-export const KYC_DOCUMENT_KINDS = ["GST", "PAN", "AADHAAR"] as const;
-
-export type KycKind = (typeof KYC_DOCUMENT_KINDS)[number];
+export { KYC_KINDS };
+export type { KycKind };
 
 /** 5 MiB, matching the CHECK constraint and the upload cap exactly. */
 export const MAX_KYC_DOCUMENT_BYTES = 5 * 1024 * 1024;
@@ -141,15 +142,56 @@ export async function currentKycDocuments(
     select: STAT_COLUMNS,
   });
 
-  const current: CurrentKycDocuments = { GST: null, PAN: null, AADHAAR: null };
+  return newestByKind(rows as StatRow[], toStat);
+}
+
+/**
+ * The newest row of each kind, given rows already ordered newest first.
+ *
+ * Shared by both reads below it, and that sharing is the point: the gate opens
+ * on what this returns, and two implementations of "which row is current" is
+ * how a page comes to show one document while the gate decides on another.
+ */
+function newestByKind<Row extends { kind: KycDocumentKind }, Out>(
+  rows: Row[],
+  map: (row: Row) => Out,
+): Record<KycKind, Out | null> {
+  const current = { GST: null, PAN: null, AADHAAR: null } as Record<
+    KycKind,
+    Out | null
+  >;
 
   for (const row of rows) {
     const kind = row.kind as KycKind;
     /* First sighting wins, because the list is newest first. */
-    if (current[kind] === null) current[kind] = toStat(row as StatRow);
+    if (current[kind] === null) current[kind] = map(row);
   }
 
   return current;
+}
+
+/**
+ * The same reduction, selecting two columns instead of ten.
+ *
+ * This is what the send path reads, and it runs once per outbound message -
+ * including every message of a Phase 5 bulk run. currentKycDocuments would
+ * answer identically and carry eight columns per historical row to do it,
+ * which is waste on the one path where it is measured.
+ *
+ * Both go through newestByKind, so the two cannot disagree about which row is
+ * current. That is the property worth having; the column list is just cost.
+ */
+export async function currentKycStatuses(
+  db: CompanyClient,
+  companyId: string,
+): Promise<KycStatuses> {
+  const rows = await db.kycDocument.findMany({
+    where: { companyId },
+    orderBy: { createdAt: "desc" },
+    select: { kind: true, status: true },
+  });
+
+  return newestByKind(rows, (row) => row.status);
 }
 
 /** Every upload of every kind, newest first. What the admin's tab reads. */

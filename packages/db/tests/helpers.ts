@@ -4,7 +4,13 @@ import {
   testDatabaseUrl,
   testSuperuserDatabaseUrl,
 } from "../scripts/db-urls.mjs";
-import { createCompany, newCompanyId, withCompany } from "../src/index.ts";
+import {
+  KYC_KINDS,
+  createCompany,
+  newCompanyId,
+  putKycDocument,
+  withCompany,
+} from "../src/index.ts";
 
 /**
  * Test fixtures.
@@ -131,4 +137,40 @@ export async function seedCompany(
   });
 
   return { id, slug, userIds, usernames };
+}
+
+/**
+ * File and approve all three documents, so the feature gate opens.
+ *
+ * A4 blocks everything until a company is verified, and canSend now consults
+ * that gate - so any fixture testing a feature has to be a verified company or
+ * it is testing the gate by accident. Every such test says which it is: this
+ * helper for the ones about a feature, and a deliberately unverified company
+ * for the ones about the gate.
+ *
+ * Approved directly rather than through the admin path, because that path is a
+ * server action in apps/web and this is packages/db. What is being set up is a
+ * state, not a workflow.
+ */
+export async function approveAllKycDocuments(companyId: string): Promise<void> {
+  /* A PDF as far as the CHECK constraint is concerned. */
+  const bytes = new Uint8Array(32);
+  bytes.set(new TextEncoder().encode("%PDF-"));
+
+  await withCompany(companyId, async (db, scoped) => {
+    for (const kind of KYC_KINDS) {
+      const id = await putKycDocument(db, scoped, {
+        kind,
+        bytes,
+        sha256: `${scoped}-${kind}`,
+        mimeType: "application/pdf",
+        originalFilename: `${kind.toLowerCase()}.pdf`,
+      });
+
+      await db.kycDocument.update({
+        where: { id },
+        data: { status: "APPROVED", reviewedAt: new Date() },
+      });
+    }
+  });
 }

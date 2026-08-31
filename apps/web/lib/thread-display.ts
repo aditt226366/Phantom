@@ -84,6 +84,18 @@ const REFUSAL_SENTENCES: Record<SendRefusal, string> = {
     "This contact has opted out, so nothing further is sent to them.",
   template_not_available: "Templates arrive in the next release.",
   template_not_approved: "Meta has not approved this template yet.",
+  /*
+   * Names the section rather than the document, and that is deliberate. The
+   * person composing is often not the person who files the paperwork, so
+   * "your PAN card was refused" here is an instruction the reader usually
+   * cannot act on - and the inbox is the screen a customer-facing operator is
+   * most likely to have visible to somebody else.
+   *
+   * Profile > Documents shows all three with their own reasons, to whoever
+   * opens it.
+   */
+  company_not_verified:
+    "This workspace is not verified yet, so nothing is sent from it. Profile > Documents shows what is outstanding.",
 };
 
 export function refusalSentence(reason: SendRefusal): string {

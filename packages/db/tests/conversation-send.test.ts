@@ -6,7 +6,12 @@ import {
   canSend,
   withCompany,
 } from "../src/index.ts";
-import { seedCompany, truncateAll, type SeededCompany } from "./helpers.ts";
+import {
+  approveAllKycDocuments,
+  seedCompany,
+  truncateAll,
+  type SeededCompany,
+} from "./helpers.ts";
 
 /**
  * The send path's preconditions, and the two updates that must never go
@@ -113,6 +118,18 @@ beforeEach(async () => {
   await truncateAll();
   alpha = await seedCompany("alpha");
   beta = await seedCompany("beta");
+
+  /*
+   * Verified, because these are tests about the send preconditions and A4 put
+   * a gate in front of all of them. Without this every assertion below would
+   * pass for the wrong reason - refused, but by the KYC gate rather than by
+   * the window or the number status it names.
+   *
+   * The gate's own refusal is asserted deliberately, at the bottom of the
+   * first describe, against a company that has filed nothing.
+   */
+  await approveAllKycDocuments(alpha.id);
+  await approveAllKycDocuments(beta.id);
 });
 
 describe("canSend", () => {
@@ -293,6 +310,122 @@ describe("canSend", () => {
     );
 
     expect(result).toBeNull();
+  });
+
+  /*
+   * ---------------------------------------------------------------------
+   * The KYC gate, which every other assertion in this describe suppresses
+   * ---------------------------------------------------------------------
+   *
+   * beforeEach approves all three documents for alpha and beta, because these
+   * are tests about the window and the number status and A4 put a gate in
+   * front of both. That fixture change would be a way of making a suite green
+   * if nothing asserted the state it papers over, so these do.
+   */
+  describe("before the company is verified", () => {
+    it("refuses a send that every other precondition allows", async () => {
+      /*
+       * gamma files nothing. The thread is open, the number is CONNECTED, the
+       * contact has not opted out - so sendPolicy alone would allow this, and
+       * the only thing refusing it is the gate.
+       */
+      const gamma = await seedCompany("gamma");
+      const thread = await seedThread(gamma, "g");
+
+      const result = await withCompany(gamma.id, (db, companyId) =>
+        canSend(db, companyId, thread.conversationId, { kind: "freeform" }, NOW),
+      );
+
+      expect(result?.decision).toEqual({
+        allowed: false,
+        reason: "company_not_verified",
+      });
+    });
+
+    it("refuses an approved template too, which is the outside-window escape", async () => {
+      /*
+       * The one thing that survives a closed window must not survive an
+       * unverified company. A gate that let templates through would leave the
+       * single most expensive message type - the one that reaches a customer
+       * who has not written in - open to an account nobody has checked.
+       */
+      const gamma = await seedCompany("gamma");
+      const thread = await seedThread(gamma, "g");
+
+      const result = await withCompany(gamma.id, (db, companyId) =>
+        canSend(
+          db,
+          companyId,
+          thread.conversationId,
+          { kind: "template", approved: true },
+          NOW,
+        ),
+      );
+
+      expect(result?.decision).toEqual({
+        allowed: false,
+        reason: "company_not_verified",
+      });
+    });
+
+    it("still reports a suspended workspace as suspended", async () => {
+      /*
+       * A deactivated company is also unverified - it has filed nothing - so
+       * without the ordering inside canSend this would report a KYC problem
+       * and send an operator looking for a document. The reason a refusal
+       * carries has to be the one somebody can act on.
+       */
+      const gamma = await seedCompany("gamma");
+      const thread = await seedThread(gamma, "g");
+
+      await withCompany(gamma.id, (db) =>
+        db.company.update({
+          where: { id: gamma.id },
+          data: { deactivatedAt: NOW },
+        }),
+      );
+
+      const result = await withCompany(gamma.id, (db, companyId) =>
+        canSend(db, companyId, thread.conversationId, { kind: "freeform" }, NOW),
+      );
+
+      expect(result?.decision).toEqual({
+        allowed: false,
+        reason: "company_deactivated",
+      });
+    });
+
+    it("reopens the moment the last document is approved", async () => {
+      /*
+       * And closes again on revocation, which is the property that makes this
+       * a read of current state rather than something settled at sign-in.
+       */
+      const gamma = await seedCompany("gamma");
+      const thread = await seedThread(gamma, "g");
+
+      const decide = () =>
+        withCompany(gamma.id, (db, companyId) =>
+          canSend(db, companyId, thread.conversationId, { kind: "freeform" }, NOW),
+        );
+
+      expect((await decide())?.decision.allowed).toBe(false);
+
+      await approveAllKycDocuments(gamma.id);
+      expect((await decide())?.decision.allowed).toBe(true);
+
+      /* An operator withdraws the Aadhaar approval. */
+      await withCompany(gamma.id, (db) =>
+        db.kycDocument.updateMany({
+          where: { kind: "AADHAAR" },
+          data: { status: "REJECTED", reviewNote: "Illegible scan." },
+        }),
+      );
+
+      expect((await decide())?.decision).toEqual({
+        allowed: false,
+        reason: "company_not_verified",
+      });
+    });
   });
 });
 

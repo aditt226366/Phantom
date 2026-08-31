@@ -51,6 +51,25 @@ setup("sign in as the tenant owner", async ({ page }) => {
   await page.context().storageState({ path: AUTH.tenant });
 });
 
+setup("sign in as the unverified tenant", async ({ page }) => {
+  /*
+   * The state most accounts are in on their first day: signed in, and blocked
+   * out of everything.
+   *
+   * The sign-in still lands on /dashboard - the gate renders a designed state
+   * rather than redirecting, which is the behaviour A4 asks for and a redirect
+   * loop is what it is avoiding. If this ever starts timing out here, the gate
+   * has been turned into a redirect and that is the bug, not this line.
+   */
+  await page.goto("/sign-in");
+  await page.getByLabel("Username").fill(FIXTURE.blockedTenant.username);
+  await page.getByLabel("Password").fill(FIXTURE.blockedTenant.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await page.waitForURL("**/dashboard");
+  await page.context().storageState({ path: AUTH.blockedTenant });
+});
+
 setup("sign in as the platform operator", async ({ page }) => {
   await page.goto("/admin/sign-in");
   await page.getByLabel("Username").fill(FIXTURE.admin.username);
@@ -85,6 +104,22 @@ setup("restore the timestamps signing in moved", async () => {
     /* Zero rows means the seed and the sign-in disagree about who the fixture
        is, which would otherwise show up as an unexplained pixel diff. */
     expect(rowCount, "the fixture owner was not found to restore").toBe(1);
+
+    /*
+     * The unverified owner's last_login_at goes back to NULL, which is what
+     * the seed wrote and what /admin/companies renders as "Never".
+     *
+     * The same trap as above and easier to miss, because the value being
+     * restored is an absence: signing this account in would quietly turn a
+     * "Never" into a moving timestamp on a page that has nothing to do with
+     * this fixture.
+     */
+    const { rowCount: blocked } = await client.query(
+      `UPDATE users SET last_login_at = NULL WHERE username = $1`,
+      [FIXTURE.blockedTenant.username],
+    );
+
+    expect(blocked, "the unverified owner was not found to restore").toBe(1);
   } finally {
     await client.end();
   }

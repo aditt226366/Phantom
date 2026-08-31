@@ -37,7 +37,18 @@ export type SendRefusal =
   /** Templates do not exist yet. Phase 4b removes this. */
   | "template_not_available"
   /** The template exists but Meta has not approved it. */
-  | "template_not_approved";
+  | "template_not_approved"
+  /**
+   * The company has not been verified, so no feature is open to it - sending
+   * least of all. A4: KYC gates everything, not only the send path.
+   *
+   * The verdict is not recomputed here. canSend calls canUseFeatures and maps
+   * whatever it says to this one code, because the send path having its own
+   * opinion about verification is exactly how the gate and the product drift
+   * apart. What the operator sees on the blocked page and what the worker
+   * writes onto a failed message come from one owner.
+   */
+  | "company_not_verified";
 
 export type SendIntent =
   | { kind: "freeform" }

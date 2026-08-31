@@ -76,12 +76,14 @@ database is: reachable only from inside, and everything downstream assumes so.
 Anything that ever accepts a job from outside this system has to re-derive the
 company id rather than read it.
 
-Raw SQL is confined to seven files in `packages/db/src` — `client.ts`,
+Raw SQL is confined to eight files in `packages/db/src` — `client.ts`,
 `with-company.ts`, `resolve-company.ts`, `company.ts`, `vault.ts`,
-`media-store.ts` and `conversations.ts` — each because the statement it needs
-has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
+`media-store.ts`, `kyc.ts` and `conversations.ts` — each because the statement
+it needs has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
 credential loses a concurrent save irrecoverably. `substring()` over `bytea`,
-without which a chunked read materialises the whole file. `GREATEST`, without
+without which a chunked read materialises the whole file — twice, over two
+tables that must not share rows, because generalising one site to take a table
+name from its caller is a worse shape than two sites naming their own. `GREATEST`, without
 which advancing a conversation becomes three statements with two gaps in them —
 and two webhook deliveries for the same thread interleave in those gaps, leaving
 the newest timestamp beside the older message's preview. One UPDATE evaluates
@@ -99,6 +101,19 @@ A layout is cached per segment and is not guaranteed to re-execute on every
 navigation within it. `requireSession()` there is a redirect for the user's
 benefit. Every page, loader and server action calls it itself — React `cache()`
 makes the repeats free.
+
+The same applies to the KYC gate, which is the second thing this rule now
+covers. `getFeatureAccess()` / `assertFeatureAccess()` in
+`lib/auth/feature-gate.ts` are called by every page and every action of every
+feature section; the layout calls the first one only to render a banner.
+Hiding a nav item is not a boundary — the URL still resolves and a server
+action is reachable by its id.
+
+`apps/web/tests/server/feature-gate-coverage.test.ts` walks `app/(app)` and
+fails on a page or action that consults neither, so a section added later is a
+failing test rather than a hole. What A4 permits while unverified is exactly:
+sign in, sign out, Profile > Personal details, Profile > Documents and the
+verify-email flow. Each is exempted there by name, with a reason.
 
 ### 5. The platform admin is a separate account space, not a permission
 

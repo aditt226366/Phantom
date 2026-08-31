@@ -804,6 +804,99 @@ describe("templates and their edit log", () => {
   });
 });
 
+describe("KYC documents", () => {
+  /* A fixture, deliberately outside any `it` - seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  async function fileDocument(
+    company: SeededCompany,
+    label: string,
+  ): Promise<string> {
+    const bytes = new Uint8Array(16);
+    bytes.set(new TextEncoder().encode("%PDF-"));
+
+    return withCompany(company.id, async (db, companyId) => {
+      const row = await db.kycDocument.create({
+        data: {
+          companyId,
+          kind: "AADHAAR",
+          bytes,
+          byteSize: bytes.byteLength,
+          sha256: `${label}-sha`,
+          mimeType: "application/pdf",
+          originalFilename: `${label}-aadhaar.pdf`,
+        },
+        select: { id: true },
+      });
+      return row.id;
+    });
+  }
+
+  /*
+   * This is the most sensitive table in the system, so the three assertions
+   * below are the same three every tenant table gets and are worth no less
+   * care: an Aadhaar number leaking across tenants is not a bug report, it is
+   * a notifiable incident.
+   */
+  it("does not serve one company's documents to another", async () => {
+    await fileDocument(alpha, "alpha");
+    await fileDocument(beta, "beta");
+
+    /*
+     * The read path is /api/kyc-documents/[documentId], which takes an id
+     * straight from a URL. RLS is what makes guessing one useless, so this is
+     * the assertion behind that route returning 404 rather than somebody's
+     * identity document.
+     */
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ sha256: string }>>`
+        SELECT sha256 FROM kyc_documents ORDER BY sha256`,
+    );
+
+    expect(rows.map((r) => r.sha256)).toEqual(["beta-sha"]);
+  });
+
+  it("does not leak the bytes through a chunked read", async () => {
+    /*
+     * The download streams with substring() rather than selecting the column,
+     * so the policy has to hold for that shape too. It does - the USING clause
+     * filters the row before any expression over it is evaluated - and this
+     * asserts it rather than reasoning about it, because a slice of an
+     * invisible row returning NULL and a slice of a visible one returning
+     * bytes are indistinguishable from the route's side.
+     */
+    const documentId = await fileDocument(alpha, "alpha");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ chunk: Uint8Array | null }>>`
+        SELECT substring(bytes from 1 for 5) AS chunk
+          FROM kyc_documents WHERE id = ${documentId}`,
+    );
+
+    expect(rows).toEqual([]);
+  });
+
+  it("refuses to file a document into another company", async () => {
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO kyc_documents
+            (id, company_id, kind, bytes, byte_size, sha256, mime_type,
+             original_filename)
+          VALUES ('smuggled', ${beta.id}, 'GST', '%5044462d'::bytea, 5,
+                  'smuggled-sha', 'application/pdf', 'smuggled.pdf')`,
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides documents from the table's own owner", async () => {
+    await fileDocument(alpha, "alpha");
+
+    const { rows } = await owner.query("SELECT * FROM kyc_documents");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

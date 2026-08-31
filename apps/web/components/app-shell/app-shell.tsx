@@ -31,6 +31,14 @@ export interface AppShellProps {
   csrf: React.ReactNode;
   /** A second copy, because a form may only contain one of each field. */
   resendCsrf: React.ReactNode;
+  /**
+   * Rendered above everything while the workspace is unverified.
+   *
+   * A node rather than a boolean, because the banner is a Server Component and
+   * this shell is a client one. The layout decides whether there is anything
+   * to show; this only places it.
+   */
+  verificationBanner?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -44,6 +52,7 @@ export function AppShell({
   resendAction,
   csrf,
   resendCsrf,
+  verificationBanner,
   children,
 }: AppShellProps) {
   const [open, setOpen] = React.useState(false);
@@ -103,6 +112,15 @@ export function AppShell({
         </header>
 
         <main id="main" className="min-w-0 flex-1 px-base py-lg desktop:px-lg">
+          {/*
+            First, and above the other two.
+
+            It is the reason every section is refusing, so it outranks a
+            breached password and an unverified email - both of which are real
+            but neither of which is why the product is not working.
+          */}
+          {verificationBanner}
+
           {passwordBreached ? <PasswordBreachBanner className="mb-lg" /> : null}
 
           {!emailVerified ? (

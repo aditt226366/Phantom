@@ -71,6 +71,23 @@ export type {
   MediaPut,
   MediaStateName,
 } from "./media-store.ts";
+export {
+  currentKycDocuments,
+  currentKycStatuses,
+  listKycDocuments,
+  statKycDocument,
+  putKycDocument,
+  readKycDocument,
+  KycDocumentTruncatedError,
+  KYC_KINDS,
+  MAX_KYC_DOCUMENT_BYTES,
+} from "./kyc.ts";
+export type {
+  KycKind,
+  KycDocumentStat,
+  CurrentKycDocuments,
+  KycDocumentUpload,
+} from "./kyc.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";
@@ -94,6 +111,7 @@ export type {
   WhatsAppMedia,
   WhatsAppWebhookEvent,
   UnroutableWebhook,
+  KycDocument,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -113,4 +131,6 @@ export {
   ConversationSource,
   MediaState,
   UnroutableReason,
+  KycDocumentKind,
+  KycDocumentStatus,
 } from "./generated/prisma/enums.ts";

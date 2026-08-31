@@ -56,8 +56,22 @@ run_gate() {
 # after it, the screenshot suite, fails with Playwright output instead. So the
 # discriminator does not need to enumerate the other stages.
 #
+# TWO signatures, because the crash has two presentations and this hook only
+# knew the first. The conventions skill records both:
+#
+#   "Worker exited unexpectedly"  - vitest survived and reported the dead fork.
+#   a missing report.json         - vitest died before writing it, having
+#                                   already printed every file as passing.
+#
+# The second refused a commit here with 63 test files reported and not one
+# assertion failing, which is exactly the false red the retry exists to absorb.
+# Adding it does not weaken the guard: the second condition is unchanged and
+# still does the real work, so a run where anything genuinely failed gets no
+# retry under either signature.
+#
 is_crash_shaped() {
-  grep -q "Worker exited unexpectedly" "$1" 2>/dev/null &&
+  { grep -q "Worker exited unexpectedly" "$1" 2>/dev/null ||
+      grep -q "Could not read the test report at" "$1" 2>/dev/null; } &&
     ! grep -qE "Tests +[0-9]+ failed" "$1" 2>/dev/null
 }
 

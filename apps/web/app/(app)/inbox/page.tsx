@@ -16,6 +16,8 @@ import {
   windowVariant,
 } from "@/lib/inbox-display";
 import { SectionHeader, SectionShell } from "../_components/section";
+import { FeatureBlocked } from "@/components/brand/feature-blocked";
+import { getFeatureAccess } from "@/lib/auth/feature-gate";
 
 export const metadata: Metadata = { title: "Inbox" };
 
@@ -45,6 +47,16 @@ export const metadata: Metadata = { title: "Inbox" };
 export default async function Page() {
   /* Not the layout. Layouts are cached per segment; this is the boundary. */
   const session = await requireSession();
+  /*
+   * A4's gate, here rather than in the layout. A layout is cached per
+   * segment and is not guaranteed to re-execute, so a check there is one
+   * a tenant can navigate around. Rule 4.
+   */
+  const access = await getFeatureAccess();
+  if (!access.allowed) {
+    return <FeatureBlocked reason={access.reason} section="The inbox" />;
+  }
+
 
   /*
    * One instant for the whole render.

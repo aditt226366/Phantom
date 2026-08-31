@@ -74,6 +74,14 @@ const RAW_SQL_ALLOWED = new Map<string, string>([
       "instead of loaded whole. bytea slicing has no query-builder form, and " +
       "Prisma would materialise the entire value to return it.",
   ],
+  [
+    "kyc.ts",
+    "the same substring(bytes from $1 for $2) slice, over kyc_documents. The " +
+      "table is deliberately not whatsapp_media - see 20260831090000 - so the " +
+      "statement cannot be shared, and generalising media-store.ts to take a " +
+      "table name would be a far worse shape than a second literal one: a raw " +
+      "SQL site whose target comes from its caller.",
+  ],
 ]);
 
 /*

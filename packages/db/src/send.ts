@@ -213,5 +213,14 @@ export function describeRefusal(reason: SendRefusal): string {
       return "Templates are not available yet, and only a template can be sent outside the window.";
     case "template_not_approved":
       return "Meta has not approved this template yet.";
+    case "company_not_verified":
+      /*
+       * Deliberately does not name which document. The person composing is
+       * often not the person who files the paperwork, so "your PAN card was
+       * refused" on a message bubble is an instruction the reader usually
+       * cannot act on - and it puts a fragment of the company's verification
+       * state on a screen that a customer-facing operator shares.
+       */
+      return "This workspace is not verified yet, so nothing can be sent from it. Profile > Documents has the details.";
   }
 }

@@ -20,6 +20,8 @@ import {
 import { SectionHeader, SectionShell } from "../../_components/section";
 import { Studio } from "../_components/studio";
 import { resubmitTemplateAction } from "../actions";
+import { FeatureBlocked } from "@/components/brand/feature-blocked";
+import { getFeatureAccess } from "@/lib/auth/feature-gate";
 
 export const metadata: Metadata = { title: "Template" };
 
@@ -41,6 +43,16 @@ export default async function Page({
 }) {
   /* Not the layout. Layouts are cached per segment; this is the boundary. */
   const session = await requireSession();
+  /*
+   * A4's gate, here rather than in the layout. A layout is cached per
+   * segment and is not guaranteed to re-execute, so a check there is one
+   * a tenant can navigate around. Rule 4.
+   */
+  const access = await getFeatureAccess();
+  if (!access.allowed) {
+    return <FeatureBlocked reason={access.reason} section="Template Messaging" />;
+  }
+
   const { templateId } = await params;
 
   const loaded = await withCompany(session.companyId, async (db, companyId) => {

@@ -83,6 +83,7 @@ function shots(audience: Audience, storageState: string | undefined): void {
 shots("public", undefined);
 shots("tenant", AUTH.tenant);
 shots("admin", AUTH.admin);
+shots("blocked", AUTH.blockedTenant);
 
 /**
  * The list above is hand-written, so something has to notice when it stops

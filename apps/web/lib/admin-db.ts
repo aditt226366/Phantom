@@ -1057,3 +1057,264 @@ export async function listVerifications(
     nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* KYC documents                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One upload, as the panel sees it. Never the bytes.
+ *
+ * Mirrors KycDocumentStat from packages/db and is written out again rather
+ * than imported, because that one is produced under withCompany and this one
+ * under the cross-company client. Two shapes that happen to match is the
+ * honest description: sharing the type would suggest they share a scope.
+ */
+export interface AdminKycDocument {
+  id: string;
+  companyId: string;
+  kind: string;
+  status: string;
+  sha256: string;
+  mimeType: string;
+  originalFilename: string;
+  byteSize: number;
+  uploadedAt: Date;
+  reviewedAt: Date | null;
+  reviewedByUsername: string | null;
+  reviewNote: string | null;
+}
+
+const ADMIN_KYC_COLUMNS = {
+  id: true,
+  companyId: true,
+  kind: true,
+  status: true,
+  sha256: true,
+  mimeType: true,
+  originalFilename: true,
+  byteSize: true,
+  createdAt: true,
+  reviewedAt: true,
+  reviewNote: true,
+  reviewedByAdmin: { select: { username: true } },
+} as const;
+
+interface AdminKycRow {
+  id: string;
+  companyId: string;
+  kind: string;
+  status: string;
+  sha256: string;
+  mimeType: string;
+  originalFilename: string;
+  byteSize: number;
+  createdAt: Date;
+  reviewedAt: Date | null;
+  reviewNote: string | null;
+  reviewedByAdmin: { username: string } | null;
+}
+
+function toAdminKycDocument(row: AdminKycRow): AdminKycDocument {
+  return {
+    id: row.id,
+    companyId: row.companyId,
+    kind: row.kind,
+    status: row.status,
+    sha256: row.sha256,
+    mimeType: row.mimeType,
+    originalFilename: row.originalFilename,
+    byteSize: row.byteSize,
+    uploadedAt: row.createdAt,
+    reviewedAt: row.reviewedAt,
+    /* The operator's name, resolved here. The tenant never sees this column
+       and no tenant-facing query selects it. */
+    reviewedByUsername: row.reviewedByAdmin?.username ?? null,
+    reviewNote: row.reviewNote,
+  };
+}
+
+/** Every upload a company has ever made, newest first. */
+export async function listCompanyKycDocuments(
+  companyId: string,
+): Promise<AdminKycDocument[]> {
+  const rows = await adminPrisma.kycDocument.findMany({
+    where: { companyId },
+    orderBy: { createdAt: "desc" },
+    select: ADMIN_KYC_COLUMNS,
+  });
+
+  return rows.map((row) => toAdminKycDocument(row as AdminKycRow));
+}
+
+/** One upload by id, or null. Never the bytes. */
+export async function getKycDocument(
+  documentId: string,
+): Promise<AdminKycDocument | null> {
+  const row = await adminPrisma.kycDocument.findUnique({
+    where: { id: documentId },
+    select: ADMIN_KYC_COLUMNS,
+  });
+
+  return row ? toAdminKycDocument(row as AdminKycRow) : null;
+}
+
+/**
+ * Record a decision on one document.
+ *
+ * Scalars only - a status word, a note, the operator's id - so this stays a
+ * named query rather than a passthrough. The caller has already validated the
+ * status against a closed list.
+ *
+ * updateMany rather than update, with the status guarded in the where clause:
+ * two operators opening the same document and both clicking is an ordinary
+ * race, and this makes the second one a no-op it can be told about rather than
+ * a silent overwrite of the first verdict. Returns whether it landed.
+ */
+export async function decideKycDocument(input: {
+  documentId: string;
+  status: "APPROVED" | "REJECTED";
+  reviewNote: string | null;
+  adminUserId: string;
+  /* The status the operator was looking at when they decided. */
+  expectedStatus: string;
+}): Promise<boolean> {
+  const { count } = await adminPrisma.kycDocument.updateMany({
+    where: { id: input.documentId, status: input.expectedStatus as never },
+    data: {
+      status: input.status,
+      reviewNote: input.reviewNote,
+      reviewedByAdminId: input.adminUserId,
+      reviewedAt: new Date(),
+    },
+  });
+
+  return count === 1;
+}
+
+/**
+ * Permanently remove every document a company has filed.
+ *
+ * ---------------------------------------------------------------------------
+ * This is a DPDP requirement, not a convenience
+ * ---------------------------------------------------------------------------
+ *
+ * India's Digital Personal Data Protection Act gives a Data Principal the
+ * right to erasure, and obliges a Data Fiduciary to delete personal data once
+ * the purpose it was collected for is served. An Aadhaar card is about as
+ * squarely inside that as personal data gets.
+ *
+ * So a hard delete exists from the start rather than being added when somebody
+ * asks. The alternative is discovering, under a deadline, that the only way to
+ * honour a request is a hand-written statement against production - which is
+ * how the wrong company's documents get deleted.
+ *
+ * Hard, not soft. A deleted_at column would leave the bytes in the table, in
+ * every base backup taken afterwards, and in the WAL - which does not satisfy
+ * erasure and would be worse than useless: it would look like it did.
+ *
+ * Deliberately per company and never per document. Erasure is a request about
+ * a person's data, not about one file, and a per-document version would invite
+ * using it to tidy up a rejected upload - destroying the audit trail the
+ * append-only table exists to keep.
+ *
+ * Returns the number of rows removed so the caller can report it. The bytes
+ * are gone at that point; the audit row naming this operator is not.
+ */
+export async function deleteCompanyKycDocuments(
+  companyId: string,
+): Promise<number> {
+  const { count } = await adminPrisma.kycDocument.deleteMany({
+    where: { companyId },
+  });
+
+  return count;
+}
+
+/**
+ * 512 KiB, for the arithmetic packages/db/src/media-store.ts sets out in full.
+ */
+const KYC_CHUNK_BYTES = 512 * 1024;
+
+/**
+ * The bytes of one document, as a stream.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this is here and not a call into packages/db
+ * ---------------------------------------------------------------------------
+ *
+ * readKycDocument() reads under withCompany, which scopes to app_runtime and a
+ * company context. The panel has neither: an admin session belongs to no
+ * company, and reaching for a company id to open a tenant scope with would
+ * make an admin-client lookup a FOURTH origin for a trusted company id, beside
+ * the three CLAUDE.md names. That is a boundary change, and it is not one this
+ * feature needs - app_admin already has an explicit policy on the table.
+ *
+ * So the same statement, over the cross-company client. The chunking is not
+ * decoration: it is what keeps an operator opening a 5 MB scan from
+ * materialising it inside the request, and substring() over a bytea is a
+ * server-side slice only because the column is STORAGE EXTERNAL.
+ *
+ * Returns null when the id is unknown. The route answers 404 either way.
+ */
+export async function readKycDocumentBytes(
+  documentId: string,
+): Promise<ReadableStream<Uint8Array> | null> {
+  const meta = await adminPrisma.kycDocument.findUnique({
+    where: { id: documentId },
+    select: { byteSize: true },
+  });
+
+  if (!meta) return null;
+
+  const { byteSize } = meta;
+  let offset = 0;
+
+  /* Postgres substring is 1-based; offset is not. */
+  const readChunk = async (at: number, length: number) => {
+    const rows = await adminPrisma.$queryRaw<
+      Array<{ chunk: Uint8Array | null }>
+    >`SELECT substring(bytes from ${at + 1} for ${length}) AS chunk
+        FROM kyc_documents WHERE id = ${documentId}`;
+
+    return rows[0]?.chunk ?? null;
+  };
+
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        if (offset >= byteSize) {
+          controller.close();
+          return;
+        }
+
+        const chunk = await readChunk(
+          offset,
+          Math.min(KYC_CHUNK_BYTES, byteSize - offset),
+        );
+
+        /*
+         * The row vanished mid-stream - an erasure request running while an
+         * operator reads. The headers went out with the first chunk, so there
+         * is no status left to change: erroring breaks the transfer visibly
+         * rather than handing over a truncated PDF under a 200 that already
+         * promised Content-Length bytes.
+         */
+        if (!chunk || chunk.byteLength === 0) {
+          controller.error(
+            new Error(
+              `kyc document ${documentId} ended after ${offset} of ${byteSize} bytes`,
+            ),
+          );
+          return;
+        }
+
+        offset += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    },
+    /* Never read ahead: one read() is one chunk, and nothing is fetched for an
+       operator who has closed the tab. */
+    { highWaterMark: 0 },
+  );
+}

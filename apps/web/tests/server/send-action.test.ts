@@ -52,7 +52,28 @@ vi.mock("@whatsapp-os/db", () => ({
   /* The real one opens a transaction and passes a scoped client; the shape
      that matters to this test is that the callback receives (db, companyId). */
   withCompany: async (companyId: string, fn: (db: unknown, id: string) => unknown) =>
-    fn({ message: { create, update, findFirst } }, companyId),
+    fn(
+      {
+        message: { create, update, findFirst },
+        /* Active, so the gate below refuses on documents or not at all. */
+        company: { findFirst: async () => ({ deactivatedAt: null }) },
+      },
+      companyId,
+    ),
+  /*
+   * A verified workspace, because these are tests about the send path and A4
+   * put a gate in front of it. Without this every assertion here would pass or
+   * fail for the wrong reason - refused by KYC rather than by the window, the
+   * policy or the status ladder each one names.
+   *
+   * The gate's own refusal of this same action is asserted deliberately, in
+   * feature-gate.test.ts, against a company that has filed nothing.
+   */
+  currentKycStatuses: async () => ({
+    GST: "APPROVED",
+    PAN: "APPROVED",
+    AADHAAR: "APPROVED",
+  }),
   canSend: async () => sendability,
   advanceConversation,
 }));

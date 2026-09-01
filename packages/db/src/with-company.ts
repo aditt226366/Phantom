@@ -82,6 +82,11 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "FlowVersion",
   "FlowRun",
   "FlowRunStep",
+  "KnowledgeBase",
+  "KbDocument",
+  "KbChunk",
+  "VerseCampaign",
+  "VerseCampaignRecipient",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

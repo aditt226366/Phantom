@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import pg from "pg";
-import { TEST_DATABASE_NAME } from "./db-urls.mjs";
+import { TEST_DATABASE_NAME, superuserDatabaseUrl } from "./db-urls.mjs";
 
 /**
  * Rebuild a development database from nothing.
@@ -151,6 +151,11 @@ if (!NUKEABLE_DATABASES.has(targetName)) {
   process.exit(1);
 }
 
+/** Double-quote an identifier, doubling any embedded quotes. */
+function quoteIdent(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
 function withDatabase(connectionString, databaseName) {
   const url = new URL(connectionString);
   url.pathname = `/${databaseName}`;
@@ -159,7 +164,41 @@ function withDatabase(connectionString, databaseName) {
 
 console.log(`Rebuilding "${targetName}". Everything in it will be lost.`);
 
-const client = new pg.Client({ connectionString: targetUrl });
+/*
+ * The drop and recreate run as the SUPERUSER, not as whatsapp_owner.
+ *
+ * ---------------------------------------------------------------------------
+ * Why, and the fresh-volume failure that found it
+ * ---------------------------------------------------------------------------
+ *
+ * This connected as whatsapp_owner (DATABASE_URL) and ran DROP SCHEMA public.
+ * That works only while whatsapp_owner OWNS schema public, which is true on any
+ * database this script has already rebuilt once - a previous run's
+ * `CREATE SCHEMA public AUTHORIZATION whatsapp_owner` made it so.
+ *
+ * It is not true on a database initdb has just created. There, schema public is
+ * owned by pg_database_owner, and whatsapp_owner is not the database owner - so
+ * the very first nuke of a brand-new volume fails with
+ *
+ *     error: must be owner of schema public   (SQLSTATE 42501)
+ *
+ * The script that exists to rebuild a database from nothing could not run
+ * against a database that WAS nothing. It went unnoticed because the volume in
+ * this checkout had been through the cycle long before, and it surfaced the
+ * first time the Postgres image changed and the volume was re-initialised.
+ *
+ * The superuser is already required a few lines below, for db-roles.mjs, so
+ * this needs no new credential - only the right one.
+ *
+ * AUTHORIZATION names whatsapp_owner explicitly rather than current_user. Under
+ * the superuser connection current_user is the bootstrap superuser, and handing
+ * it schema public would leave the owner unable to create tables - which is the
+ * precise wedged state this whole script exists to undo.
+ */
+const ownerRole = new URL(declaredUrl).username;
+const superuserTargetUrl = withDatabase(superuserDatabaseUrl(), targetName);
+
+const client = new pg.Client({ connectionString: superuserTargetUrl });
 await client.connect();
 
 try {
@@ -174,13 +213,8 @@ try {
    */
   await client.query("DROP SCHEMA IF EXISTS public CASCADE");
 
-  /*
-   * AUTHORIZATION is explicit rather than implied by the connected role. Owning
-   * schema public is what lets whatsapp_owner create tables in it, and being
-   * vague about that here is the exact failure this script exists to undo.
-   */
-  await client.query(`CREATE SCHEMA public AUTHORIZATION ${rows[0].role}`);
-  console.log("  schema public recreated");
+  await client.query(`CREATE SCHEMA public AUTHORIZATION ${quoteIdent(ownerRole)}`);
+  console.log(`  schema public recreated, owned by ${ownerRole}`);
 } finally {
   await client.end();
 }

@@ -1,0 +1,30 @@
+-- 'VERSE': the third member of lead_sources.action, alone in its own migration.
+--
+-- ===========================================================================
+-- WHY THIS IS NOT IN THE MIGRATION THAT USES IT
+-- ===========================================================================
+--
+-- PostgreSQL will not let a new enum value be USED in the same transaction that
+-- added it:
+--
+--     ERROR:  unsafe use of new value "VERSE" of enum type lead_source_action
+--     HINT:   New enum values must be committed before they can be used.
+--
+-- The next migration replaces lead_sources_action_has_its_target with a CHECK
+-- that names 'VERSE', which is a use. So the ADD VALUE has to be committed
+-- first, and the only way to guarantee that is a separate migration file.
+--
+-- Worth recording, because the obvious objection is that Phase 8 did exactly
+-- this in one file and it applied: ALTER TYPE ... ADD VALUE 'FLOW' and a CHECK
+-- naming 'FLOW' are both in 20260906090000_flow_builder. Whatever let that
+-- through is a property of how that particular file was executed rather than a
+-- rule anybody can rely on - it failed here on the same pattern. Do not read
+-- the Phase 8 migration as a precedent; read this one.
+--
+-- The discriminated column itself is the thing being preserved. Phase 6 built
+-- `action` with one member and said it would gain another; Phase 8 added FLOW;
+-- this is the third. A binding keeps its sheet, its tab, its mapping, its
+-- cleaning, its cursor and its idempotency index, and only the last step
+-- changes - which is what makes the shape worth keeping.
+
+ALTER TYPE "lead_source_action" ADD VALUE 'VERSE';

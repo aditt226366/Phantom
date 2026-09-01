@@ -156,6 +156,48 @@ export const OUT_OF_BAND_DDL = new Set([
      one is a migration that fails rather than a binding that polls a sheet and
      does nothing with what it finds. */
   "check:lead_sources.lead_sources_action_has_its_target",
+  /* ---------------------------------------------------------------- */
+  /* Phase 9 - the Verse AI layer                                       */
+  /* ---------------------------------------------------------------- */
+  /* The driver and its instant agree, or the row does not exist. Modelled on
+     needs_human_at / needs_human_reason, which had the same problem: an
+     instant left behind by a release makes a released thread render as though
+     something had been holding it since Tuesday. */
+  "check:conversations.conversations_driver_has_its_instant",
+  /* A driver_ref with no driver is a dangling pointer that renders. */
+  "check:conversations.conversations_driver_ref_needs_a_driver",
+  /* A FAILED document must say why. This is the half that matters: a failed
+     row with a null reason is a dead end for whoever is looking at it, and
+     nothing else can make writing one impossible. */
+  "check:kb_documents.kb_documents_failure_has_a_reason",
+  /* A file carries a filename and a URL carries a URL, never both and never
+     neither - so the ingestion worker cannot be handed a row it has no way to
+     fetch. */
+  "check:kb_documents.kb_documents_kind_has_its_locator",
+  /* A skipped recipient must say why, for the same reason a failed document
+     must: "not sent" with no cause is the state people escalate. */
+  "check:verse_campaign_recipients.verse_campaign_recipients_skip_has_a_reason",
+  /* A campaign stopped by us - Meta rejected or paused the template - must
+     carry the sentence the operator will read, because nobody chose it and
+     resuming will not fix it. */
+  "check:verse_campaigns.verse_campaigns_stop_has_a_reason",
+  /* Both ends of the daily window or neither. A start with no end is a window
+     that never closes, which is the thing the window exists to prevent. */
+  "check:verse_campaigns.verse_campaigns_window_is_whole",
+  /* Inside one day, and start < end so it cannot wrap midnight. A wrapping
+     window IS a 2am window, and refusing to represent one is cheaper than
+     validating every read of it. */
+  "check:verse_campaigns.verse_campaigns_window_is_within_one_day",
+  /* A cap of zero is a campaign that never sends and reads as a bug. */
+  "check:verse_campaigns.verse_campaigns_daily_cap_is_positive",
+  /* The HNSW index behind retrieval.
+     schema.prisma cannot express an hnsw index, and it cannot index an
+     `Unsupported` column at all - so `prisma migrate diff` wants to DROP this
+     on every run, and migrate-test.mjs waives exactly that one statement. This
+     entry is the other half of that waiver: the drift check would go quiet if
+     the index were ever actually dropped, and this is what would fail
+     instead. Without it the pair is a hole rather than a mechanism. */
+  "index:kb_chunks.kb_chunks_embedding_hnsw_idx",
   /* Ten seconds to a day. Sheets meters reads per PROJECT, so a binding polling
      every second would consume the whole allowance and take every other
      tenant's bindings down with it. Mirrors POLL_INTERVAL_MIN/MAX_SECONDS. */
@@ -224,6 +266,61 @@ export const OUT_OF_BAND_DDL = new Set([
  * offset, which the ORM is self-consistent about and raw SQL is not - a bound
  * Date cast to ::timestamp lands out by the node process's UTC offset.
  */
+/**
+ * Drift `prisma migrate diff` will always report, because schema.prisma has no
+ * way to say the thing that is actually there.
+ *
+ * ---------------------------------------------------------------------------
+ * Why a waiver exists at all, given what this repository thinks of drift
+ * ---------------------------------------------------------------------------
+ *
+ * The conventions are blunt about this: a hand-written object that shows up on
+ * every `migrate diff` is "permanent drift, which is a check people learn to
+ * ignore". Phase 8 took that seriously enough to restructure a partial unique
+ * index into a nullable duplicate column so Prisma could express it.
+ *
+ * There is no such restructuring available for an HNSW index. Prisma cannot
+ * name the access method, and it cannot index an `Unsupported` column at all -
+ * and `kb_chunks.embedding` has to be `Unsupported`, because Prisma has no
+ * vector type. The alternatives were to drop the index (retrieval then reads
+ * every chunk in the tenant's base, which is survivable now and is not a
+ * decision to make silently) or to let every test run refuse, since
+ * migrate-test.mjs treats any drift as a stray object from a killed break.
+ *
+ * So: one waiver, stated as the EXACT statement Prisma emits, not a pattern.
+ * A second inexpressible object has to be added here deliberately, and any
+ * other drift still fails - including a change to this index, which would
+ * produce a different statement than the one below.
+ *
+ * This is only half a mechanism. A waiver that says "ignore the DROP" would
+ * also go quiet if the index were genuinely dropped, so OUT_OF_BAND_DDL
+ * carries `index:kb_chunks.kb_chunks_embedding_hnsw_idx` and fails when it is
+ * missing. Neither half is sufficient alone: this one permits the diff, that
+ * one proves the object is still there.
+ */
+export const PRISMA_INEXPRESSIBLE_DRIFT = new Map([
+  [
+    'DROP INDEX "kb_chunks_embedding_hnsw_idx";',
+    "the HNSW index behind Verse retrieval - see kb_chunks.embedding",
+  ],
+]);
+
+/**
+ * The statements in a `migrate diff --script` that this waiver does not cover.
+ *
+ * Comments and blank lines are dropped; everything else must match a waived
+ * statement exactly, after whitespace is collapsed. An empty result means the
+ * only differences are ones schema.prisma cannot express.
+ */
+export function unexplainedDrift(script) {
+  return script
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("--"))
+    .map((line) => line.replace(/\s+/g, " "))
+    .filter((line) => !PRISMA_INEXPRESSIBLE_DRIFT.has(line));
+}
+
 export const NAIVE_COLUMNS_ALLOWED = new Set([]);
 
 /** Prisma's own bookkeeping, which it owns and already stores as timestamptz. */
@@ -293,6 +390,27 @@ export async function checkOutOfBandDdl(client) {
        JOIN pg_class c ON c.oid = con.conrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND con.contype = 'x'
+     UNION ALL
+     /*
+      * Indexes on an access method schema.prisma has no word for.
+      *
+      * Prisma can express btree, hash, gist, gin, spgist and brin through its
+      * index type option. Anything else - hnsw and ivfflat arrive with
+      * pgvector - exists only in a migration, so it is exactly the kind of
+      * object this invariant is for: migrate diff wants to DROP it on every
+      * run, and if somebody lets it, nothing else would ever say so.
+      *
+      * Filtered by access method rather than by name, so a second vector index
+      * added later is a finding rather than something that needed foresight.
+      */
+     SELECT 'index:' || c.relname || '.' || i.relname
+       FROM pg_class i
+       JOIN pg_index x ON x.indexrelid = i.oid
+       JOIN pg_class c ON c.oid = x.indrelid
+       JOIN pg_namespace n ON n.oid = i.relnamespace
+       JOIN pg_am am ON am.oid = i.relam
+      WHERE n.nspname = 'public'
+        AND am.amname NOT IN ('btree', 'hash', 'gist', 'gin', 'spgist', 'brin')
      UNION ALL
      SELECT 'storage:' || c.relname || '.' || a.attname || '=' || a.attstorage::text
        FROM pg_attribute a

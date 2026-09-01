@@ -174,6 +174,35 @@ for (const database of managedDatabaseNames()) {
 
   try {
     /*
+     * pgvector, created HERE because a migration cannot create it.
+     *
+     * ---------------------------------------------------------------------
+     * Why this is not in the migration that needs it
+     * ---------------------------------------------------------------------
+     *
+     * Migrations run as whatsapp_owner, which is NOSUPERUSER by rule 1. The
+     * `vector` extension is not marked trusted in the pgvector image, so
+     * CREATE EXTENSION requires an actual superuser:
+     *
+     *     ERROR:  permission denied to create extension "vector"
+     *     HINT:   Must be superuser to create this extension.
+     *
+     * Putting it in the Phase 9 migration therefore produces a migration that
+     * cannot be applied by the role that applies migrations - and it fails on
+     * a FRESH database only, so it would pass locally for anybody whose
+     * extension already existed and fail for every new clone.
+     *
+     * This script is the one place that legitimately holds superuser, and it
+     * already runs at exactly the right moment: after the database exists and
+     * BEFORE `migrate deploy`, which is the ordering db-nuke.mjs documents at
+     * length. The same argument the default-privileges cleanup below makes.
+     *
+     * IF NOT EXISTS, so re-running is a no-op - this script is idempotent by
+     * contract and is run by db:setup, db:nuke and the test bootstrap.
+     */
+    await db.query("CREATE EXTENSION IF NOT EXISTS vector");
+
+    /*
      * app_resolver needs CREATE, not just USAGE: Postgres requires the *new*
      * owner of an object to hold CREATE on the schema containing it, so
      * `ALTER FUNCTION ... OWNER TO app_resolver` fails without it.

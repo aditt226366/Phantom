@@ -29,12 +29,17 @@ import { Prisma } from "./generated/prisma/client.ts";
  *
  * Everything else in this file goes through the query builder, and the time
  * bounds every one of them binds are computed in TypeScript rather than written
- * as `now()`. NOT for the planner reason usually given - `now()` is STABLE and
- * Postgres 17 estimates it exactly as well as a parameter, which
- * `npm run db:explain:dashboard` demonstrates by printing both plans. The
- * reasons are the platform day having no SQL form, the tests needing a fixed
- * instant, and `computed_at` having to exist outside the statement that used
- * it. See the header of @whatsapp-os/core/dashboard.
+ * as `now()`. NOT for the planner reason usually given: `now()` is STABLE, so
+ * Postgres 17 folds it while planning and estimates from the histogram exactly
+ * as it would a parameter. Measured identical at 50,000 AND at 200,000 rows -
+ * the second because a bad estimate only changes the chosen plan once the table
+ * is large enough - with a `clock_timestamp()` control proving the measurement
+ * can see the effect when it is genuinely there. `npm run db:explain:dashboard`
+ * prints all of it.
+ *
+ * The reasons are the platform day having no SQL form, the tests needing a
+ * fixed instant, and `computed_at` having to exist outside the statement that
+ * used it. See the header of @whatsapp-os/core/dashboard.
  */
 
 /* ------------------------------------------------------------------------- *
@@ -251,11 +256,11 @@ export interface ClosingWindow {
  * (company_id, window_expires_at) returning a handful of rows.
  *
  * It is a seek because of the index, not because of how the bounds are passed:
- * measured over 50,000 conversations, the bound-parameter form and the
- * `now()`-inline form produce an identical Index Scan on
- * (company_id, window_expires_at) with the same estimate. What would make it a
- * scan is dropping that index, and what would make the bounds untestable is
- * writing them inline - which is the reason they are arguments.
+ * measured at 50,000 AND 200,000 conversations, the bound-parameter form and
+ * the `now()`-inline form produce an identical Index Scan on
+ * (company_id, window_expires_at) with the same estimate at both scales. What
+ * would make it a scan is dropping that index, and what would make the bounds
+ * untestable is writing them inline - which is the reason they are arguments.
  *
  * `gt: now` and not `gte`: a window that expired a second ago is closed, and
  * listing it under "closing soon" sends somebody to a thread they cannot

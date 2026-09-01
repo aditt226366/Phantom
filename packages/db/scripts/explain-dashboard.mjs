@@ -44,7 +44,21 @@ import { testAppDatabaseUrl, testSuperuserDatabaseUrl } from "./db-urls.mjs";
  * the reason stays convincing a year from now.
  */
 
-const SEED_CONVERSATIONS = 50_000;
+/**
+ * How many conversations to seed. Overridable, because the answer depends on it.
+ *
+ *     npm run db:explain:dashboard              200,000 rows
+ *     npm run db:explain:dashboard -- 50000      50,000 rows
+ *
+ * The scale is a parameter and not a constant because a selectivity estimate
+ * only changes the CHOSEN PLAN once the table is large enough for the
+ * alternative to win. A bad estimate over a small table is still a bad
+ * estimate, and the planner takes the index anyway - so measuring at one size
+ * and concluding "this does not matter" is how this question goes in a circle.
+ *
+ * Both figures are recorded in docs/plans/phase-9.md with their row counts.
+ */
+const SEED_CONVERSATIONS = Number(process.argv[2] ?? 200_000);
 
 const superuser = new pg.Client({
   connectionString: testSuperuserDatabaseUrl(),
@@ -154,6 +168,91 @@ try {
       params: [now, horizon],
     },
     {
+      name: "closing windows — the count, now() inline",
+      sql: `SELECT count(*) FROM conversations
+             WHERE window_expires_at > now()
+               AND window_expires_at <= now() + interval '1 hour'`,
+      params: [],
+    },
+    /*
+     * The same predicate with no LIMIT and no aggregate, which is where a plan
+     * flip can actually appear.
+     *
+     * `ORDER BY ... LIMIT 6` biases enormously toward an index scan: the index
+     * already delivers the ordering, so the planner takes it almost regardless
+     * of how many rows it believes match. Measuring only that shape reports
+     * "no difference" even where the estimate is wildly wrong - which is
+     * exactly the trap this script exists to stop somebody falling into twice.
+     */
+    {
+      name: "the bare predicate, rows out — bound parameters",
+      sql: `SELECT id FROM conversations
+             WHERE window_expires_at > $1 AND window_expires_at <= $2`,
+      params: [now, horizon],
+    },
+    {
+      name: "the bare predicate, rows out — now() inline",
+      sql: `SELECT id FROM conversations
+             WHERE window_expires_at > now()
+               AND window_expires_at <= now() + interval '1 hour'`,
+      params: [],
+    },
+
+    /*
+     * ---------------------------------------------------------------------
+     * The discriminating pair, and the control beside it
+     * ---------------------------------------------------------------------
+     *
+     * The four cases above cannot actually settle the question, which is worth
+     * stating because it took a second pass to notice.
+     *
+     * At a 1% selective predicate an index scan is correct whether the planner
+     * estimated from the histogram (~2,000 rows at 200k) or fell back to
+     * DEFAULT_RANGE_INEQ_SEL (0.005, so ~1,000). Both estimates choose the same
+     * plan, so "the plans match" proves only that the question was not asked.
+     * That is the same failure as a break-once probe that does not fail.
+     *
+     * A WIDE window asks it properly. Twenty days covers the whole seeded
+     * spread, so the histogram says "nearly every row" and the planner must
+     * take a sequential scan; a default selectivity says ~0.5% and it would
+     * wrongly take the index. The two answers pick visibly different plans, so
+     * this pair CAN show a difference if one exists.
+     */
+    {
+      name: "wide window — bound parameters",
+      sql: `SELECT id FROM conversations
+             WHERE window_expires_at > $1 AND window_expires_at <= $2`,
+      params: [
+        new Date(now.getTime() - 10 * 86_400_000),
+        new Date(now.getTime() + 10 * 86_400_000),
+      ],
+    },
+    {
+      name: "wide window — now() inline",
+      sql: `SELECT id FROM conversations
+             WHERE window_expires_at > now() - interval '10 days'
+               AND window_expires_at <= now() + interval '10 days'`,
+      params: [],
+    },
+    /*
+     * The positive control. `clock_timestamp()` is genuinely VOLATILE - it can
+     * return a different value within one statement - so the planner cannot
+     * fold it and MUST fall back to a default.
+     *
+     * Without this the whole script is unfalsifiable: identical plans would be
+     * equally consistent with "now() is fine" and with "this measurement cannot
+     * see the difference". If this row shows a default-selectivity estimate
+     * while the two above show the histogram, the instrument works and the
+     * result about now() means something.
+     */
+    {
+      name: "wide window — clock_timestamp() (VOLATILE control)",
+      sql: `SELECT id FROM conversations
+             WHERE window_expires_at > clock_timestamp() - interval '10 days'
+               AND window_expires_at <= clock_timestamp() + interval '10 days'`,
+      params: [],
+    },
+    {
       name: "waiting for a human",
       sql: `SELECT id FROM conversations
              WHERE assigned_user_id IS NULL AND unread_count > 0
@@ -186,7 +285,24 @@ try {
       testCase.params,
     );
 
+    const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+
+    /*
+     * The scan type and the estimate are the two facts that settle this, so
+     * they are pulled onto one line. Two runs at two scales are then a
+     * comparison of a few lines rather than of sixteen plans.
+     */
+    const node = /(Seq Scan|Index Scan|Index Only Scan|Bitmap Heap Scan)/.exec(
+      plan,
+    );
+    const estimate = /rows=([0-9]+)[^)]*\) \(actual rows=([0-9]+)/.exec(plan);
+
     console.log(`\n── ${testCase.name}`);
+    if (node && estimate) {
+      console.log(
+        `   >> ${node[1]}, estimated ${estimate[1]}, actual ${estimate[2]}`,
+      );
+    }
     for (const row of rows) console.log(`   ${row["QUERY PLAN"]}`);
   }
 

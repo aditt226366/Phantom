@@ -1108,10 +1108,37 @@ is repeated everywhere and is **false for `now()`** on this database. A STABLE
 function's value is fixed for the duration of the statement, so it is evaluated
 while planning and the histogram answers normally.
 
-Measured on Postgres 17.11 over 50,000 seeded conversations: the bound-parameter
-form and the `now()`-inline form produce the SAME Index Scan with the same row
-estimate. `npm run db:explain:dashboard` prints both, side by side, as
-`app_runtime` with the company context set.
+Measured on Postgres 17.11 at **50,000 and again at 200,000** rows, because the
+usual rebuttal is a scale one and it is a fair rebuttal: a wrong estimate only
+changes the CHOSEN PLAN once the alternative can win, so a single measurement at
+one size settles nothing.
+
+| rows | predicate | bound param | `now()` inline |
+| --- | --- | --- | --- |
+| 50,000 | 1% window | 527 est / 540 actual | 527 / 540 |
+| 200,000 | 1% window | 1,929 / 2,100 | 1,929 / 2,100 |
+| 200,000 | 20-day window | 199,913 / 200,000 | 199,913 / 200,000 |
+
+Identical at every scale, and the estimate tracks the table rather than sitting
+at a constant - which is the histogram.
+
+**The script carries a positive control, and without it the whole thing is
+unfalsifiable.** At a 1%-selective predicate an index scan is correct whether
+the estimate came from the histogram (~2,000 rows at 200k) or from
+`DEFAULT_RANGE_INEQ_SEL` (0.005, so ~1,000): both choose the same plan, so
+matching plans would prove only that the question had not been asked. That is a
+break-once probe that does not fail.
+
+So `clock_timestamp()` - genuinely VOLATILE, unfoldable - runs the same 20-day
+window in the same run and estimates **22,221 against 200,000 actual**: 11.1%,
+which is `DEFAULT_RANGE_INEQ_SEL` for a paired inequality (0.3333^2), a ninefold
+underestimate. The instrument sees the effect. `now()` does not exhibit it.
+
+Two limits worth keeping: even the volatile control did not flip to a sequential
+scan on this table, so the "seq scan -> index scan" outcome was not reproduced
+at either scale; and none of this speaks to a different query, index or Postgres
+version. `npm run db:explain:dashboard` takes a row count (`-- 50000`), and runs
+as `app_runtime` with the company context set.
 
 That last part is not optional. **RLS rewrites the query** - `company_id =
 app_current_company()` is ANDed into every scan before the planner sees it - so

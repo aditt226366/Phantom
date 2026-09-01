@@ -8,19 +8,39 @@
  * Every windowed query on this page binds two instants that were computed in
  * TypeScript and passed as parameters. None of them says `now()`.
  *
- * The reason usually given for that is a planner one, and on this database it
- * is WRONG - which is worth writing down, because it is the kind of claim that
- * gets repeated for years. The story goes: a range predicate built from `now()`
- * cannot be estimated, so the planner guesses one row and skips the index.
+ * The reason usually given for that is a planner one, and for `now()` it is
+ * WRONG on this database - which is worth writing down carefully, because it is
+ * the kind of claim that gets repeated for years and it sent this file round in
+ * a circle once. The story goes: a range predicate built from `now()` cannot be
+ * estimated, so the planner falls back to a default, and once the table is big
+ * enough the bad estimate loses the index.
  *
- * It does not happen. `now()` is STABLE, not VOLATILE - its value is fixed for
- * the duration of a statement, so the planner evaluates it while planning and
- * estimates the range from the histogram exactly as it would a parameter.
- * Measured on Postgres 17.11 over 50,000 seeded conversations, the two forms
- * produce the SAME plan and the same row estimate:
- * `npm run db:explain:dashboard` prints both, side by side, so the next person
- * to wonder does not have to take this on trust. The rule still holds for a
- * genuinely volatile bound; `now()` is not one.
+ * The scale half of that is a real mechanism and the reason the measurement was
+ * repeated at 200,000 rows rather than trusted at 50,000: a wrong estimate only
+ * changes the CHOSEN PLAN once the alternative can win. But `now()` is STABLE,
+ * not VOLATILE - its value is fixed for the duration of a statement, so
+ * `estimate_expression_value()` folds it during planning and the histogram is
+ * consulted exactly as it would be for a bound parameter.
+ *
+ * Measured on Postgres 17.11, `npm run db:explain:dashboard`:
+ *
+ *   rows     predicate      bound param        now() inline
+ *   50,000   1% window      527 est / 540      527 est / 540
+ *   200,000  1% window      1,929 / 2,100      1,929 / 2,100
+ *   200,000  20-day window  199,913 / 200,000  199,913 / 200,000
+ *
+ * Identical at every scale, and the estimate tracks the table rather than
+ * sitting at a constant - which is the histogram.
+ *
+ * The script carries a POSITIVE CONTROL, without which none of the above would
+ * mean anything: `clock_timestamp()` is genuinely VOLATILE, and on the same
+ * 20-day window it estimates 22,221 against 200,000 actual. That is 11.1%,
+ * which is DEFAULT_RANGE_INEQ_SEL for a paired inequality (0.3333^2) - a nine-
+ * fold underestimate. So the measurement can see the effect when it is there;
+ * `now()` simply does not exhibit it.
+ *
+ * The rule therefore still holds, and holds sharply, for a genuinely volatile
+ * bound. `now()` is not one.
  *
  * What the bounds are actually for, and each of these is load-bearing:
  *

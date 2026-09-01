@@ -105,16 +105,53 @@ The brief asked for every windowed bound to be computed in TypeScript on the
 premise that an inline `now()` estimates `rows=1` and loses the index — 63x on
 the closing-windows query.
 
-**It does not reproduce.** `now()` is `STABLE`, not `VOLATILE`: its value is
-fixed for the duration of a statement, so the planner evaluates it while
-planning and estimates the range from the histogram exactly as it would a bound
-parameter. Measured on Postgres 17.11 over 50,000 seeded conversations, the two
-forms produce the *same* Index Scan on `(company_id, window_expires_at)` with
-the same row estimate.
+**It does not reproduce, at either scale.** `now()` is `STABLE`, not
+`VOLATILE`: its value is fixed for the duration of a statement, so
+`estimate_expression_value()` folds it during planning and the histogram is
+consulted exactly as it would be for a bound parameter.
 
-`npm run db:explain:dashboard` prints both plans side by side, as `app_runtime`
-with the company context set — RLS ANDs its predicate in before the planner sees
-the query, so a plan measured any other way is a plan for a different query.
+Measured on Postgres 17.11, `npm run db:explain:dashboard`:
+
+| rows | predicate | bound param | `now()` inline |
+| --- | --- | --- | --- |
+| 50,000 | 1% window | 527 est / 540 actual | 527 / 540 |
+| 200,000 | 1% window | 1,929 / 2,100 | 1,929 / 2,100 |
+| 200,000 | 20-day window | 199,913 / 200,000 | 199,913 / 200,000 |
+
+Identical at every scale, and the estimate tracks the table rather than sitting
+at a constant — which is what the histogram looks like.
+
+**The 200,000-row run happened because the first conclusion was not safe.** The
+scale mechanism is real: a wrong estimate only changes the *chosen plan* once
+the alternative can win, so measuring at 50,000 and declaring the question
+closed is exactly how it goes in a circle. Repeating it at 4× the rows was the
+right correction to demand.
+
+**And the first script could not have detected the effect anyway**, which is the
+more useful finding. At a 1%-selective predicate an index scan is correct
+whether the estimate came from the histogram (~2,000 rows) or from
+`DEFAULT_RANGE_INEQ_SEL` (0.005, so ~1,000). Both pick the same plan, so
+"the plans match" proved only that the question had not been asked — the same
+failure as a break-once probe that does not fail.
+
+So the script now carries a **positive control**. `clock_timestamp()` is
+genuinely `VOLATILE` and cannot be folded, and on the same 20-day window it
+estimates **22,221 against 200,000 actual**. That is 11.1%, which is
+`DEFAULT_RANGE_INEQ_SEL` for a paired inequality (0.3333²) — a ninefold
+underestimate, from the same script, on the same table, in the same run. The
+instrument can see the effect. `now()` does not exhibit it.
+
+Two honest limits on that. Even the volatile control did **not** flip to a
+sequential scan here — only its estimate was wrong — so the "seq scan → index
+scan" outcome was not reproduced at either scale on this table. And this says
+nothing about whatever the original 63× measurement actually ran: a different
+query, index, table shape or Postgres version could all behave differently, and
+none of that is recorded anywhere in the repository.
+
+`npm run db:explain:dashboard` runs as `app_runtime` with the company context
+set — RLS ANDs its predicate in before the planner sees the query, so a plan
+measured any other way is a plan for a different query. It takes a row count:
+`-- 50000` to reproduce the smaller figure.
 
 The bounds stay arguments anyway, for three reasons that are real:
 

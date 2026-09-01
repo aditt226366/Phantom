@@ -10,8 +10,17 @@ conversation nobody can find.
 
 Status: **A4 is done** — Phase 3 shipped and is tagged; see `phase-3.md`. A6 is
 in force and has been run against dev and test at every tag since. A1, A2, A3
-and A5 have not started. Phases 4a, 4b, 5 and 6 are complete; see `phase-4.md`,
-`phase-5.md` and `phase-6.md`.
+and A5 have not started. Phases 4a, 4b, 5, 6 and 9 are complete; see
+`phase-4.md`, `phase-5.md`, `phase-6.md` and `phase-9.md`.
+
+Phase 9 adds one obligation to A1, A2 and A3 that is cheap now and a backfill
+later. **The dashboard renders a card for every capability those phases bring**
+— AI handling, lead temperature, the cold-to-order pyramid, orders — each
+currently an honest empty state naming the section it arrives with, in
+`apps/web/lib/dashboard/pending.ts`. Landing one of those features means
+replacing its entry with a real card, and the page is laid out so that the space
+is already the right shape. A phase that ships the capability and leaves the
+card saying "arrives with" is one whose own dashboard denies it exists.
 
 One thing Phase 5 settled that A1 depends on: **bulk messaging did not create a
 second send path**, and the flow builder must not either. Every outbound message

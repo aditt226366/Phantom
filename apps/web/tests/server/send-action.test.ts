@@ -52,6 +52,26 @@ const advanceConversation = vi.fn();
    against a real database in packages/db. */
 const findFirstFlowRun = vi.fn(async () => null);
 const handOff = vi.fn();
+/*
+ * Nothing was driving this thread, which is the ordinary case for a
+ * conversation somebody is typing into by hand.
+ *
+ * Typed to the real signature rather than `async () => ...`: a zero-argument
+ * implementation types mock.calls as the empty tuple, which runs and fails
+ * `tsc`. The conventions record that one.
+ *
+ * The interesting driver cases - an operator displacing a flow, an automation
+ * refused a thread another automation holds - are asserted against a real
+ * database in packages/db/tests/conversation-driver.test.ts, because they are
+ * about a single UPDATE's WHERE clause and a mock would only restate them.
+ */
+const claimDriver = vi.fn(
+  async (_db: unknown, _companyId: string, _conversationId: string, _input: unknown) => ({
+    kind: "claimed" as const,
+    displaced: "NOBODY" as const,
+    displacedRef: null,
+  }),
+);
 
 vi.mock("@whatsapp-os/db", () => ({
   /* The real one opens a transaction and passes a scoped client; the shape
@@ -83,6 +103,7 @@ vi.mock("@whatsapp-os/db", () => ({
   canSend: async () => sendability,
   advanceConversation,
   handOff,
+  claimDriver,
 }));
 
 const { retryMessageAction, sendMessageAction } = await import(

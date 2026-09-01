@@ -659,3 +659,157 @@ export async function clearNeedsHuman(
     data: { needsHumanAt: null, needsHumanReason: null },
   });
 }
+
+/* ------------------------------------------------------------------------- *
+ * Who is driving this conversation
+ * ------------------------------------------------------------------------- */
+
+export type ConversationDriver = "NOBODY" | "OPERATOR" | "FLOW" | "VERSE";
+
+export type DriverClaim =
+  /** The claim succeeded. `displaced` is who was driving before. */
+  | { kind: "claimed"; displaced: ConversationDriver; displacedRef: string | null }
+  /**
+   * Another automation is already here, and this one will not push it aside.
+   *
+   * The whole point of the type. See below - an automation displacing another
+   * automation is the failure this column exists to make impossible.
+   */
+  | { kind: "refused"; heldBy: ConversationDriver; heldRef: string | null }
+  /** Not visible in this scope. Rule 6: it does not exist. */
+  | { kind: "gone" };
+
+/**
+ * Take over a conversation, or refuse to.
+ *
+ * ---------------------------------------------------------------------------
+ * The rule, and why it is not "last writer wins"
+ * ---------------------------------------------------------------------------
+ *
+ * A PERSON DISPLACES ANYTHING. AN AUTOMATION NEVER DISPLACES ANOTHER
+ * AUTOMATION.
+ *
+ * Both halves are load-bearing and they are asymmetric on purpose.
+ *
+ * The first half is what Phase 8 already established: an operator replying in a
+ * thread hands off any live flow run, because a person has read the
+ * conversation and decided to answer it. Nothing an automation is part-way
+ * through is worth more than that.
+ *
+ * The second half is new here, and it is the reason this is a column rather
+ * than a convention. A lead source enrolling somebody in a Verse campaign, on a
+ * conversation where a flow run is standing waiting for a button tap, is two
+ * automations writing into one thread on independent schedules. Whichever wrote
+ * last would "win" only in the sense of writing last: the other one is still
+ * live, still holds its position, and still speaks when its own timer or its
+ * own webhook says to. The customer sees a business asking them two unrelated
+ * questions and answering neither.
+ *
+ * Refusing is the correct outcome and not a limitation. A contact already in a
+ * conversation is not a good candidate for a cold campaign opener, so declining
+ * to enrol them loses nothing that was worth having - and the caller records
+ * the skip with its reason, which is a fact somebody can act on rather than a
+ * silent overwrite.
+ *
+ * ---------------------------------------------------------------------------
+ * One statement, because the read and the write cannot be separated
+ * ---------------------------------------------------------------------------
+ *
+ * Reading the driver, deciding in JavaScript and writing back is a
+ * read-modify-write with a gap in it, and this path genuinely has concurrent
+ * writers - a campaign worker and a webhook-driven flow advance can reach the
+ * same row at the same instant. Both would read NOBODY and both would claim.
+ *
+ * So the guard is in the WHERE clause, evaluated against one locked tuple, the
+ * same argument advanceConversation makes at greater length. The CTE reads the
+ * prior value under FOR UPDATE so the caller learns what it displaced - which
+ * the operator path needs, because displacing a FLOW means a run has to be
+ * handed off and displacing NOBODY does not.
+ *
+ * Re-claiming with the same driver and the same ref is idempotent and does NOT
+ * move driver_since: a campaign that sends a second message must not look like
+ * it arrived twice, and a queue sorted on that instant would reorder under it.
+ * The same reasoning as flagNeedsHuman's COALESCE.
+ */
+export async function claimDriver(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+  input: { driver: Exclude<ConversationDriver, "NOBODY">; ref: string | null; at: Date },
+): Promise<DriverClaim> {
+  const rows = await db.$queryRaw<
+    Array<{
+      prev: ConversationDriver;
+      prev_ref: string | null;
+      changed: boolean;
+    }>
+  >`
+    WITH locked AS (
+      SELECT id, driver AS prev, driver_ref AS prev_ref
+        FROM conversations
+       WHERE id = ${conversationId} AND company_id = ${companyId}
+       FOR UPDATE
+    ), updated AS (
+      UPDATE conversations c
+         SET driver = ${input.driver}::conversation_driver,
+             driver_since =
+               CASE WHEN c.driver = ${input.driver}::conversation_driver
+                     AND c.driver_ref IS NOT DISTINCT FROM ${input.ref}
+                    THEN c.driver_since
+                    ELSE ${input.at}
+               END,
+             driver_ref = ${input.ref},
+             updated_at = now()
+        FROM locked l
+       WHERE c.id = l.id
+         AND (
+           /* A person outranks every automation. */
+           ${input.driver}::conversation_driver = 'OPERATOR'
+           /* Nobody is here. */
+           OR l.prev = 'NOBODY'
+           /* Already ours: idempotent re-claim. */
+           OR (l.prev = ${input.driver}::conversation_driver
+               AND l.prev_ref IS NOT DISTINCT FROM ${input.ref})
+         )
+      RETURNING c.id
+    )
+    SELECT l.prev,
+           l.prev_ref,
+           EXISTS (SELECT 1 FROM updated) AS changed
+      FROM locked l
+  `;
+
+  const row = rows[0];
+  if (!row) return { kind: "gone" };
+
+  if (!row.changed) {
+    return { kind: "refused", heldBy: row.prev, heldRef: row.prev_ref };
+  }
+
+  return { kind: "claimed", displaced: row.prev, displacedRef: row.prev_ref };
+}
+
+/**
+ * Nobody is driving any more.
+ *
+ * Unconditional, and deliberately so: this is called when a run ends, a
+ * campaign finishes with a contact, or an operator closes a thread, and in
+ * every one of those the caller already knows it owns the conversation. A
+ * conditional release would leave a thread stuck under a driver that has gone
+ * away, which is worse than a release that was not strictly necessary.
+ *
+ * The query builder rather than raw SQL: there is no GREATEST, no COALESCE and
+ * no lock to take, and an unnecessary raw statement in an allowlisted file is
+ * exactly the drift that rule exists to stop. Both columns together, because
+ * the CHECK requires them to agree.
+ */
+export async function releaseDriver(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+): Promise<void> {
+  await db.conversation.updateMany({
+    where: { id: conversationId, companyId },
+    data: { driver: "NOBODY", driverSince: null, driverRef: null },
+  });
+}

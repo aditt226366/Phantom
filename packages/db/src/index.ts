@@ -33,10 +33,14 @@ export {
   markConversationRead,
   flagNeedsHuman,
   clearNeedsHuman,
+  claimDriver,
+  releaseDriver,
 } from "./conversations.ts";
 export type {
   Sendability,
   ConversationActivity,
+  ConversationDriver,
+  DriverClaim,
   ReadReceiptTarget,
   StatusOutcome,
   StatusUpdateInput,

@@ -121,6 +121,19 @@ export interface DashboardData {
   failures: FailureBreakdown;
   performance: DashboardPerformance | null;
   bySource: Array<{ source: string; count: number }>;
+  /**
+   * Lead temperature, and how much of the contact book has never been scored.
+   *
+   * The unscored count is carried BESIDE the map rather than folded into it as
+   * a fourth bucket, because the two answer different questions. "How warm are
+   * the leads we know about" is the chart; "how much of the book has been
+   * through a flow at all" is the caption, and a business with nine hot leads
+   * out of four thousand contacts should not read the first without the
+   * second.
+   */
+  leads: { byScore: Array<{ score: string; count: number }>; unscored: number } | null;
+  /** Conversations a flow handled at least one step of, and the total. */
+  automation: { automated: number; total: number } | null;
   spend: DashboardSpend | null;
   counts: DashboardCounts;
   closing: ClosingWindow[];
@@ -238,6 +251,9 @@ export async function loadDashboard(
         .sort((a, b) => b.count - a.count || a.source.localeCompare(b.source))
     : [];
 
+  const byScore = rollup ? countMap(rollup.contactsByScore) : {};
+  const scored = Object.values(byScore).reduce((sum, n) => sum + n, 0);
+
   return {
     windows,
     freshness: rollupFreshness(rollup?.computedAt, now),
@@ -247,6 +263,22 @@ export async function loadDashboard(
     failures: summariseFailures(countMap(rollup?.failuresByCode)),
     performance,
     bySource,
+    leads: rollup
+      ? {
+          /* HOT, WARM, COLD in that order, always - a distribution whose
+             buckets reorder themselves by size is one nobody can read twice. */
+          byScore: (["HOT", "WARM", "COLD"] as const)
+            .map((score) => ({ score, count: byScore[score] ?? 0 }))
+            .filter((entry) => entry.count > 0),
+          unscored: Math.max(0, rollup.contactsTotal - scored),
+        }
+      : null,
+    automation: rollup
+      ? {
+          automated: rollup.conversationsAutomated,
+          total: rollup.conversationsTotal,
+        }
+      : null,
     spend: rollup
       ? {
           perCurrency: currencySpend(microsMap(rollup.costByCurrency)),

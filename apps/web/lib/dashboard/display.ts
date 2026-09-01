@@ -275,3 +275,28 @@ export function sourceLabel(source: string): string {
       return source;
   }
 }
+
+/**
+ * What a lead temperature is called on the page.
+ *
+ * A function rather than a capitalise, because the stored values are ours and
+ * the wording is the tenant's - and because a badge choice with branches is
+ * the sort of thing a rendered-substring assertion cannot test. The same
+ * argument as sourceLabel above.
+ *
+ * A value this does not know is returned unchanged rather than hidden. The
+ * enum is ours, so a fourth member means a migration and a deploy, and a chart
+ * silently dropping a segment is worse than one showing an unfamiliar word.
+ */
+export function leadScoreLabel(score: string): string {
+  switch (score) {
+    case "HOT":
+      return "Hot";
+    case "WARM":
+      return "Warm";
+    case "COLD":
+      return "Cold";
+    default:
+      return score;
+  }
+}

@@ -8,10 +8,18 @@ Written down before the affected phases start, so that the code which depends on
 them — schema shapes, sequencing, what blocks what — is not re-derived from a
 conversation nobody can find.
 
-Status: **A4 is done** — Phase 3 shipped and is tagged; see `phase-3.md`. A6 is
-in force and has been run against dev and test at every tag since. A1, A2, A3
-and A5 have not started. Phases 4a, 4b, 5, 6 and 9 are complete; see
-`phase-4.md`, `phase-5.md`, `phase-6.md` and `phase-9.md`.
+Status: **A4 and A1 are done.** Phase 3 shipped and is tagged (`phase-3.md`);
+the flow builder shipped and is tagged `flow-builder-runtime` and
+`flow-builder` (`flow-builder.md`). A6 is in force and has been run against dev
+and test at every tag since. A2, A3 and A5 have not started. Phases 4a, 4b, 5,
+6 and 9 are complete; see `phase-4.md`, `phase-5.md`, `phase-6.md` and
+`phase-9.md`.
+
+The flow builder is tagged by NAME rather than by number, and deliberately.
+Phase 7 is already conversation pricing in `phase-5.md` and Phase 9 is the
+dashboard, so there is no free number — and this document says below that the
+numbering needs one deliberate pass rather than an edit per amendment. Claiming
+a number here would be the thing this document asks nobody to do.
 
 Phase 9 adds one obligation to A1, A2 and A3 that is cheap now and a backfill
 later. **The dashboard renders a card for every capability those phases bring**
@@ -21,6 +29,12 @@ currently an honest empty state naming the section it arrives with, in
 replacing its entry with a real card, and the page is laid out so that the space
 is already the right shape. A phase that ships the capability and leaves the
 card saying "arrives with" is one whose own dashboard denies it exists.
+
+Both obligations below were met, and `flow-builder.md` records how. The
+dashboard one turned out to have a second half nobody had written down: a
+pending card is a claim, so a phase must also **check the copy of the cards it
+does not replace**. `aiHandling` said "Nothing here is automated yet", which
+became false the moment a flow was published.
 
 One thing Phase 5 settled that A1 depends on: **bulk messaging did not create a
 second send path**, and the flow builder must not either. Every outbound message
@@ -110,6 +124,16 @@ state, and the button-routing above. That is comparable in size to the AI layer,
 not a feature within another phase, and it **ships before the AI layer** — the
 deterministic engine is the thing the AI layer would otherwise be asked to
 improvise, and building it second would mean building it twice.
+
+**Shipped**, in two tags split at the runtime/UI line. One thing this amendment
+called for did not survive contact: the builder is a structured node list, not
+a canvas. A canvas is a dependency, an interaction model and a mobile problem
+for a v1 whose whole job is to express a tree, and this design system has no
+canvas primitives — no node, no edge, no viewport, no pan. Every node names
+where each branch goes, by the name of the node it goes to, in a select that
+cannot point at a node that does not exist. What a canvas adds over that is
+spatial memory, which matters at fifty nodes and not at eight — and eight is
+what three reply buttons per question produces. See `flow-builder.md`.
 
 ---
 

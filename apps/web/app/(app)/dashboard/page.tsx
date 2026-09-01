@@ -5,6 +5,7 @@ import { FeatureBlocked } from "@/components/brand/feature-blocked";
 import { loadDashboard } from "@/lib/dashboard/data";
 import {
   freshnessLabel,
+  leadScoreLabel,
   sourceLabel,
   staleDayNotice,
 } from "@/lib/dashboard/display";
@@ -113,6 +114,21 @@ export default async function DashboardPage() {
   const sourceSegments: Segment[] = data.bySource.map((entry) => ({
     key: entry.source,
     label: sourceLabel(entry.source),
+    value: entry.count,
+  }));
+
+  /*
+   * Hot, warm, cold - and never a fourth "unscored" segment.
+   *
+   * Unscored contacts are reported in the caption instead. Folding them in
+   * would make the ring a picture of the contact book rather than of the leads
+   * in it, and the two questions have different answers: nine hot leads out of
+   * twelve scored is a good week, and nine out of four thousand contacts is
+   * not the same sentence.
+   */
+  const leadSegments: Segment[] = (data.leads?.byScore ?? []).map((entry) => ({
+    key: entry.score,
+    label: leadScoreLabel(entry.score),
     value: entry.count,
   }));
 
@@ -269,7 +285,37 @@ export default async function DashboardPage() {
             )}
           </PanelCard>
 
-          <NotYetCard card={PENDING["aiHandling"]!} />
+          <PanelCard title="Who is handling chats">
+            {data.automation && data.automation.total > 0 ? (
+              <>
+                <RateBars
+                  rows={[
+                    {
+                      key: "automated",
+                      label: "Answered by a flow",
+                      percent:
+                        (data.automation.automated / data.automation.total) * 100,
+                      /* The denominator, printed. Phase 9's rule about the
+                         reply rate applies here for the same reason: an
+                         unlabelled proportion reads as though it shared the
+                         one above it, and this one does not. */
+                      detail: `${data.automation.automated} of ${data.automation.total} conversations`,
+                    },
+                  ]}
+                />
+                <p className="mt-xs text-caption text-muted">
+                  Counted from conversations a flow actually stood in, not from
+                  threads nobody picked up.
+                </p>
+              </>
+            ) : (
+              <p className="text-body-sm text-body">
+                No conversation has been through a flow yet. Publish one in
+                Template Messaging and this shows how much of the work it took
+                on.
+              </p>
+            )}
+          </PanelCard>
         </div>
       </section>
 
@@ -324,7 +370,23 @@ export default async function DashboardPage() {
         <BandHeading title="Leads" />
 
         <div className="grid grid-cols-1 gap-base desktop:grid-cols-2">
-          <NotYetCard card={PENDING["leadScores"]!} />
+          <PanelCard title="Lead temperature">
+            {leadSegments.length === 0 ? (
+              <p className="text-body-sm text-body">
+                Nothing has scored a contact yet. A flow&rsquo;s action step
+                sets this from an answer somebody actually gave.
+              </p>
+            ) : (
+              <Donut
+                segments={leadSegments}
+                caption={
+                  data.leads && data.leads.unscored > 0
+                    ? `${data.leads.unscored} more contacts have never been scored, which is not the same as cold.`
+                    : "Set by a flow's action step, from an answer somebody actually tapped."
+                }
+              />
+            )}
+          </PanelCard>
           <NotYetCard card={PENDING["leadPyramid"]!} />
         </div>
       </section>

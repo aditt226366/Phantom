@@ -1207,3 +1207,105 @@ newline.** `--find 'a\nb'` works; an actual line break inside the quoted argumen
 matches nothing and is reported as "the break did not land". PowerShell 5.1 also
 drops an empty `--replace ''`, so widen a guard rather than deleting a line when
 proving one.
+
+**A button id is the one value in this system that cannot be migrated.** A
+WhatsApp button never expires in the chat: a customer scrolls up three days,
+taps one, and the payload that arrives is the string we wrote — unchanged, with
+no way to invalidate it and no way to ask Meta what it used to mean.
+
+So `packages/core/src/flows/button-id.ts` carries a **scheme tag** (`f1`) that
+is checked before anything else, and the second scheme cannot be a *change* to
+the first. It has to be a new prefix that the old decoder rejects and the new
+one recognises alongside `f1`. That is the only migration available for a value
+we cannot reach, which is why the tag is there from the start rather than added
+when it is first needed.
+
+Two shapes, and the split is not cosmetic. `f1.r.<run>.<node>.<choice>` is a
+reply inside a running flow; `f1.e.<version>.<node>` is an entry point, because
+a tap on an approved template's quick reply is what *creates* a run and there is
+none to name yet. Creating one per recipient of a ten-thousand-person broadcast
+— most of whom never tap — is the alternative, and it is worse.
+
+Parsing is **total**, and `not_ours` is a separate answer from `malformed`. A
+customer with two vendors in their WhatsApp taps somebody else's button and it
+lands in our webhook; counting that as an error turns a flow's decline count
+into a count of other people's buttons.
+
+**A flow run whose window shuts PAUSES with its position kept, and a CHECK
+enforces it.** `(status IN ('ACTIVE','PAUSED')) = (current_node_id IS NOT NULL)`.
+A paused row with no position has lost the only thing pausing exists to keep,
+and nothing downstream reports it — the resume simply starts from the top and
+the customer answers the same three questions twice.
+
+The window is checked in **two** places and they are not redundant. The
+executor checks before emitting sends, which is the difference between pausing
+and queueing four messages Meta refuses one at a time. The send path checks
+immediately before the Graph call, which is the boundary — the window can close
+between a step being planned and the queue reaching it — and its `window_closed`
+decline pauses the run, or the run sits ACTIVE for ever beside a thread of
+POLICY failures.
+
+**A partial unique index has a form Prisma can express, and it is a nullable
+duplicate column.** "One live run per conversation, but any number of finished
+ones" is `UNIQUE (company_id, conversation_id) WHERE status IN (…)`, which
+`schema.prisma` cannot say — and a hand-written one is permanent drift on every
+`migrate diff`, which is a check people learn to ignore.
+
+`flow_runs.active_conversation_id` duplicates `conversation_id` while the run is
+live and is NULL once it is not, so an ordinary unique index does the work. Same
+NULL-distinct property that lets `messages.wamid` be unique while many pending
+sends carry none.
+
+**Two CHECKs are what make it mean anything**, and the first is not optional: a
+live run carrying NULL there slips a second live run straight past the index —
+the exact failure the column exists to prevent, now invisible. The second stops
+the duplicate naming somebody else's conversation. Break-once on the first fails
+its assertion; the DDL is restored by `npm run db:nuke -- test`, never by hand.
+
+**Append-only is a revoked grant, not a convention.** `flow_run_steps` is the
+only record of what a customer was actually asked and what they answered, and a
+row that can be updated is a record the party to a dispute can tidy. `app_runtime`
+holds neither UPDATE nor DELETE on it.
+
+A policy cannot do this. RLS narrows which *rows* a role may touch within the
+privileges a GRANT already gives it, so it cannot subtract UPDATE from a role
+that holds it. Both halves are required and this is the grant half.
+
+The waiver is `APPEND_ONLY_TABLES` in `schema-invariants.test.ts`, and it
+**inverts** the CRUD assertion rather than skipping it — the two privileges must
+be ABSENT — so a later migration handing UPDATE back is a failing security test.
+`app_admin` keeps both, because DPDP erasure is discharged through the audited
+admin space.
+
+**A ceiling test must bracket the number, not assert that the loop stops.**
+Break-once multiplied `MAX_STEPS_PER_ADVANCE` by a million and the suite stayed
+green — and the test was weak rather than the break unobservable. A runaway loop
+is refused by *any* finite ceiling, so "it terminates" proves only termination.
+What being wrong costs is not an infinite loop; it is an effects array with a
+million entries in it before anything gives up.
+
+The fix is two assertions: a chain one node longer than the ceiling is refused,
+and one exactly at it completes. The general form — **when a constant is the
+guard, assert the constant from both sides.** A single-sided assertion passes for
+every value above the real one.
+
+**A pending dashboard card is a claim, and claims expire.** Phase 9's
+`aiHandling` card said "Nothing here is automated yet, so every reply so far was
+written by your team." Correct when written, and a false statement about the
+tenant's own business the moment a flow was published — on a page whose every
+other figure is true.
+
+So the obligation in `spec-amendments.md` is not only "replace the card you make
+real". It is also: **check the copy of the cards you do not**, because one of
+them may be describing a world your phase has just ended. The flow builder made
+two of the four real and had to reword a third that named a section which could
+not deliver it.
+
+**Two writers on one conversation is a real failure, and the inbox is one of
+them.** A flow run standing in a thread waits for a tap. An operator answering
+in their own words, followed by the customer tapping the button still sitting
+above it, is a flow asking its next question over the top of a conversation a
+person is now having — neither side aware of the other, and only the customer
+able to see both. Sending from the inbox hands off any live run for that
+conversation. Anything else that starts writing into a thread inherits the same
+obligation.

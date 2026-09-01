@@ -2246,6 +2246,21 @@ model DashboardRollup {
   contactsTotal    Int @default(0) @map("contacts_total")
   contactsNewToday Int @default(0) @map("contacts_new_today")
 
+  /// Contacts by lead temperature, as {"HOT": 12, "WARM": 30}.
+  ///
+  /// Contacts with no score are ABSENT rather than counted under a fourth key.
+  /// Unscored is not COLD, and a business whose contacts have never been
+  /// through a flow would otherwise read as one whose customers are all
+  /// uninterested - the same false number pending.ts exists to prevent.
+  contactsByScore Json @default("{}") @map("contacts_by_score")
+
+  /// Conversations a flow has handled at least one step of.
+  ///
+  /// From flow_runs, never inferred from an absent assignee. Phase 9 refused
+  /// that proxy for the AI card because it counts every untouched thread as an
+  /// automation success; the same objection applies here and the same answer.
+  conversationsAutomated Int @default(0) @map("conversations_automated")
+
   /// Spend since monthStart, per currency, in micros held as strings. A map
   /// rather than a total because there is no exchange rate in this system;
   /// strings because jsonb numbers are doubles and cost_micros is a bigint.

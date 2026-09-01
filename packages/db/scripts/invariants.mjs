@@ -205,6 +205,11 @@ export const OUT_OF_BAND_DDL = new Set([
   "check:flow_runs.flow_runs_ended_when_finished",
   "check:flow_runs.flow_runs_step_count_non_negative",
   "check:flow_run_steps.flow_run_steps_seq_positive",
+  /* A thread a flow handled is still a thread. The card renders automated as a
+     proportion of all conversations, so a count above the total draws a bar off
+     the end of its track - which looks like a CSS bug and gets chased in the
+     wrong file. */
+  "check:dashboard_rollups.dashboard_rollups_automated_within_total",
 ]);
 
 /**

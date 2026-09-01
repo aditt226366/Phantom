@@ -144,6 +144,34 @@ export async function refreshDashboardRollup(
       FROM contacts
     ),
     /*
+     * Lead temperature, and the WHERE is the whole of it.
+     *
+     * Contacts with no score are excluded rather than grouped under a null
+     * key. Unscored is not COLD - it means nothing has scored them - and a map
+     * carrying a fourth bucket would be summed into the total by the first
+     * component written in a hurry.
+     */
+    score AS (
+      SELECT coalesce(jsonb_object_agg(score, n), '{}'::jsonb) AS by_score
+      FROM (
+        SELECT lead_score::text AS score, count(*)::int AS n
+        FROM contacts
+        WHERE lead_score IS NOT NULL
+        GROUP BY 1
+      ) grouped
+    ),
+    /*
+     * Threads a flow actually stood in.
+     *
+     * DISTINCT over flow_runs rather than a count of runs: a customer who came
+     * back next month has two runs in one conversation, and counting runs
+     * would report more automated threads than the tenant has threads. The
+     * CHECK in 20260906120000 refuses that outright.
+     */
+    automated AS (
+      SELECT count(DISTINCT conversation_id)::int AS n FROM flow_runs
+    ),
+    /*
      * Spend since the first of the month, per currency, as text.
      *
      * to_jsonb over the sum would write a JSON number, and cost_micros is a
@@ -176,7 +204,8 @@ export async function refreshDashboardRollup(
       failures_by_code,
       conversations_total, conversations_new_today,
       conversations_messaged, conversations_replied, conversations_by_source,
-      contacts_total, contacts_new_today,
+      contacts_total, contacts_new_today, contacts_by_score,
+      conversations_automated,
       cost_by_currency, cost_unpriced_count
     )
     SELECT
@@ -187,9 +216,11 @@ export async function refreshDashboardRollup(
       fail.by_code,
       conv.total, conv.new_today,
       threads.messaged, threads.replied, conv_source.by_source,
-      contact.total, contact.new_today,
+      contact.total, contact.new_today, score.by_score,
+      automated.n,
       cost.by_currency, unpriced.n
-    FROM msg, fail, threads, conv, conv_source, contact, cost, unpriced
+    FROM msg, fail, threads, conv, conv_source, contact, score, automated,
+         cost, unpriced
     ON CONFLICT (company_id) DO UPDATE SET
       computed_at             = EXCLUDED.computed_at,
       day_start               = EXCLUDED.day_start,
@@ -212,6 +243,8 @@ export async function refreshDashboardRollup(
       conversations_by_source = EXCLUDED.conversations_by_source,
       contacts_total          = EXCLUDED.contacts_total,
       contacts_new_today      = EXCLUDED.contacts_new_today,
+      contacts_by_score       = EXCLUDED.contacts_by_score,
+      conversations_automated = EXCLUDED.conversations_automated,
       cost_by_currency        = EXCLUDED.cost_by_currency,
       cost_unpriced_count     = EXCLUDED.cost_unpriced_count
   `;

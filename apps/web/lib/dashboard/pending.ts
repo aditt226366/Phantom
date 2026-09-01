@@ -48,39 +48,44 @@ export interface PendingCard {
 
 export const PENDING: Record<string, PendingCard> = {
   /**
-   * The AI-vs-human split.
+   * REMOVED, not softened: aiHandling and leadScores.
    *
-   * Nothing in the schema records an AI handling a conversation, because
-   * nothing does. conversations.assigned_user_id says which PERSON picked a
-   * thread up, and reading "unassigned" as "handled by AI" would be the exact
-   * false number this file exists to avoid - every untouched thread would count
-   * as an AI success.
+   * Both were replaced by real cards when the flow builder landed - see the
+   * dashboard page. They are recorded here rather than deleted silently
+   * because the reason is the rule this file exists for, seen from the other
+   * side.
+   *
+   * aiHandling's copy said "Nothing here is automated yet, so every reply so
+   * far was written by your team." That was true when it was written and
+   * becomes a false statement about the tenant's own business the moment a
+   * flow is published - on a page whose every other figure is true, which is
+   * the worst possible place to put one. A pending card is not a placeholder
+   * that can be left; it is a claim, and it expires.
+   *
+   * leadScores said the score came "from what a customer actually said rather
+   * than from how recently they wrote". A flow's action node scores on a
+   * button somebody tapped, which is a narrower and more honest claim than the
+   * one that card made - so the real card says what it actually measures
+   * rather than inheriting the promise.
    */
-  aiHandling: {
-    title: "Who is handling chats",
-    description:
-      "The split between conversations Verse answered and ones a person took over. Nothing here is automated yet, so every reply so far was written by your team.",
-    arrivesWith: "AI Messaging",
-  },
 
   /**
-   * Lead scoring - the hot/warm/cold split and the pyramid.
+   * The funnel, and it is still pending because its last step does not exist.
    *
-   * One entry for both, because they are two renderings of one absent column.
-   * Splitting them would put two different sentences in front of the same gap.
+   * Contacts, conversations and qualified leads are all real now - a flow's
+   * action node is what qualifies one. Orders are not, so a pyramid drawn
+   * today would have three real tiers and a fourth that is always zero, which
+   * reads as a business nobody buys from.
+   *
+   * The section it names has moved for the same reason: what this waits on is
+   * order tracking, not the AI layer. Naming AI Messaging would have this card
+   * arrive with a phase that cannot deliver it.
    */
-  leadScores: {
-    title: "Lead temperature",
-    description:
-      "Hot, warm and cold, scored from what a customer actually said rather than from how recently they wrote.",
-    arrivesWith: "AI Messaging",
-  },
-
   leadPyramid: {
     title: "From first contact to order",
     description:
-      "How many contacts became conversations, conversations became qualified leads, and leads became orders.",
-    arrivesWith: "AI Messaging",
+      "How many contacts became conversations, conversations became qualified leads, and leads became orders. The first three are counted now; nothing yet records an order.",
+    arrivesWith: null,
   },
 
   /**

@@ -554,6 +554,111 @@ describe("the upsert", () => {
     }
   });
 
+  it("counts lead temperature, and never counts unscored as cold", async () => {
+    /*
+     * The distinction the whole card rests on. A contact nothing has scored is
+     * absent from the map rather than counted under a fourth key: unscored
+     * means no flow has ever asked them anything, and reporting it as COLD
+     * would tell a business its entire contact book was uninterested.
+     */
+    await seedThread(company, "hot", [{ direction: "INBOUND" }]);
+    await seedThread(company, "unscored", [{ direction: "INBOUND" }]);
+
+    const contacts = await withCompany(company.id, (db) =>
+      db.contact.findMany({ orderBy: { waId: "asc" }, select: { id: true } }),
+    );
+
+    await withCompany(company.id, (db) =>
+      db.contact.update({
+        where: { id: contacts[0]!.id },
+        data: { leadScore: "HOT", leadScoreAt: new Date() },
+      }),
+    );
+
+    await refresh();
+    const rollup = await read();
+
+    expect(countMap(rollup.contactsByScore)).toEqual({ HOT: 1 });
+    /* Two contacts, one scored. The card prints the difference as a caption. */
+    expect(rollup.contactsTotal).toBe(2);
+  });
+
+  it("counts a conversation a flow stood in, once, however many runs it held", async () => {
+    /*
+     * DISTINCT over flow_runs rather than a count of them. A customer who came
+     * back next month has two runs in one conversation, and counting runs
+     * would report more automated threads than the tenant has threads - which
+     * the CHECK in 20260906120000 refuses outright rather than rendering as a
+     * bar drawn off the end of its track.
+     */
+    const conversationId = await seedThread(company, "automated", [
+      { direction: "INBOUND" },
+    ]);
+
+    await withCompany(company.id, async (db, companyId) => {
+      const conversation = await db.conversation.findFirstOrThrow({
+        where: { id: conversationId },
+        select: { id: true, contactId: true, whatsappNumberId: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: (
+            await db.integration.findFirstOrThrow({ select: { id: true } })
+          ).id,
+          name: "flow_entry",
+          language: "en_US",
+          category: "MARKETING",
+          status: "APPROVED",
+          components: [{ type: "BODY", text: "Hello" }],
+        },
+        select: { id: true },
+      });
+
+      const flow = await db.flow.create({
+        data: { companyId, name: "Enquiry" },
+        select: { id: true },
+      });
+
+      const version = await db.flowVersion.create({
+        data: {
+          companyId,
+          flowId: flow.id,
+          version: 1,
+          entryTemplateId: template.id,
+          graph: { entryNodeId: "start", nodes: [] },
+        },
+        select: { id: true },
+      });
+
+      /* Two runs, one conversation: the customer came back. */
+      for (const seq of [1, 2]) {
+        await db.flowRun.create({
+          data: {
+            companyId,
+            flowId: flow.id,
+            flowVersionId: version.id,
+            conversationId: conversation.id,
+            contactId: conversation.contactId,
+            status: "COMPLETED",
+            currentNodeId: null,
+            activeConversationId: null,
+            endedAt: new Date(Date.now() + seq),
+          },
+        });
+      }
+    });
+
+    await refresh();
+    const rollup = await read();
+
+    expect(rollup.conversationsAutomated).toBe(1);
+    expect(rollup.conversationsAutomated).toBeLessThanOrEqual(
+      rollup.conversationsTotal,
+    );
+  });
+
   it("is empty and honest for a company with no traffic at all", async () => {
     await refresh();
     const rollup = await read();
@@ -561,6 +666,8 @@ describe("the upsert", () => {
     expect(rollup.messagesTotal).toBe(0);
     expect(countMap(rollup.failuresByCode)).toEqual({});
     expect(microsMap(rollup.costByCurrency)).toEqual({});
+    expect(countMap(rollup.contactsByScore)).toEqual({});
+    expect(rollup.conversationsAutomated).toBe(0);
     /* A row that exists and says zero is a different claim from no row at all,
        and the page renders them differently. */
     expect(rollup.computedAt.toISOString()).toBe(COMPUTED_AT.toISOString());

@@ -132,6 +132,28 @@ export type {
   ResolvedAudience,
   RunState,
 } from "./broadcasts.ts";
+export {
+  refreshDashboardRollup,
+  readDashboardRollup,
+  closingWindows,
+  countClosingWindows,
+  waitingForAHuman,
+  countWaitingForAHuman,
+  recentThreads,
+  numberHealth,
+  pendingTemplates,
+  countPendingTemplates,
+  countMap,
+  microsMap,
+  DASHBOARD_LIST_LIMIT,
+} from "./dashboard.ts";
+export type {
+  ClosingWindow,
+  WaitingThread,
+  RecentThread,
+  NumberHealth,
+  PendingTemplate,
+} from "./dashboard.ts";
 export { resealCompanySecrets } from "./vault.ts";
 export type { ResealCounts, ResealFailure } from "./vault.ts";
 export type { RecordUsageInput, RecordedUsage } from "./usage.ts";
@@ -160,6 +182,7 @@ export type {
   BroadcastRecipient,
   LeadSource,
   LeadSourceRow,
+  DashboardRollup,
   LoginAttempt,
   AdminUser,
   AdminSession,

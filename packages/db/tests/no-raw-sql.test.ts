@@ -82,6 +82,16 @@ const RAW_SQL_ALLOWED = new Map<string, string>([
       "table name would be a far worse shape than a second literal one: a raw " +
       "SQL site whose target comes from its caller.",
   ],
+  [
+    "dashboard.ts",
+    "one statement with FILTER clauses, where the query builder needs " +
+      "nineteen. Nineteen round trips is nineteen passes over messages - the " +
+      "table this phase exists to stop scanning - and they do not see one " +
+      "snapshot, so the computed_at stamped over them would be a claim none " +
+      "of the figures individually supports. FILTER and jsonb_object_agg " +
+      "have no query-builder form; the CHECK constraints in 20260905090000 " +
+      "assert the partitions rather than trusting them.",
+  ],
 ]);
 
 /*

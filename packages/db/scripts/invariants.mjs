@@ -166,6 +166,21 @@ export const OUT_OF_BAND_DDL = new Set([
      reason nor a message - which renders as a blank cell in the report
      somebody is reading to find out why a customer was never contacted. */
   "check:lead_source_rows.lead_source_rows_state_matches_reason",
+  /* A rollup counts things that happened. A subtraction going the wrong way
+     renders as a bar drawn off the left of its track, which looks like a CSS
+     bug and gets chased in the wrong file. */
+  "check:dashboard_rollups.dashboard_rollups_counts_non_negative",
+  /* The two partitions the delivery chart is presented as. The breakdown claims
+     to account for every outbound message exactly once, so a FILTER clause that
+     overlaps or misses a status makes the chart quietly not add up - and one
+     statement computing all seven is the only thing that would ever notice.
+     These are what makes the claim structural instead of a comment. */
+  "check:dashboard_rollups.dashboard_rollups_ladder_partitions_outbound",
+  "check:dashboard_rollups.dashboard_rollups_directions_partition_total",
+  /* A thread cannot have replied without having been messaged - the reply
+     rate's denominator bounds its numerator, so a rate over 100% is impossible
+     rather than merely unlikely. */
+  "check:dashboard_rollups.dashboard_rollups_replied_within_messaged",
 ]);
 
 /**

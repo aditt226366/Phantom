@@ -124,6 +124,7 @@ model Company {
   broadcastRecipients    BroadcastRecipient[]
   leadSources            LeadSource[]
   leadSourceRows         LeadSourceRow[]
+  dashboardRollup        DashboardRollup?
 
   @@map("companies")
 }
@@ -1795,6 +1796,77 @@ model UsageEvent {
   /// still the wrong index. A per-kind card can have its own when it exists.
   @@index([occurredAt(sort: Desc)])
   @@map("usage_events")
+}
+
+/// The tenant dashboard's numbers, recomputed on a schedule.
+///
+/// One row per company, which is what makes computed_at mean something: every
+/// figure on the page was true at the same instant or none of them was. Split
+/// across several tables a refresh could half-succeed, and the page would print
+/// one "as of" line over a mixture of two moments - which is worse than being
+/// stale, because it looks consistent.
+///
+/// Refreshed by dashboard.rollup, one repeatable job per company. Read by the
+/// dashboard page and by nothing else. Everything here is derived: dropping the
+/// table costs a minute of staleness and no data at all.
+model DashboardRollup {
+  /// The primary key IS the tenant key. See 20260905090000 on why this table
+  /// carries no composite index and is exempted from that invariant by name.
+  companyId String @id @map("company_id")
+
+  /// When these figures were true. There is deliberately no updatedAt beside
+  /// it: a second timestamp on a row whose entire meaning is "as of" is one
+  /// that can disagree with the one being rendered.
+  computedAt DateTime @db.Timestamptz(3) @map("computed_at")
+
+  /// The platform-day boundaries the counts were taken against, so a reader can
+  /// tell a fresh rollup of yesterday's day from a fresh rollup of today's.
+  dayStart   DateTime @db.Timestamptz(3) @map("day_start")
+  monthStart DateTime @db.Timestamptz(3) @map("month_start")
+
+  messagesTotal    Int @default(0) @map("messages_total")
+  messagesInbound  Int @default(0) @map("messages_inbound")
+  messagesOutbound Int @default(0) @map("messages_outbound")
+
+  /// The ladder, outbound only. These seven sum to messagesOutbound by a CHECK
+  /// constraint, because a FILTER clause that overlaps or misses a status makes
+  /// the delivery chart quietly not add up.
+  outboundPending     Int @default(0) @map("outbound_pending")
+  outboundUnconfirmed Int @default(0) @map("outbound_unconfirmed")
+  outboundHeld        Int @default(0) @map("outbound_held")
+  outboundSent        Int @default(0) @map("outbound_sent")
+  outboundFailed      Int @default(0) @map("outbound_failed")
+  outboundDelivered   Int @default(0) @map("outbound_delivered")
+  outboundRead        Int @default(0) @map("outbound_read")
+
+  /// Meta's error codes to counts. Grouped into headings in TypeScript, so the
+  /// code lists live only in bulk/limits.ts where the send worker reads them.
+  failuresByCode Json @default("{}") @map("failures_by_code")
+
+  conversationsTotal    Int @default(0) @map("conversations_total")
+  conversationsNewToday Int @default(0) @map("conversations_new_today")
+  /// The reply rate's denominator and numerator: threads the business opened,
+  /// and those of them the customer answered afterwards.
+  conversationsMessaged Int @default(0) @map("conversations_messaged")
+  conversationsReplied  Int @default(0) @map("conversations_replied")
+  /// The source distribution, iterated by the chart rather than named member by
+  /// member - which is where a member added later goes missing silently.
+  conversationsBySource Json @default("{}") @map("conversations_by_source")
+
+  contactsTotal    Int @default(0) @map("contacts_total")
+  contactsNewToday Int @default(0) @map("contacts_new_today")
+
+  /// Spend since monthStart, per currency, in micros held as strings. A map
+  /// rather than a total because there is no exchange rate in this system;
+  /// strings because jsonb numbers are doubles and cost_micros is a bigint.
+  costByCurrency    Json @default("{}") @map("cost_by_currency")
+  /// Events with no price. Shown when non-zero, because SUM ignores nulls and
+  /// the month's spend would otherwise read as complete.
+  costUnpricedCount Int  @default(0) @map("cost_unpriced_count")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("dashboard_rollups")
 }
 
 /// ---------------------------------------------------------------------------

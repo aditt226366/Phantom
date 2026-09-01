@@ -39,6 +39,7 @@ export const JOB_NAMES = {
   WHATSAPP_TEMPLATE_SYNC: "whatsapp.template.sync",
   BROADCAST_START: "broadcast.start",
   LEAD_SOURCE_POLL: "lead-source.poll",
+  DASHBOARD_ROLLUP: "dashboard.rollup",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -295,6 +296,62 @@ export function leadSourceSchedulerId(leadSourceId: string): string {
 }
 
 /**
+ * Recompute one company's dashboard rollup.
+ *
+ * ---------------------------------------------------------------------------
+ * One repeatable job per company, for the third time
+ * ---------------------------------------------------------------------------
+ *
+ * The same constraint that shaped integration.verify, vault.reseal and
+ * lead-source.poll, and it is worth restating because the obvious design here
+ * is even more tempting than it was there: a single job that wakes every sixty
+ * seconds and refreshes every company.
+ *
+ * It is not available. This process connects as app_runtime with NO company
+ * context, so `SELECT id FROM companies` returns zero rows, succeeds, and looks
+ * exactly like "no companies to refresh". A sweeper would run for ever, refresh
+ * nothing, log nothing, and the dashboard would sit at whatever it said on the
+ * day the feature shipped.
+ *
+ * So the fan-out lives where a company id can be established. A scheduler is
+ * registered when the company is created - the signup action, after the
+ * transaction commits - and scripts/schedule-dashboard-rollups.mjs registers
+ * one for every company that predates this phase, through the admin client,
+ * which is the only client in the system that can enumerate them.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the payload carries no bounds
+ * ---------------------------------------------------------------------------
+ *
+ * A repeatable job's data is fixed at registration. Putting the day boundary in
+ * it would freeze the definition of "today" at the moment the company signed
+ * up, and every count under that heading would be about that day for ever.
+ *
+ * The handler computes its bounds when it runs, which is the only moment they
+ * can be right. The instants are still bound parameters by the time they reach
+ * the database - see @whatsapp-os/core/dashboard - so nothing about that
+ * weakens the planner argument.
+ */
+export const dashboardRollupJobSchema = z.object({
+  companyId: z.string().min(1),
+});
+
+export type DashboardRollupJob = z.infer<typeof dashboardRollupJobSchema>;
+
+/**
+ * The scheduler id for one company's refresh.
+ *
+ * Deterministic and derived from the company id, for the reason
+ * leadSourceSchedulerId is: upsertJobScheduler is an upsert on this key.
+ * Registering twice - a re-run of the backfill script beside a signup that
+ * already registered one - replaces the schedule rather than adding a second,
+ * so a company cannot end up refreshing twice a minute and paying for both.
+ */
+export function dashboardRollupSchedulerId(companyId: string): string {
+  return `dashboard-rollup:${companyId}`;
+}
+
+/**
  * The send job runs ONCE. Everything else keeps the default five attempts.
  *
  * Meta's /messages endpoint has no idempotency key and no "did this land"
@@ -337,6 +394,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.WHATSAPP_TEMPLATE_SYNC]: whatsappTemplateSyncJobSchema,
   [JOB_NAMES.BROADCAST_START]: broadcastStartJobSchema,
   [JOB_NAMES.LEAD_SOURCE_POLL]: leadSourcePollJobSchema,
+  [JOB_NAMES.DASHBOARD_ROLLUP]: dashboardRollupJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

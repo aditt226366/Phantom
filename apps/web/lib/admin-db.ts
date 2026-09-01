@@ -967,6 +967,29 @@ export async function listCompanyIdsWithSecrets(): Promise<
     .sort((a, b) => a.companyId.localeCompare(b.companyId));
 }
 
+/**
+ * Every company, for the dashboard rollup fan-out.
+ *
+ * Every one, with no filter, which is unlike the two lists around it - and the
+ * difference is the point. A company with no integrations has nothing to verify
+ * and no secrets to reseal, but it does have a dashboard, and that dashboard is
+ * the first screen it sees. Filtering here would leave exactly the new tenants
+ * this backfill matters most to without a rollup row.
+ *
+ * Deactivated companies included, for the reason lib/dashboard/scheduler.ts
+ * gives: the operator cannot sign in, but the platform admin still reads the
+ * workspace, and a suspension that silently froze the numbers would leave the
+ * panel showing figures from the day of the suspension with nothing to say so.
+ */
+export async function listAllCompanyIds(): Promise<string[]> {
+  const rows = await adminPrisma.company.findMany({
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  return rows.map((row) => row.id);
+}
+
 /** Companies with at least one integration, for the repair fan-out. */
 export async function listCompanyIdsWithIntegrations(): Promise<string[]> {
   const rows = await adminPrisma.integration.findMany({

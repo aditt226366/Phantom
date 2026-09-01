@@ -111,6 +111,34 @@ const UNSCOPED_MODELS = new Map<string, string>([
   ],
 ]);
 
+/**
+ * Tenant-owned tables whose company_id index is deliberately NOT composite.
+ *
+ * The composite rule exists because a tenant table's hot queries filter by
+ * company_id *and something else*, and an index on company_id alone leaves the
+ * second predicate to a filter over every row the company owns. That reasoning
+ * has a precondition: more than one row per company.
+ *
+ * A table with exactly one row per company has nothing to add a second column
+ * for. Its primary key is the whole lookup, every read is a single-row fetch by
+ * that key, and a `(company_id, computed_at)` index would be decoration -
+ * implying a query shape that does not exist, which is worse than the honest
+ * absence because the next person would try to use it.
+ *
+ * This exempts the composite check and NOTHING else. Every table below still
+ * needs a NOT NULL company_id, RLS enabled and forced, an app_runtime isolation
+ * policy, an app_admin policy and the ordinary grants - all asserted for it
+ * exactly as for any other tenant table.
+ */
+const SINGLE_ROW_PER_COMPANY_TABLES = new Map<string, string>([
+  [
+    "dashboard_rollups",
+    "one row per company by primary key. See 20260905090000: the row is a " +
+      "single upsert so that one computed_at covers every figure above it, " +
+      "and a second index column would describe a read nothing performs.",
+  ],
+]);
+
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
 
@@ -253,10 +281,35 @@ describe("schema invariants", () => {
           `${table} has no index whose first column is company_id`,
         ).toBeGreaterThan(0);
 
+        /*
+         * Exempt tables still had to pass the two assertions above: an index
+         * whose FIRST column is company_id has to exist either way. What is
+         * waived is only the second column.
+         */
+        if (SINGLE_ROW_PER_COMPANY_TABLES.has(table)) continue;
+
         expect(
           rows.some((r) => r.cols >= 2),
           `${table} has an index on company_id but none that is composite`,
         ).toBe(true);
+      }
+    });
+
+    it("carries a reason for every table waived from the composite rule", () => {
+      /*
+       * Both directions, like GLOBAL_TABLES. A name that no longer describes a
+       * table in the schema is an exemption nobody is reading, and an entry
+       * with no reason is a name somebody added to make a test go green.
+       */
+      for (const [table, reason] of SINGLE_ROW_PER_COMPANY_TABLES) {
+        expect(
+          tenantTables,
+          `${table} is waived from the composite rule but is not a tenant table`,
+        ).toContain(table);
+        expect(
+          reason.length,
+          `${table} is waived with no reason`,
+        ).toBeGreaterThan(40);
       }
     });
   });

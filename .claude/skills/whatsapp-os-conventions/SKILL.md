@@ -351,6 +351,27 @@ VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
 moved this one from 0.8 GB free to 2.6 GB and from 7.6 hours to 80 seconds. The
 gate's single retry absorbs what is left.
 
+**Try the page-cache drop first — it is non-destructive and it works.** With WSL
+already capped at 4 GB, `vmmemWSL` still held 2.8 GB of it as cache:
+
+```
+wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
+```
+
+That took it to 1117 MB, and the very next gate run passed — on two separate
+occasions in Phase 9, after five and two consecutive crashed runs respectively.
+Clean cache only: no restart, no container bounce, nothing lost, and Postgres
+simply re-reads from disk. It is a great deal cheaper than editing `.wslconfig`,
+which needs `wsl --shutdown` and takes the database and Redis down with it.
+
+**A third presentation of the crash, which the hook cannot absorb.** An
+`ECONNRESET` on a named test is the worker dying and taking its socket down —
+already recorded below — but in that shape a test genuinely *reports as failed*,
+and `is_crash_shaped` refuses a retry when anything failed. That refusal is
+correct and must not be relaxed casually: it is what stops a real failure
+getting a second roll of the dice. Phase 9 hit it twice and re-ran by hand.
+Widening it belongs in its own diff, never in one that needed it to pass.
+
 
 **`vi.fn` with a zero-argument implementation types its calls as `[]`.** So
 `mock.calls[0][2]` is an index into an empty tuple: it runs perfectly and fails
@@ -642,6 +663,34 @@ Things worth knowing before touching it:
   be both permanently open and described by a fixed instant. The corollary is
   binding on whoever renders one — the window may appear as an open/closed
   state or as a coarse bucket, **never as a timestamp**.
+
+  **And never as a duration either, which is the same rule and was not
+  obvious.** A decrementing minute count is not a timestamp and it fails
+  identically: it differs between the seed and the capture. The inbox badge
+  rendered `45m left` from Phase 4, and its own test asserted that string under
+  a comment claiming the value "may never render an instant - only a bucket".
+  Both were wrong together for five phases, and nothing caught it because no
+  fixture had ever seeded a near-term window. Phase 9 seeded three and both
+  inbox baselines moved ~190 pixels a run - not rasteriser noise, which is one
+  or two. `windowBucket` in `@whatsapp-os/core/whatsapp` is the single
+  definition now, and the inbox and the dashboard both render the column
+  through it.
+
+  The general form, which is the useful part: **which column may be seeded from
+  the clock is decided by what RENDERS it, not by the table it lives in.** A
+  Phase 9 conversation carries a `window_expires_at` relative to `now()` - it
+  has to move, or the thread stops being near its deadline the day after the
+  baseline is recorded, and nothing prints it as an instant - beside a
+  `last_message_at` that is a literal, because the inbox prints that one
+  absolutely. Deriving the second from the first moved both, and cost a further
+  160 pixels a run after the badge was already fixed.
+
+  A duration computed against a **literal** instant has the mirror-image
+  failure: stable within a run, drifting with the calendar, so a baseline
+  recorded today saying "18 days" says "25 days" next week and the suite fails
+  for the passage of time. An age is only safe where the fixture can seed its
+  value relative to `now()` - which is why the dashboard's pending-template card
+  renders an age and its number-health card renders an absolute timestamp.
 
   The reverse is the trap. A value nothing renders *today* can be random and
   nothing will notice: `webhook_key` defaults to a database expression, so the
@@ -1051,6 +1100,101 @@ literal one — for the second time.** The conventions already record this about
 Script panel is collapsed, so the URL is not in the DOM and a random key costs
 nothing *today*. The first change that opens that panel by default would produce
 a baseline that never matched twice and would be diagnosed as a flaky suite.
+
+**`now()` is STABLE, not VOLATILE, and the planner estimates it perfectly well.**
+The advice that an inline `now()` in a range predicate costs the index - "the
+planner has no value at plan time, guesses one row, takes the sequential scan" -
+is repeated everywhere and is **false for `now()`** on this database. A STABLE
+function's value is fixed for the duration of the statement, so it is evaluated
+while planning and the histogram answers normally.
+
+Measured on Postgres 17.11 at **50,000 and again at 200,000** rows, because the
+usual rebuttal is a scale one and it is a fair rebuttal: a wrong estimate only
+changes the CHOSEN PLAN once the alternative can win, so a single measurement at
+one size settles nothing.
+
+| rows | predicate | bound param | `now()` inline |
+| --- | --- | --- | --- |
+| 50,000 | 1% window | 527 est / 540 actual | 527 / 540 |
+| 200,000 | 1% window | 1,929 / 2,100 | 1,929 / 2,100 |
+| 200,000 | 20-day window | 199,913 / 200,000 | 199,913 / 200,000 |
+
+Identical at every scale, and the estimate tracks the table rather than sitting
+at a constant - which is the histogram.
+
+**The script carries a positive control, and without it the whole thing is
+unfalsifiable.** At a 1%-selective predicate an index scan is correct whether
+the estimate came from the histogram (~2,000 rows at 200k) or from
+`DEFAULT_RANGE_INEQ_SEL` (0.005, so ~1,000): both choose the same plan, so
+matching plans would prove only that the question had not been asked. That is a
+break-once probe that does not fail.
+
+So `clock_timestamp()` - genuinely VOLATILE, unfoldable - runs the same 20-day
+window in the same run and estimates **22,221 against 200,000 actual**: 11.1%,
+which is `DEFAULT_RANGE_INEQ_SEL` for a paired inequality (0.3333^2), a ninefold
+underestimate. The instrument sees the effect. `now()` does not exhibit it.
+
+Two limits worth keeping: even the volatile control did not flip to a sequential
+scan on this table, so the "seq scan -> index scan" outcome was not reproduced
+at either scale; and none of this speaks to a different query, index or Postgres
+version. `npm run db:explain:dashboard` takes a row count (`-- 50000`), and runs
+as `app_runtime` with the company context set.
+
+That last part is not optional. **RLS rewrites the query** - `company_id =
+app_current_company()` is ANDed into every scan before the planner sees it - so
+a plan measured as the owner, or with no context set, is a plan for a different
+query. It is also why the composite indexes lead with `company_id`: under RLS
+there is no such thing as a query on this schema without that predicate.
+
+Bind the bounds anyway, for the reasons that are actually true: the platform day
+has no SQL form and writing one hardcodes `+05:30`; a test can pass a fixed
+instant and assert an exact count; and a `computed_at` has to exist outside the
+statement that used it. The volatile-expression rule still holds for something
+genuinely volatile. `now()` is not it.
+
+**A rate that "cannot exceed 100%" is worth a CHECK constraint, not a comment.**
+Phase 9's rollup asserts its own partitions in the database -
+`outbound_* summed = messages_outbound`, `conversations_replied <=
+conversations_messaged`. A `FILTER` clause that overlaps or misses a status
+makes a chart quietly not add up, and one statement computing all seven counters
+is the only thing that would ever notice. Break-once confirmed it: narrowing one
+count is refused with `23514` rather than by an assertion.
+
+**The dashboard shows staleness rather than hiding it, and never shows a zero it
+cannot support.** Two rules from Phase 9, both of which a later change would
+find it natural to "improve".
+
+The rolled-up half of the page is up to a minute old and says so on every load -
+not only when something is wrong. A page that shows an age only when the news is
+bad teaches people that no line means live, and nothing on that half is live.
+The four action cards below it carry no age because they are read per request,
+and the page states which half is which. That inconsistency is deliberate:
+making the totals live is six scans of `messages` per page load, and making the
+action cards rolled-up means holding back a window that shuts in four minutes.
+
+And a card whose data does not exist renders a sentence, never a figure.
+"Orders: 0" reads as a business with no orders rather than a product with no
+order tracking, and nothing on the page distinguishes them. The copy names a
+**section** rather than a phase number, because `spec-amendments.md` says the
+numbers need a renumbering pass and a number in user-facing copy would be wrong
+on the day it happens.
+
+Freshness has three states, not two: `never` is its own member so a company
+whose rollup has not been computed is not shown zeroes. And `countedDayIsCurrent`
+sits beside it because a freshness check cannot see the fault where a rollup
+computed at 23:59 and read at 00:04 is five minutes old and its "new today" is a
+complete count of yesterday.
+
+**Spend is a map per currency and never a total, and the micros are strings.**
+There is no exchange rate in this system and one must not appear at render time:
+adding Rs 4,000 to $50 produces 4,050 of nothing, rendered with exactly the
+authority of a correct figure. A map cannot be accidentally summed by a
+component written in a hurry, which a single numeric column invites. The values
+are text in `jsonb` because JSON numbers are IEEE doubles and `cost_micros` is a
+bigint - a total that silently drops its last digits past 2^53 is the worst
+possible way to discover the column's type. Unpriced events are counted
+separately and shown when non-zero, because `SUM` ignores nulls and the month
+would otherwise read as complete when part of it was never priced.
 
 **PowerShell here-string syntax silently corrupts a `git commit -m` under bash.**
 `git commit -m @'...'@` in Git Bash concatenates a literal `@` onto both ends of

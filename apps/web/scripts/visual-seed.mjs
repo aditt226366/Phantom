@@ -108,6 +108,18 @@ const COMPANY = {
   active: FIXTURE.companyId,
   deactivated: "c000visualfixturecompany2",
   enterprise: "c000visualfixturecompany3",
+  /*
+   * A verified workspace with nothing in it - which is what every tenant sees
+   * on their first day, and the state least likely to be looked at while a
+   * feature is being built, because the machine it is built on always has data.
+   *
+   * Deliberately not the same thing as the UNVERIFIED workspace beside it.
+   * That one photographs the KYC gate; this one photographs the dashboard's
+   * own empty states, which are a different set of branches entirely - no
+   * rates, no ladder, no donut, and six action cards each saying what will
+   * appear in it.
+   */
+  fresh: FIXTURE.freshCompanyId,
 };
 
 const INTEGRATION = {
@@ -499,19 +511,38 @@ const FINISHED_RECIPIENTS = [
   { phone: "+919876543223", status: "DELIVERED", error: null },
   { phone: "+919876543224", status: "DELIVERED", error: null },
   { phone: "+919876543225", status: "SENT", error: null },
+  /*
+   * The three failures carry Meta's own codes, and did not until Phase 9.
+   *
+   * The titles were already Meta's wording for specific errors - "cannot
+   * receive WhatsApp messages" IS 131026 - so a row with that sentence and a
+   * null code was a fixture describing a message that could not exist. Nothing
+   * read the column until the dashboard grouped failures by it, at which point
+   * the gap became visible: a breakdown reporting every failure as "other"
+   * while the titles beside it named two distinct causes.
+   *
+   * 131049 replaces one of the two duplicates rather than being added as a
+   * fourth row. The delivery-limited case is the one that means the NUMBER is
+   * in trouble rather than the recipient, it is the reason the dashboard
+   * separates it at all, and a fixture with two identical failures was spending
+   * a row on a case it had already made.
+   */
   {
     phone: "+919876543226",
     status: "FAILED",
+    code: 131026,
     error: "This number cannot receive WhatsApp messages.",
   },
   {
     phone: "+919876543227",
     status: "FAILED",
-    error: "This number cannot receive WhatsApp messages.",
+    code: 131049,
+    error: "Meta did not deliver this message: the recipient has reached their limit for marketing messages.",
   },
   {
     phone: "+919876543228",
     status: "FAILED",
+    code: 131047,
     error: "Message failed to send because more than 24 hours have passed since the customer last replied to this number.",
   },
 ];
@@ -879,6 +910,113 @@ const TEMPLATES = [
   },
 ];
 
+/**
+ * Threads whose 24-hour window shuts inside the dashboard's horizon.
+ *
+ * ---------------------------------------------------------------------------
+ * The one place this file seeds FROM the clock, and why that is the stable
+ * choice rather than the risky one
+ * ---------------------------------------------------------------------------
+ *
+ * The rule at the top of this file is that a rendered value must be a literal.
+ * The rule it serves is that a rendered value must not CHANGE between runs -
+ * and for a duration those two pull in opposite directions. A literal
+ * `window_expires_at` is a fixed instant whose distance from now grows every
+ * day, so the card would read "Under 15 min" today and "closed" tomorrow.
+ *
+ * Seeding relative to now() inverts it: the stored value moves and the rendered
+ * value is fixed, which is what the baseline needs. The open thread above
+ * already does exactly this for the same column and says so.
+ *
+ * The offsets are chosen with slack. The dashboard renders a coarse bucket -
+ * under 15, under 30, within the hour - so 8, 22 and 50 minutes each sit
+ * several minutes clear of a boundary, and a slow run between the seed and the
+ * capture cannot move one into the next bucket.
+ */
+const CLOSING_THREADS = [
+  {
+    id: "c000visualfixtureclosing1",
+    contactId: "c000visualfixtureclosect1",
+    waId: "919812345693",
+    phone: "+919812345693",
+    name: "Devika Rao",
+    minutes: 8,
+    lastMessageAt: "2026-08-08T05:30:00Z", // 08/08/2026 11:00:00
+    preview: "Perfect, I will take the two-seater in the charcoal fabric.",
+  },
+  {
+    id: "c000visualfixtureclosing2",
+    contactId: "c000visualfixtureclosect2",
+    waId: "919812345694",
+    phone: "+919812345694",
+    name: "Imran Shaikh",
+    minutes: 22,
+    lastMessageAt: "2026-08-07T05:30:00Z", // 07/08/2026 11:00:00
+    preview: "Is the warranty transferable if I gift it?",
+  },
+  {
+    id: "c000visualfixtureclosing3",
+    contactId: "c000visualfixtureclosect3",
+    waId: "919812345695",
+    phone: "+919812345695",
+    name: "Lakshmi Nair",
+    minutes: 50,
+    lastMessageAt: "2026-08-06T05:30:00Z", // 06/08/2026 11:00:00
+    preview: "Sending the measurements now, one moment.",
+  },
+];
+
+/**
+ * A template Meta has not answered on, so the dashboard's queue is not empty.
+ *
+ * `created_at` is relative to now() for the reason above: the card renders how
+ * long it has been waiting, and an age computed against a literal instant
+ * drifts with the calendar - a baseline recorded today saying "3 days" says
+ * "10 days" next week, and the suite fails for the passage of time rather than
+ * for a change to the page.
+ *
+ * Three days is also the interesting value. Meta usually answers in minutes, so
+ * a template three days old is the case the card exists to surface, and a
+ * fixture showing "12 minutes" would photograph the state nobody needs to see.
+ */
+const PENDING_TEMPLATE = {
+  id: "c000visualfixturetmpl004",
+  name: "delivery_delayed",
+  language: "en_US",
+  category: "UTILITY",
+  daysWaiting: 3,
+  components: [
+    {
+      type: "BODY",
+      text: "Hi {{1}}, order {{2}} is delayed by two days. We are sorry, and we will confirm the new date tomorrow.",
+      example: { body_text: [["Anita", "NW-2291"]] },
+    },
+  ],
+};
+
+/**
+ * The workspace with nothing in it: a company, an owner, and three approved
+ * documents so the KYC gate opens onto an empty dashboard rather than a
+ * blocked one.
+ *
+ * No integration, no number, no contact, no conversation, no template, no
+ * usage event. Every one of those absences is a branch on the page.
+ */
+const FRESH = {
+  userId: "c000visualfixtureuser006",
+  fullName: "Arjun Verma",
+  email: "arjun@cedarline.test",
+  phone: "+919812345680",
+  created: "2026-08-30T04:30:00Z", //  30/08/2026 10:00:00
+  kyc: [
+    ["c000visualfixturekyc00007", "GST", "cedarline-gst-certificate.pdf"],
+    ["c000visualfixturekyc00008", "PAN", "cedarline-pan-card.pdf"],
+    ["c000visualfixturekyc00009", "AADHAAR", "arjun-verma-aadhaar.pdf"],
+  ],
+  kycUploadedAt: "2026-08-30T05:10:00Z", // 30/08/2026 10:40:00
+  kycReviewedAt: "2026-08-30T06:20:00Z", // 30/08/2026 11:50:00
+};
+
 /* ------------------------------------------------------------------ */
 /* Writing it                                                          */
 /* ------------------------------------------------------------------ */
@@ -956,7 +1094,8 @@ try {
     `INSERT INTO companies (id, slug, name, plan, deactivated_at, created_at, updated_at)
      VALUES ($1, 'northwind-traders', 'Northwind Traders', 'PRO', NULL, $4, $4),
             ($2, 'brightleaf-organics', 'Brightleaf Organics', 'STARTER', $5, $6, $6),
-            ($3, 'ashgrove-logistics', 'Ashgrove Logistics', 'ENTERPRISE', NULL, $7, $7)`,
+            ($3, 'ashgrove-logistics', 'Ashgrove Logistics', 'ENTERPRISE', NULL, $7, $7),
+            ($8, 'cedarline-interiors', 'Cedarline Interiors', 'STARTER', NULL, $9, $9)`,
     [
       COMPANY.active,
       COMPANY.deactivated,
@@ -965,6 +1104,8 @@ try {
       T.deactivated,
       T.otherCreated,
       T.thirdCreated,
+      COMPANY.fresh,
+      FRESH.created,
     ],
   );
 
@@ -974,6 +1115,9 @@ try {
     ["c000visualfixtureuser003", COMPANY.active, "Sana Qureshi", "sana@northwind.test", "sana_q", "MEMBER", "+919812345672", null],
     ["c000visualfixtureuser004", COMPANY.deactivated, "Dev Kapoor", "dev@brightleaf.test", "dev_kapoor", "OWNER", "+919812345673", T.otherLastLogin],
     ["c000visualfixtureuser005", COMPANY.enterprise, "Meera Raghavan", "meera@ashgrove.test", "meera_r", "OWNER", "+919812345674", null],
+    /* The fresh workspace's owner. last_login_at is NULL and visual.setup.ts
+       puts it back after signing in, because /admin/companies renders it. */
+    [FRESH.userId, COMPANY.fresh, FRESH.fullName, FRESH.email, FIXTURE.freshTenant.username, "OWNER", FRESH.phone, null],
   ];
 
   for (const [id, companyId, fullName, email, username, role, phone, lastLogin] of users) {
@@ -1348,6 +1492,31 @@ try {
     );
   }
 
+  /* The fresh workspace is verified, so its dashboard is empty rather than
+     blocked. Without these three every page it renders is the KYC gate, and
+     the state this fixture exists to photograph is never reached. */
+  for (const [id, kind, filename] of FRESH.kyc) {
+    await client.query(
+      `INSERT INTO kyc_documents
+         (id, company_id, kind, bytes, byte_size, sha256, mime_type,
+          original_filename, status, reviewed_by_admin_id, reviewed_at,
+          review_note, created_at)
+       VALUES ($1, $2, $3::kyc_document_kind, $4, $5, $6, 'application/pdf',
+               $7, 'APPROVED', 'c000visualfixtureadmin01', $8, NULL, $9)`,
+      [
+        id,
+        COMPANY.fresh,
+        kind,
+        KYC_PDF_BYTES,
+        KYC_PDF_BYTES.byteLength,
+        createHash("sha256").update(KYC_PDF_BYTES).digest("hex"),
+        filename,
+        FRESH.kycReviewedAt,
+        FRESH.kycUploadedAt,
+      ],
+    );
+  }
+
   for (const document of BLOCKED_KYC_DOCUMENTS) {
     await client.query(
       `INSERT INTO kyc_documents
@@ -1483,11 +1652,11 @@ try {
         await client.query(
           `INSERT INTO messages
              (id, company_id, conversation_id, broadcast_id, direction, status,
-              type, wamid, body, template_payload, error_source, error_title,
-              occurred_at, delivered_at, read_at, failed_at, send_attempt,
-              created_at, updated_at)
+              type, wamid, body, template_payload, error_source, error_code,
+              error_title, occurred_at, delivered_at, read_at, failed_at,
+              send_attempt, created_at, updated_at)
            VALUES ($1, $2, $3, $4, 'OUTBOUND', $5::message_status, 'template',
-                   $6, $7, $8::jsonb, $9::message_failure_source, $10, $11,
+                   $6, $7, $8::jsonb, $9::message_failure_source, $15, $10, $11,
                    $12, $13, $14, 0, $11, $11)`,
           [
             messageId,
@@ -1510,6 +1679,9 @@ try {
               : null,
             recipient.status === "READ" ? input.startedAt : null,
             recipient.status === "FAILED" ? input.startedAt : null,
+            /* $15. Meta's own code, so the dashboard can group failures by
+               cause rather than reporting every one of them as "other". */
+            recipient.code ?? null,
           ],
         );
       }
@@ -1774,16 +1946,160 @@ try {
     );
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Phase 9: what the dashboard reads                                  */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * Three threads whose window shuts inside the dashboard's horizon.
+   *
+   * These are the card that turns the page into a tool, and without them it
+   * photographs its own empty state - which is the one card of the six most
+   * worth looking at. They also appear in the inbox, deliberately: a thread
+   * that exists for one page and not another would be a fixture describing a
+   * database that cannot happen.
+   *
+   * No messages on them beyond the preview, which is denormalised onto the
+   * conversation anyway. The dashboard reads the preview and the expiry; adding
+   * message rows would change every count on the page for no picture.
+   */
+  for (const thread of CLOSING_THREADS) {
+    await client.query(
+      `INSERT INTO contacts (id, company_id, wa_id, phone_e164, profile_name,
+                             created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+      [
+        thread.contactId,
+        COMPANY.active,
+        thread.waId,
+        thread.phone,
+        thread.name,
+        T.companyCreated,
+      ],
+    );
+
+    /*
+     * The window is relative to now(); the two timestamps beside it are
+     * literals. That split is not sloppiness, it is the rule at the top of this
+     * file applied to each column by what RENDERS it.
+     *
+     * `window_expires_at` has to move, or the thread stops being near its
+     * deadline the day after the baseline is recorded. Nothing prints it as an
+     * instant - the inbox badge and the dashboard card both render a bucket
+     * through windowBucket - so a moving value costs nothing.
+     *
+     * `last_message_at` IS printed, by the inbox, as an absolute time. Deriving
+     * it from the window made it move too, and both inbox baselines shifted by
+     * ~160 pixels a run - which is not rasteriser noise, and which is how this
+     * was found rather than reasoned about.
+     *
+     * The two are then mutually inconsistent, in that a window closing in eight
+     * minutes implies an inbound 23h52m ago rather than in August. The open
+     * thread above has carried exactly that inconsistency since Phase 4 for the
+     * same reason and says so. Nothing reads both, and the alternative is a
+     * fixture that cannot be photographed.
+     *
+     * The literals are older than the two hand-written threads, so these sort
+     * below them and the existing inbox baselines keep their order.
+     */
+    await client.query(
+      `INSERT INTO conversations (id, company_id, contact_id, whatsapp_number_id,
+                                  source, last_inbound_at, last_message_at,
+                                  last_message_preview, window_expires_at,
+                                  unread_count, assigned_user_id, assigned_at,
+                                  created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'INBOUND'::conversation_source, $8, $8, $6,
+               now() + ($5 || ' minutes')::interval,
+               0, NULL, NULL, $7, $7)`,
+      [
+        thread.id,
+        COMPANY.active,
+        thread.contactId,
+        NUMBERS[0].id,
+        String(thread.minutes),
+        thread.preview,
+        T.companyCreated,
+        thread.lastMessageAt,
+      ],
+    );
+  }
+
+  /* A template still waiting on Meta, so the queue card has a row in it. */
+  await client.query(
+    `INSERT INTO whatsapp_templates
+       (id, company_id, integration_id, name, language, category, components,
+        status, meta_template_id, rejected_reason, status_updated_at,
+        created_by_user_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', NULL, NULL, NULL,
+             'c000visualfixtureuser001',
+             now() - ($8 || ' days')::interval,
+             now() - ($8 || ' days')::interval)`,
+    [
+      PENDING_TEMPLATE.id,
+      COMPANY.active,
+      INTEGRATION.whatsapp,
+      PENDING_TEMPLATE.name,
+      PENDING_TEMPLATE.language,
+      PENDING_TEMPLATE.category,
+      JSON.stringify(PENDING_TEMPLATE.components),
+      String(PENDING_TEMPLATE.daysWaiting),
+    ],
+  );
+
   console.log(
-    `Seeded ${TEST_DATABASE_NAME}: 3 companies, ${users.length} users, ` +
+    `Seeded ${TEST_DATABASE_NAME}: 4 companies, ${users.length} users, ` +
       `4 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
       `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +
       `${KYC_DOCUMENTS.length} approved KYC documents, ` +
       `3 broadcasts, 2 lead sources, ${LEAD_ROWS.length} leads, ` +
-      `${BLOCKED_KYC_DOCUMENTS.length} for the unverified workspace.`,
+      `${BLOCKED_KYC_DOCUMENTS.length} for the unverified workspace, ` +
+      `${CLOSING_THREADS.length} threads closing within the hour, ` +
+      `1 pending template, and an empty verified workspace.`,
   );
+  /*
+   * The rollups, computed by the real refresh rather than written as literals.
+   *
+   * ---------------------------------------------------------------------------
+   * Why this one fixture is derived and not stated
+   * ---------------------------------------------------------------------------
+   *
+   * Every other value in this file is a literal, because a screenshot suite is
+   * only worth having if a diff means something changed. A rollup is the
+   * exception, and the reason is that its correctness is defined by agreement
+   * with the rows above it: a literal `messages_total` here would be a second
+   * copy of a number this file already determines, and the two would drift the
+   * first time anybody adds a message to MESSAGES.
+   *
+   * Deriving it keeps the fixture deterministic anyway - the same seeded rows
+   * produce the same counts every run - while making it impossible for the
+   * picture to show a total the data does not support. It also means the
+   * screenshot exercises the real statement, which is the one thing a hand
+   * written row could never do.
+   *
+   * `computed_at` is now(), and that is safe because the page renders freshness
+   * as a bucket with no digits in it while the refresh is running - see
+   * freshnessLabel. If that ever becomes a ticking age, this becomes a fixture
+   * that never matches twice.
+   */
+  process.env["DATABASE_URL_APP"] = testAppDatabaseUrl();
+
+  const { refreshDashboardRollup, withCompany } = await import("@whatsapp-os/db");
+  const { dashboardWindows } = await import("@whatsapp-os/core/dashboard");
+
+  const windows = dashboardWindows();
+
+  for (const companyId of [COMPANY.active, COMPANY.fresh]) {
+    await withCompany(companyId, (db) =>
+      refreshDashboardRollup(db, {
+        computedAt: windows.now,
+        dayStart: windows.dayStart,
+        monthStart: windows.monthStart,
+      }),
+    );
+  }
+
 } finally {
   await client.end();
 }

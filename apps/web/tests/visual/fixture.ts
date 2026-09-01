@@ -99,6 +99,19 @@ export const FIXTURE = {
    */
   leadSourceId: "c000visualfixtureleadsrc1",
   lostLeadSourceId: "c000visualfixtureleadsrc2",
+  /**
+   * A verified workspace with no traffic at all, and its owner.
+   *
+   * The third signed-in state, and the one that photographs what every tenant
+   * sees on their first day. It is deliberately NOT the unverified workspace
+   * above: that one renders the KYC gate on every page, so it never reaches a
+   * feature's own empty state. This one is past the gate and simply has
+   * nothing - which on the dashboard is a completely different set of branches
+   * from the busy company, and the set least likely to be looked at while the
+   * page is being built, because the machine it is built on always has data.
+   */
+  freshCompanyId: "c000visualfixturecompany4",
+  freshTenant: { username: "arjun_v", password: "fixture-northwind-2026" },
 } as const;
 
 /**
@@ -113,10 +126,11 @@ export const AUTH = {
   tenant: join(here, ".auth", "tenant.json"),
   admin: join(here, ".auth", "admin.json"),
   blockedTenant: join(here, ".auth", "blocked-tenant.json"),
+  freshTenant: join(here, ".auth", "fresh-tenant.json"),
 };
 
 /** Which credentials a page needs, if any. */
-export type Audience = "public" | "tenant" | "admin" | "blocked";
+export type Audience = "public" | "tenant" | "admin" | "blocked" | "fresh";
 
 export interface VisualRoute {
   /** The screenshot's file name. Changing it re-records rather than diffs. */
@@ -275,6 +289,17 @@ export const ROUTES: readonly VisualRoute[] = [
    * and completely different pictures, which is why they are worth the second
    * storage state rather than being assumed from the verified ones.
    */
+  /*
+   * The empty dashboard, which is the first screen of every new account.
+   *
+   * Worth its own storage state for the reason the unverified workspace is:
+   * a fixture that only seeds happy paths never photographs the common case,
+   * and this page has a genuinely different shape when every figure is zero -
+   * no rates, no ladder, no donut, and six cards each saying what will appear
+   * in them.
+   */
+  { name: "fresh-dashboard", path: "/dashboard", audience: "fresh" },
+
   { name: "blocked-dashboard", path: "/dashboard", audience: "blocked" },
   { name: "blocked-inbox", path: "/inbox", audience: "blocked" },
   {

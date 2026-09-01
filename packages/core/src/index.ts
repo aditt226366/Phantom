@@ -5,6 +5,7 @@
  */
 export * from "./encryption.ts";
 export * from "./env.ts";
+export * from "./dashboard.ts";
 export * from "./integrations.ts";
 export * from "./providers/index.ts";
 export * from "./load-env.ts";

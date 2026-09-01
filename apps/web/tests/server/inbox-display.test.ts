@@ -43,8 +43,34 @@ describe("windowLabel", () => {
      may never render an instant — only a bucket. */
   it("says how long is left, never when", () => {
     expect(windowLabel({ kind: "open", hours: 18 })).toBe("18h left");
-    expect(windowLabel({ kind: "closing", minutes: 45 })).toBe("45m left");
+    expect(windowLabel({ kind: "closing", minutes: 45 })).toBe("Within the hour");
     expect(windowLabel({ kind: "closed" })).toBe("Window closed");
+  });
+
+  it("does not tick as a closing window runs down", () => {
+    /*
+     * The comment above always claimed a bucket and the assertion always
+     * checked a minute count - which nothing caught, because no fixture had a
+     * near-term window until Phase 9 seeded three and both inbox baselines
+     * started moving ~190 pixels a run. Not rasteriser noise, which is one or
+     * two pixels.
+     *
+     * So: two readings four minutes apart, inside one bucket, must render the
+     * same string. An hour-scale label is coarse enough to be stable already,
+     * which is why only this branch was ever a hazard.
+     */
+    expect(windowLabel({ kind: "closing", minutes: 45 })).toBe(
+      windowLabel({ kind: "closing", minutes: 41 }),
+    );
+    expect(windowLabel({ kind: "closing", minutes: 12 })).toBe(
+      windowLabel({ kind: "closing", minutes: 8 }),
+    );
+  });
+
+  it("still separates the three decisions a deadline offers", () => {
+    expect(windowLabel({ kind: "closing", minutes: 8 })).toBe("Under 15 min");
+    expect(windowLabel({ kind: "closing", minutes: 22 })).toBe("Under 30 min");
+    expect(windowLabel({ kind: "closing", minutes: 50 })).toBe("Within the hour");
   });
 
   it.each([

@@ -35,6 +35,7 @@
     "db:roles": "npm run roles --workspace=@whatsapp-os/db",
     "db:nuke": "npm run nuke --workspace=@whatsapp-os/db --",
     "db:verify": "node scripts/db-verify.mjs",
+    "db:explain:dashboard": "npm run explain:dashboard --workspace=@whatsapp-os/db",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",
@@ -42,7 +43,8 @@
     "services:down": "docker compose down",
     "services:logs": "docker compose logs -f",
     "vault:status": "npm run vault:status --workspace=web --",
-    "vault:rotate": "npm run vault:rotate --workspace=web --"
+    "vault:rotate": "npm run vault:rotate --workspace=web --",
+    "dashboard:schedule": "npm run dashboard:schedule --workspace=web --"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

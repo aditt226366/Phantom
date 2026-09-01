@@ -70,6 +70,21 @@ setup("sign in as the unverified tenant", async ({ page }) => {
   await page.context().storageState({ path: AUTH.blockedTenant });
 });
 
+setup("sign in as the fresh tenant", async ({ page }) => {
+  /*
+   * A verified workspace with nothing in it. Past the KYC gate, so the pages
+   * render their own empty states rather than the blocked one - which is the
+   * whole reason this is a third account and not a reuse of the unverified one.
+   */
+  await page.goto("/sign-in");
+  await page.getByLabel("Username").fill(FIXTURE.freshTenant.username);
+  await page.getByLabel("Password").fill(FIXTURE.freshTenant.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await page.waitForURL("**/dashboard");
+  await page.context().storageState({ path: AUTH.freshTenant });
+});
+
 setup("sign in as the platform operator", async ({ page }) => {
   await page.goto("/admin/sign-in");
   await page.getByLabel("Username").fill(FIXTURE.admin.username);
@@ -120,6 +135,19 @@ setup("restore the timestamps signing in moved", async () => {
     );
 
     expect(blocked, "the unverified owner was not found to restore").toBe(1);
+
+    /*
+     * And the fresh workspace's owner, for the same reason as the unverified
+     * one: /admin/companies lists every company with its owner's last sign-in,
+     * so a fourth company whose value moved would diff that page on every run
+     * for a reason that has nothing to do with it.
+     */
+    const { rowCount: fresh } = await client.query(
+      `UPDATE users SET last_login_at = NULL WHERE username = $1`,
+      [FIXTURE.freshTenant.username],
+    );
+
+    expect(fresh, "the fresh owner was not found to restore").toBe(1);
   } finally {
     await client.end();
   }

@@ -8,7 +8,7 @@
 -- later phase would start with a hole exactly as wide as the delay in creating
 -- it. The integration verification path is its first emitter.
 --
--- cost_micros is millionths of a currency unit, not minor units. Phase 7 prices
+-- cost_micros is millionths of a currency unit, not minor units. Phase 11 prices
 -- AI calls below a cent each, and a paise-denominated column rounds a $0.0003
 -- reply to zero: a thousand conversations then sum to nothing and the invoice
 -- is quietly short. BIGINT because INTEGER tops out near 2,147 currency units

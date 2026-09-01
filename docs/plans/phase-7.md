@@ -1,4 +1,4 @@
-# Phase 9 — The tenant dashboard
+# Phase 7 — The tenant dashboard
 
 Working plan, written as the phase ran. Status: **complete, `phase-9` tagged.**
 
@@ -225,7 +225,7 @@ suite twice:
 The inbox one is the interesting one, because it was latent long before this
 phase. Its own test asserted `"45m left"` under a comment saying the value "may
 never render an instant — only a bucket". Both were wrong together, and nothing
-caught it because no fixture had ever seeded a near-term window. Phase 9 seeded
+caught it because no fixture had ever seeded a near-term window. Phase 7 seeded
 three and both inbox baselines moved ~190 pixels a run — not rasteriser noise,
 which is one or two.
 

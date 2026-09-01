@@ -701,7 +701,7 @@ model Contact {
   /// The column that turns a pending dashboard card into a real one
   /// -----------------------------------------------------------------------
   ///
-  /// "Lead temperature" has been an honest empty state since Phase 9, saying
+  /// "Lead temperature" has been an honest empty state since Phase 7, saying
   /// the scoring did not exist. It does now, and it is deterministic: a flow
   /// author draws "this answer makes them hot", so the score is a rule
   /// somebody wrote rather than a model's opinion. That is a different and
@@ -825,7 +825,7 @@ model Conversation {
   @@unique([companyId, contactId, whatsappNumberId])
   /// The inbox list.
   @@index([companyId, lastMessageAt(sort: Desc)])
-  /// canSend, and Phase 9's "windows closing within the hour".
+  /// canSend, and Phase 7's "windows closing within the hour".
   @@index([companyId, windowExpiresAt])
   @@index([companyId, assignedUserId])
   /// The needs-a-person queue, and the dashboard card above it.
@@ -1120,7 +1120,7 @@ model WhatsAppWebhookEvent {
   /// is re-enqueued rather than discarded. And it is the only thing that makes
   /// a silent failure visible: events older than a few minutes with
   /// processed_at still null are work that vanished, which is a one-line
-  /// health check and what Phase 9's dashboard will read.
+  /// health check and what Phase 7's dashboard will read.
   processedAt DateTime? @db.Timestamptz(3) @map("processed_at")
 
   /// Why nothing was done with it. 'company_deactivated' is the one that is not
@@ -2154,7 +2154,7 @@ model UsageEvent {
 
   /// Cost in millionths of one unit of `currency`. 1_000_000 micros = ₹1.
   ///
-  /// Micros, not minor units. Phase 7 prices AI calls below a cent each, and a
+  /// Micros, not minor units. Phase 11 prices AI calls below a cent each, and a
   /// paise- or cent-denominated column rounds a $0.0003 reply to zero - so a
   /// thousand conversations sum to nothing and the invoice is silently short.
   /// Micros keep every arithmetic step an integer, with rounding deferred to
@@ -2283,7 +2283,7 @@ model DashboardRollup {
 
   /// Conversations a flow has handled at least one step of.
   ///
-  /// From flow_runs, never inferred from an absent assignee. Phase 9 refused
+  /// From flow_runs, never inferred from an absent assignee. Phase 7 refused
   /// that proxy for the AI card because it counts every untouched thread as an
   /// automation success; the same objection applies here and the same answer.
   conversationsAutomated Int @default(0) @map("conversations_automated")

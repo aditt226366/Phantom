@@ -512,7 +512,7 @@ const FINISHED_RECIPIENTS = [
   { phone: "+919876543224", status: "DELIVERED", error: null },
   { phone: "+919876543225", status: "SENT", error: null },
   /*
-   * The three failures carry Meta's own codes, and did not until Phase 9.
+   * The three failures carry Meta's own codes, and did not until Phase 7.
    *
    * The titles were already Meta's wording for specific errors - "cannot
    * receive WhatsApp messages" IS 131026 - so a row with that sentence and a
@@ -1947,7 +1947,7 @@ try {
   }
 
   /* ---------------------------------------------------------------- */
-  /* Phase 9: what the dashboard reads                                  */
+  /* Phase 7: what the dashboard reads                                  */
   /* ---------------------------------------------------------------- */
 
   /*

@@ -4,7 +4,7 @@
 -- WHY THIS IS A MIGRATION IN THIS PHASE AND NOT A LATER TIDY-UP
 -- ===========================================================================
 --
--- Phase 9 shipped four honest empty states in apps/web/lib/dashboard/pending.ts
+-- Phase 7 shipped four honest empty states in apps/web/lib/dashboard/pending.ts
 -- and wrote the obligation into spec-amendments.md in as many words: the phase
 -- that lands one of those capabilities replaces its card, and a phase that
 -- ships the capability while leaving the card saying "arrives with" is one
@@ -42,7 +42,7 @@ ALTER TABLE "dashboard_rollups"
   --
   -- Counted from flow_runs rather than inferred from conversations, and the
   -- difference matters. The obvious proxy - a thread with no assigned user -
-  -- is what Phase 9 refused to use for the AI card, because it would have
+  -- is what Phase 7 refused to use for the AI card, because it would have
   -- counted every untouched thread as an automation success. This counts
   -- threads a run actually stood in.
   ADD COLUMN "conversations_automated" INTEGER NOT NULL DEFAULT 0;

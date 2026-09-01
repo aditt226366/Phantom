@@ -56,7 +56,7 @@ import { testAppDatabaseUrl, testSuperuserDatabaseUrl } from "./db-urls.mjs";
  * estimate, and the planner takes the index anyway - so measuring at one size
  * and concluding "this does not matter" is how this question goes in a circle.
  *
- * Both figures are recorded in docs/plans/phase-9.md with their row counts.
+ * Both figures are recorded in docs/plans/phase-7.md with their row counts.
  */
 const SEED_CONVERSATIONS = Number(process.argv[2] ?? 200_000);
 

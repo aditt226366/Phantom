@@ -359,7 +359,7 @@ wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
 ```
 
 That took it to 1117 MB, and the very next gate run passed — on two separate
-occasions in Phase 9, after five and two consecutive crashed runs respectively.
+occasions in Phase 7, after five and two consecutive crashed runs respectively.
 Clean cache only: no restart, no container bounce, nothing lost, and Postgres
 simply re-reads from disk. It is a great deal cheaper than editing `.wslconfig`,
 which needs `wsl --shutdown` and takes the database and Redis down with it.
@@ -369,7 +369,7 @@ which needs `wsl --shutdown` and takes the database and Redis down with it.
 already recorded below — but in that shape a test genuinely *reports as failed*,
 and `is_crash_shaped` refuses a retry when anything failed. That refusal is
 correct and must not be relaxed casually: it is what stops a real failure
-getting a second roll of the dice. Phase 9 hit it twice and re-ran by hand.
+getting a second roll of the dice. Phase 7 hit it twice and re-ran by hand.
 Widening it belongs in its own diff, never in one that needed it to pass.
 
 
@@ -670,7 +670,7 @@ Things worth knowing before touching it:
   rendered `45m left` from Phase 4, and its own test asserted that string under
   a comment claiming the value "may never render an instant - only a bucket".
   Both were wrong together for five phases, and nothing caught it because no
-  fixture had ever seeded a near-term window. Phase 9 seeded three and both
+  fixture had ever seeded a near-term window. Phase 7 seeded three and both
   inbox baselines moved ~190 pixels a run - not rasteriser noise, which is one
   or two. `windowBucket` in `@whatsapp-os/core/whatsapp` is the single
   definition now, and the inbox and the dashboard both render the column
@@ -678,7 +678,7 @@ Things worth knowing before touching it:
 
   The general form, which is the useful part: **which column may be seeded from
   the clock is decided by what RENDERS it, not by the table it lives in.** A
-  Phase 9 conversation carries a `window_expires_at` relative to `now()` - it
+  Phase 7 conversation carries a `window_expires_at` relative to `now()` - it
   has to move, or the thread stops being near its deadline the day after the
   baseline is recorded, and nothing prints it as an instant - beside a
   `last_message_at` that is a literal, because the inbox prints that one
@@ -1153,7 +1153,7 @@ statement that used it. The volatile-expression rule still holds for something
 genuinely volatile. `now()` is not it.
 
 **A rate that "cannot exceed 100%" is worth a CHECK constraint, not a comment.**
-Phase 9's rollup asserts its own partitions in the database -
+Phase 7's rollup asserts its own partitions in the database -
 `outbound_* summed = messages_outbound`, `conversations_replied <=
 conversations_messaged`. A `FILTER` clause that overlaps or misses a status
 makes a chart quietly not add up, and one statement computing all seven counters
@@ -1161,7 +1161,7 @@ is the only thing that would ever notice. Break-once confirmed it: narrowing one
 count is refused with `23514` rather than by an assertion.
 
 **The dashboard shows staleness rather than hiding it, and never shows a zero it
-cannot support.** Two rules from Phase 9, both of which a later change would
+cannot support.** Two rules from Phase 7, both of which a later change would
 find it natural to "improve".
 
 The rolled-up half of the page is up to a minute old and says so on every load -
@@ -1289,7 +1289,7 @@ and one exactly at it completes. The general form — **when a constant is the
 guard, assert the constant from both sides.** A single-sided assertion passes for
 every value above the real one.
 
-**A pending dashboard card is a claim, and claims expire.** Phase 9's
+**A pending dashboard card is a claim, and claims expire.** Phase 7's
 `aiHandling` card said "Nothing here is automated yet, so every reply so far was
 written by your team." Correct when written, and a false statement about the
 tenant's own business the moment a flow was published — on a page whose every

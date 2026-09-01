@@ -9,8 +9,12 @@ import { useRouter } from "next/navigation";
  * A poll rather than a socket: the inbound path already ends in a database
  * write from a worker, so there is nothing on the web side holding a connection
  * that could push - and a five-second delay on an inbound message is not what
- * makes or breaks this product. Sockets are a Phase 9 conversation, with a
- * shared Redis subscription behind them.
+ * makes or breaks this product. Sockets are a scale conversation, with a
+ * shared Redis subscription behind them - deliberately not given a phase
+ * number here, because the number this comment used to carry (9) has since
+ * shipped as the dashboard and brought no sockets with it. A forward
+ * reference to a numbered phase is a promise the renumbering can silently
+ * reassign to somebody else's work.
  *
  * `router.refresh()` re-runs the server component and reconciles, so the
  * composer keeps its draft and focus across a refresh. Replacing this with a

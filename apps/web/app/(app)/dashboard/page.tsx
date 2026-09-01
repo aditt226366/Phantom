@@ -38,7 +38,7 @@ export const metadata: Metadata = { title: "Dashboard" };
  * Every number here comes from the database. There are no placeholders.
  * ---------------------------------------------------------------------------
  *
- * This section was an empty state from Phase 1 to Phase 9 while five features
+ * This section was an empty state from Phase 1 to Phase 7 while five features
  * sent, received, scored and spent on the tenant's behalf. The rule for filling
  * it was that a figure is either real or it is absent - so the cards whose data
  * does not exist yet (AI handling, lead scores, orders) say so in words and
@@ -295,7 +295,7 @@ export default async function DashboardPage() {
                       label: "Answered by a flow",
                       percent:
                         (data.automation.automated / data.automation.total) * 100,
-                      /* The denominator, printed. Phase 9's rule about the
+                      /* The denominator, printed. Phase 7's rule about the
                          reply rate applies here for the same reason: an
                          unlabelled proportion reads as though it shared the
                          one above it, and this one does not. */

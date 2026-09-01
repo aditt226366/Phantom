@@ -33,7 +33,7 @@
 --   SELECT count(*) FROM whatsapp_webhook_events
 --    WHERE processed_at IS NULL AND created_at < $1;   -- now() minus 5 minutes
 --
--- That is what Phase 9's dashboard will read.
+-- That is what Phase 7's dashboard will read.
 --
 -- ---------------------------------------------------------------------------
 -- The payload is text, not jsonb

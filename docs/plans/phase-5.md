@@ -287,7 +287,7 @@ obvious next step and is a product decision, not a code one.
 
 **Pricing is not configured.** Every price is zero at version 1, so the confirm
 screen says pricing is not configured rather than showing a confident 0.00 that
-would read as a promise this is free. Phase 7 wires Meta's real conversation
+would read as a promise this is free. Phase 11 wires Meta's real conversation
 rates.
 
 **`source_rows` is capped at 20,000 rows and 5 MB.** A larger list has to be

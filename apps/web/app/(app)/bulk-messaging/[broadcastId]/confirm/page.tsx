@@ -133,7 +133,7 @@ export default async function ConfirmBroadcastPage({
    * Priced as a marketing conversation, which is what Meta actually bills for
    * a template to somebody who has not written in. Every price is zero at
    * version 1 - the list is a placeholder until Meta's real rates are wired in
-   * Phase 7 - so the screen says pricing is not configured rather than showing
+   * Phase 11 - so the screen says pricing is not configured rather than showing
    * a confident 0.00, which would read as a promise that this is free.
    */
   const priced = priceUsage(

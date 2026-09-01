@@ -51,7 +51,7 @@ describe("windowLabel", () => {
     /*
      * The comment above always claimed a bucket and the assertion always
      * checked a minute count - which nothing caught, because no fixture had a
-     * near-term window until Phase 9 seeded three and both inbox baselines
+     * near-term window until Phase 7 seeded three and both inbox baselines
      * started moving ~190 pixels a run. Not rasteriser noise, which is one or
      * two pixels.
      *

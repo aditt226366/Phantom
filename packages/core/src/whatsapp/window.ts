@@ -63,6 +63,41 @@ export function describeWindow(
   return { kind: "open", hours: Math.ceil(remaining / 3_600_000) };
 }
 
+/**
+ * How near a closing window is, coarsely.
+ *
+ * ---------------------------------------------------------------------------
+ * Why a bucket and not the minute count the state already carries
+ * ---------------------------------------------------------------------------
+ *
+ * Two reasons, and the second is the one that made this a shared function
+ * rather than a detail of one page.
+ *
+ * A person does not act differently at 41 minutes than at 43. The decisions
+ * available are reply now, reply this half hour, and reply before it shuts -
+ * which is three buckets, and a minute count invites reading precision into a
+ * value whose whole purpose is a deadline.
+ *
+ * And a rendered minute count TICKS. The conventions state the rule for this
+ * exact column - the window may appear as an open/closed state or as a coarse
+ * bucket, never as an instant - because the screenshot fixture seeds an open
+ * window relative to now(), and anything decrementing differs between the seed
+ * and the capture. That hazard was latent for as long as no fixture had a
+ * near-term window; Phase 9 seeded three, and both inbox baselines moved by
+ * ~190 pixels a run. Not rasteriser noise, which is one or two.
+ *
+ * Here rather than in either page because the inbox badge and the dashboard's
+ * closing-windows card describe the same column, and two wordings for one state
+ * across two screens is how a support conversation goes wrong.
+ */
+export function windowBucket(state: WindowState): string | null {
+  if (state.kind !== "closing") return null;
+
+  if (state.minutes <= 15) return "Under 15 min";
+  if (state.minutes <= 30) return "Under 30 min";
+  return "Within the hour";
+}
+
 /** Whether free-form messaging is allowed right now. */
 export function isWindowOpen(state: WindowState): boolean {
   return state.kind !== "closed";

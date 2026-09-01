@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { rollupFreshness } from "@whatsapp-os/core/dashboard";
 import {
   ageLabel,
+  closingBucket,
   freshnessLabel,
   minutesLeft,
   qualityIsCritical,
@@ -88,15 +89,27 @@ describe("freshness, which the page always states", () => {
     expect(label).not.toContain("ago");
   });
 
-  it("says a fresh reading is fresh, coarsely", () => {
-    const label = freshnessLabel(
+  it("gives a fresh reading no number at all", () => {
+    /*
+     * The property the screenshot suite depends on, asserted rather than
+     * assumed: two readings taken four minutes apart must render the SAME
+     * string, or the baseline differs between the seed and the capture and the
+     * suite is diagnosed as flaky rather than as a fixture.
+     */
+    const justNow = freshnessLabel(
       rollupFreshness(new Date(now.getTime() - 20_000), now),
     );
+    const fourMinutes = freshnessLabel(
+      rollupFreshness(new Date(now.getTime() - 240_000), now),
+    );
 
-    expect(label).toBe("Counted a moment ago");
+    expect(justNow).toBe("Counted within the last few minutes");
+    expect(fourMinutes).toBe(justNow);
+    /* And carries no digit, which is the mechanical form of the same rule. */
+    expect(justNow).not.toMatch(/\d/);
   });
 
-  it("says out loud when the refresh has stopped", () => {
+  it("says out loud when the refresh has stopped, with the age", () => {
     const label = freshnessLabel(
       rollupFreshness(new Date(now.getTime() - 7_200_000), now),
     );
@@ -158,15 +171,35 @@ describe("ages", () => {
 describe("a closing window", () => {
   const now = new Date("2026-09-01T12:00:00.000Z");
 
-  it("is minutes remaining and never a clock time", () => {
-    /*
-     * Two reasons, and the second is a fixture rule. "Closes at 14:32" needs
-     * the reader to know the time and the zone. And the visual suite seeds an
-     * open window as now() + 18h - because a conversation cannot be both
-     * permanently open and described by a fixed instant - so a page printing
-     * the instant produces a baseline that never matches twice.
-     */
+  it("is minutes remaining, for sorting and the accessible label", () => {
     expect(minutesLeft(new Date(now.getTime() + 12 * 60_000), now)).toBe(12);
+  });
+
+  it("renders as a bucket that does not tick between seed and capture", () => {
+    /*
+     * The conventions' rule about this column, asserted. A window seeded eight
+     * minutes out and photographed three minutes later must produce the SAME
+     * string - a decrementing minute count fails that exactly the way a
+     * timestamp does, and the symptom is a suite people re-record instead of
+     * reading.
+     */
+    const atSeed = closingBucket(new Date(now.getTime() + 8 * 60_000), now);
+    const atCapture = closingBucket(
+      new Date(now.getTime() + 8 * 60_000),
+      new Date(now.getTime() + 3 * 60_000),
+    );
+
+    expect(atSeed).toBe("Under 15 min");
+    expect(atCapture).toBe(atSeed);
+  });
+
+  it("has a bucket for each decision actually available", () => {
+    expect(closingBucket(new Date(now.getTime() + 22 * 60_000), now)).toBe(
+      "Under 30 min",
+    );
+    expect(closingBucket(new Date(now.getTime() + 50 * 60_000), now)).toBe(
+      "Within the hour",
+    );
   });
 
   it("rounds up, so a window is never reported as already gone", () => {

@@ -2,6 +2,7 @@ import {
   PLATFORM_TIMEZONE_LABEL,
   type RollupFreshness,
 } from "@whatsapp-os/core";
+import { describeWindow, windowBucket } from "@whatsapp-os/core/whatsapp";
 
 /**
  * The dashboard's display decisions, as functions with return values.
@@ -117,30 +118,44 @@ export function tierLabel(tier: string | null): string {
  * teaches people that no line means live, and the whole point of a rollup is
  * that nothing here is live.
  *
- * Coarse on purpose - "a moment ago", not "37 seconds ago". A figure that ticks
- * every second is a figure people watch instead of reading the page, and the
- * distinction that matters is between "this minute" and "this is not being
- * refreshed at all".
+ * ---------------------------------------------------------------------------
+ * A fresh reading carries NO number, and that is deliberate twice over
+ * ---------------------------------------------------------------------------
+ *
+ * The product reason: while the refresh is running, the exact age is not a
+ * fact anybody acts on. Every value between zero and the stale threshold means
+ * the same thing - the figures are current - and printing "37 seconds" invites
+ * watching a number tick instead of reading the page. The distinction that
+ * matters is binary: being refreshed, or not.
+ *
+ * The fixture reason, which is why this is a rule rather than a preference: an
+ * age that ticks is a rendered value that differs between the seed and the
+ * screenshot, so the baseline never matches twice and the suite is diagnosed as
+ * flaky rather than as a fixture. The conventions state the general form of
+ * this for the 24-hour window - a state or a coarse bucket, never an instant -
+ * and a duration counted from a stored timestamp is the same hazard.
+ *
+ * Past the threshold the age IS the content, because "how long has this been
+ * broken" is the question, and by then it is coarse enough not to tick.
  */
 export function freshnessLabel(freshness: RollupFreshness): string {
   if (freshness.state === "never") {
     return "Not counted yet — the first refresh runs within a minute.";
   }
 
+  if (freshness.state === "fresh") {
+    return "Counted within the last few minutes";
+  }
+
   const { ageSeconds } = freshness;
   const age =
-    ageSeconds < 90
-      ? "a moment ago"
-      : ageSeconds < 3600
-        ? `${Math.round(ageSeconds / 60)} minutes ago`
-        : ageSeconds < 86_400
-          ? `${Math.round(ageSeconds / 3600)} hours ago`
-          : `${Math.round(ageSeconds / 86_400)} days ago`;
+    ageSeconds < 3600
+      ? `${Math.round(ageSeconds / 60)} minutes ago`
+      : ageSeconds < 86_400
+        ? `${Math.round(ageSeconds / 3600)} hours ago`
+        : `${Math.round(ageSeconds / 86_400)} days ago`;
 
-  if (freshness.state === "stale") {
-    return `Last counted ${age}. The refresh does not appear to be running.`;
-  }
-  return `Counted ${age}`;
+  return `Last counted ${age}. The refresh does not appear to be running.`;
 }
 
 /**
@@ -190,24 +205,45 @@ export function ageLabel(since: Date, now: Date): string {
 }
 
 /**
- * How long until a window shuts.
+ * How long until a window shuts, as one of three buckets.
  *
- * Minutes, always, and never a clock time. Two reasons and both matter:
+ * ---------------------------------------------------------------------------
+ * A bucket rather than a count of minutes, which is the conventions' own rule
+ * ---------------------------------------------------------------------------
  *
- *   1. "Closes at 14:32" needs the reader to know what time it is now and which
- *      zone that is in. "Closes in 12 minutes" does not.
- *   2. The screenshot suite seeds an open window as now() + 18h, because a
- *      conversation cannot be both permanently open and described by a fixed
- *      instant - so a page printing the instant produces a baseline that never
- *      matches twice. The rule is stated in the conventions and this is the
- *      function that keeps it: the horizon is an hour, so the value here is
- *      always a small number of minutes.
+ * The screenshot suite seeds an open window as `now() + 18h`, because a
+ * conversation cannot be both permanently open and described by a fixed
+ * instant. The corollary the conventions state is binding on whoever renders
+ * one: the window may appear as an open/closed state or as a COARSE BUCKET,
+ * never as a timestamp.
+ *
+ * A count of minutes is not a timestamp, but it has the identical failure -
+ * it decrements between the seed and the capture, so the baseline never
+ * matches twice and the suite gets re-recorded rather than read.
+ *
+ * Three buckets, and they are the three decisions available: reply now, reply
+ * this half hour, reply today. A person acting on this list does not do
+ * anything differently at 41 minutes than at 43.
+ *
+ * `minutesLeft` stays exported beside it because the sort order and the
+ * accessible label want the real number - what must not be RENDERED as a
+ * ticking value is the visible text.
  */
 export function minutesLeft(expiresAt: Date, now: Date): number {
   return Math.max(
     0,
     Math.ceil((expiresAt.getTime() - now.getTime()) / 60_000),
   );
+}
+
+export function closingBucket(expiresAt: Date, now: Date): string {
+  /*
+   * Delegates to the window vocabulary rather than restating it. The inbox
+   * badge renders the same column through the same function, so the two screens
+   * cannot drift into two wordings for one state - which is the same argument
+   * the delivery ladder's labels make.
+   */
+  return windowBucket(describeWindow(expiresAt, now)) ?? "Within the hour";
 }
 
 /* ------------------------------------------------------------------------- *

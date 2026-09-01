@@ -1,4 +1,4 @@
-import type { WindowState } from "@whatsapp-os/core/whatsapp";
+import { windowBucket, type WindowState } from "@whatsapp-os/core/whatsapp";
 
 /**
  * What the conversation list says about a thread.
@@ -49,7 +49,12 @@ export function windowLabel(state: WindowState): string {
     case "closed":
       return "Window closed";
     case "closing":
-      return `${state.minutes}m left`;
+      /* A bucket, not the minute count. See windowBucket: a person does not
+         act differently at 41 minutes than at 43, and a decrementing number
+         is a rendered value that differs between the fixture's seed and its
+         capture. The `?? ` is unreachable - the state is `closing` here - and
+         exists because the function is total over every WindowState. */
+      return windowBucket(state) ?? "Closing";
     case "open":
       return `${state.hours}h left`;
   }

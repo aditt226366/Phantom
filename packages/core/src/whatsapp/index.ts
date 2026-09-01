@@ -25,6 +25,7 @@ export {
   CUSTOMER_SERVICE_WINDOW_MS,
   describeWindow,
   isWindowOpen,
+  windowBucket,
   windowExpiryFor,
 } from "./window.ts";
 export type { WindowState } from "./window.ts";

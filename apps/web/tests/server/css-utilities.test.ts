@@ -228,6 +228,13 @@ describe.skipIf(css === null)("every utility used resolves to a rule", () => {
      */
     const INTENDED = new Map([
       ["h-xxs", "the plan-distribution bar is a 4px rule, which is the base unit"],
+      [
+        "h-sm",
+        "the dashboard's delivery ladder is a 12px stacked bar. Thicker than " +
+          "the 4px rules above it because it carries seven segments that have " +
+          "to be told apart, and 12px genuinely is three base units - the " +
+          "same case as h-xxs, not a max-w-md-style collapse",
+      ],
     ]);
 
     const SIZE_PROPERTIES = [

@@ -71,3 +71,6 @@ export {
   turnsFrom,
 } from "./prompt.ts";
 export type { EscalationInput, EscalationReason, PromptInput } from "./prompt.ts";
+
+export { FLOOR, floorIsProvisional } from "./floor.ts";
+export type { FloorProvenance } from "./floor.ts";

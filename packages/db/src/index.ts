@@ -234,3 +234,10 @@ export {
   FlowStepKind,
   LeadScore,
 } from "./generated/prisma/enums.ts";
+export {
+  embeddingModelsInBase,
+  readDocumentBytes,
+  replaceChunks,
+  retrieveChunks,
+} from "./verse.ts";
+export type { ChunkToStore } from "./verse.ts";

@@ -101,14 +101,37 @@ describe("the Verse model strings", () => {
     });
   }
 
-  it("writes the embedding model id in exactly one file", () => {
+  it("writes the embedding model id in exactly two files, and names both", () => {
+    /*
+     * -----------------------------------------------------------------------
+     * Why this one is TWO where the tiers are one
+     * -----------------------------------------------------------------------
+     *
+     * `models.ts` DEFINES the embedding model. `floor.ts` RECORDS which model
+     * the similarity floor was last measured against, and those are different
+     * facts that have to be able to disagree.
+     *
+     * After a re-embedding migration the constant names the new model while
+     * the floor still names the old one - correctly, because the floor has not
+     * been re-measured and a number measured against different embeddings is
+     * not evidence about these ones. Making floor.ts reference the constant
+     * would erase exactly that gap: the provenance would silently claim to
+     * have been measured against whatever is current, which is the one lie the
+     * file exists to prevent.
+     *
+     * So it is a literal, and it is listed here rather than waived - a THIRD
+     * copy is still a failing test.
+     */
     const hits = files.filter((file) =>
       stripComments(readFileSync(file, "utf8")).includes(VERSE_EMBEDDING.model),
     );
 
     expect(
-      hits.map((f) => f.slice(repoRoot.length + 1).replace(/\\/g, "/")),
-    ).toEqual(["packages/core/src/verse/models.ts"]);
+      hits.map((f) => f.slice(repoRoot.length + 1).replace(/\\/g, "/")).sort(),
+    ).toEqual([
+      "packages/core/src/verse/floor.ts",
+      "packages/core/src/verse/models.ts",
+    ]);
   });
 
   it("carries no date suffix on any model id", () => {

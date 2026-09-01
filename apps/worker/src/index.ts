@@ -22,6 +22,7 @@ import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
 import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
+import { handleVerseIngest } from "./jobs/verse-ingest.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -126,6 +127,18 @@ async function processJob(job: Job): Promise<unknown> {
        */
       return handleDashboardRollup(
         parseJobPayload(JOB_NAMES.DASHBOARD_ROLLUP, job.data),
+      );
+
+    case JOB_NAMES.VERSE_INGEST:
+      /*
+       * Extraction, chunking and embedding for one knowledge base document.
+       *
+       * Here rather than in the upload request because a 300-page PDF takes
+       * seconds to parse and a server action holding a pooled connection for
+       * that long is a request nobody's browser waits out.
+       */
+      return handleVerseIngest(
+        parseJobPayload(JOB_NAMES.VERSE_INGEST, job.data),
       );
 
     default:

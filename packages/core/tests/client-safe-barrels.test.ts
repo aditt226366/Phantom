@@ -84,6 +84,24 @@ const BARRELS = [
     forbidden: null,
     minFiles: 3,
   },
+  {
+    name: "verse",
+    entry: resolve(here, "..", "src", "verse", "index.ts"),
+    serverSubpath: "verse-server",
+    /*
+     * `ingest.ts` imports pdf-parse, which is a Node module carrying a PDF
+     * engine and a worker. The campaign wizard and /dev/rag are client
+     * components that import this barrel - for the tier labels, the floor's
+     * provenance and the chunking preview - so this is the third instance of
+     * exactly the hazard the first two entries exist for.
+     *
+     * The first was the core barrel dragging @node-rs/argon2 into the browser
+     * graph, which built fine for six commits because nothing rendered the
+     * component that pulled it in.
+     */
+    forbidden: "ingest.ts",
+    minFiles: 4,
+  },
 ] as const;
 
 /** Bare specifiers that are known browser-safe. Anything else is a finding. */

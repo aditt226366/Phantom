@@ -198,6 +198,16 @@ export const OUT_OF_BAND_DDL = new Set([
      the index were ever actually dropped, and this is what would fail
      instead. Without it the pair is a hole rather than a mechanism. */
   "index:kb_chunks.kb_chunks_embedding_hnsw_idx",
+  /* 10 MiB on a knowledge base document, and a byte_size that cannot drift
+     from the bytes present. The upload path aborts the stream at the cap;
+     these are the backstops that do not depend on it having done so - the
+     argument whatsapp_media and kyc_documents already make twice. */
+  "check:kb_documents.kb_documents_bytes_within_cap",
+  "check:kb_documents.kb_documents_byte_size_matches",
+  /* EXTERNAL for the reason the other two byte columns are: a compressed value
+     must be decompressed from the start, so any future chunked read would
+     become a full read. */
+  "storage:kb_documents.bytes=e",
   /* Ten seconds to a day. Sheets meters reads per PROJECT, so a binding polling
      every second would consume the whole allowance and take every other
      tenant's bindings down with it. Mirrors POLL_INTERVAL_MIN/MAX_SECONDS. */

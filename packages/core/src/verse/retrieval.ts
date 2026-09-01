@@ -1,3 +1,4 @@
+import { FLOOR } from "./floor.ts";
 /**
  * The floor, and the refusal it exists to produce.
  *
@@ -41,6 +42,12 @@
 /**
  * Cosine similarity below which a passage is not evidence.
  *
+ * Read from `floor.ts`, which carries the provenance with it - whether anybody
+ * has actually measured this against real embeddings, when, against which
+ * model, and against which question set. `/dev/rag` renders that status, so a
+ * floor nobody has checked says so where somebody is looking at retrieval
+ * results rather than only in a commit message.
+ *
  * ---------------------------------------------------------------------------
  * This number is a STARTING POINT and is not yet earned
  * ---------------------------------------------------------------------------
@@ -64,7 +71,7 @@
  * `npm run verse:metric` is what earns it. Until that has run against real
  * embeddings this value is provisional, and the plan doc says so.
  */
-export const SIMILARITY_FLOOR = 0.35;
+export const SIMILARITY_FLOOR = FLOOR.value;
 
 /**
  * How many passages reach the model.

@@ -2638,6 +2638,17 @@ model KbDocument {
   /// fixed in a minute. A CHECK ties this to the status.
   failureReason String? @map("failure_reason")
 
+  /// The uploaded file. Null for a URL document.
+  ///
+  /// Stored so extraction can happen in the worker: a 300-page PDF takes
+  /// seconds to parse, and a server action holding a pooled connection for
+  /// that long is a request nobody waits out. Same arrangement as
+  /// whatsapp_media.bytes and kyc_documents.bytes, including STORAGE EXTERNAL.
+  ///
+  /// Never selected by a list query. Every read of this column is the
+  /// ingestion handler asking for one document by id.
+  bytes Bytes?
+
   chunkCount Int       @default(0) @map("chunk_count")
   indexedAt  DateTime? @db.Timestamptz(3) @map("indexed_at")
 

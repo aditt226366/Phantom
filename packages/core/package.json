@@ -22,6 +22,7 @@
     "./redact": "./src/redact.ts",
     "./time": "./src/time.ts",
     "./verse": "./src/verse/index.ts",
+    "./verse-server": "./src/verse/ingest.ts",
     "./whatsapp": "./src/whatsapp/index.ts",
     "./whatsapp-server": "./src/whatsapp/signature.ts"
   },
@@ -33,6 +34,7 @@
     "@node-rs/argon2": "^2.1.0",
     "dotenv": "^17.4.2",
     "libphonenumber-js": "^1.13.11",
+    "pdf-parse": "^2.4.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

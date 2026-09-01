@@ -27,6 +27,23 @@ import { waIdForE164 } from "./broadcasts.ts";
  * So the shared part is here and both producers call it. What stays with each
  * producer is only its own bookkeeping: which recipient row to mark, or which
  * lead row to point at the message.
+ *
+ * ---------------------------------------------------------------------------
+ * The flow builder is the third producer, and it needed no new send path
+ * ---------------------------------------------------------------------------
+ *
+ * A flow starts by sending an approved template - the only thing that may go
+ * out before a 24-hour window is open - so its entry node is a caller of
+ * materialiseOutboundTemplate with `buttonPayloads` set, and nothing else about
+ * it is special. The payloads carry the ids that make a tap on that template
+ * start a run.
+ *
+ * Its later steps are interactive messages into a conversation that already
+ * exists, which is the one thing the function above cannot express: there is no
+ * contact to find or create and no conversation to open. materialiseFlowMessage
+ * below is that case, and it deliberately shares the two halves that matter -
+ * the last opt-out filter and the advanceConversation call whose absence Phase
+ * 5 shipped and a screenshot caught.
  */
 
 export interface OutboundTemplateInput {
@@ -41,6 +58,14 @@ export interface OutboundTemplateInput {
   createdByUserId: string | null;
   /** Set when this message is one recipient of a bulk run. */
   broadcastId?: string | null;
+  /**
+   * One payload per quick-reply button, in the template's own button order.
+   *
+   * Present only for a flow's entry send. The button TEXT was fixed when Meta
+   * approved the template; the payload is per send, and this is the hook that
+   * lets a tap on an approved template start a run. See button-id.ts.
+   */
+  buttonPayloads?: readonly string[];
 }
 
 export interface OutboundTemplate {
@@ -143,6 +168,11 @@ export async function materialiseOutboundTemplate(
         name: input.template.name,
         language: input.template.language,
         parameters: input.variables,
+        /* Omitted rather than stored empty, so a row written before flows
+           existed and a row from a flow-less template read identically. */
+        ...(input.buttonPayloads && input.buttonPayloads.length > 0
+          ? { buttonPayloads: [...input.buttonPayloads] }
+          : {}),
       },
       occurredAt: input.occurredAt,
       sentByUserId: input.createdByUserId,
@@ -180,4 +210,99 @@ export async function materialiseOutboundTemplate(
     messageId: message.id,
     sendAttempt: message.sendAttempt,
   };
+}
+
+export interface FlowMessageInput {
+  conversationId: string;
+  contactId: string;
+  /** What the customer will read, so the thread shows a message not a shape. */
+  renderedBody: string;
+  /**
+   * The interactive message as Meta takes it, from buildInteractivePayload.
+   *
+   * Null for a plain text step - a flow's message and end nodes send words
+   * with no buttons on them, and those are ordinary text sends.
+   */
+  interactive: unknown | null;
+  mediaId?: string | null;
+  occurredAt: Date;
+}
+
+/**
+ * A flow's step, as an ordinary outbound message in a conversation that exists.
+ *
+ * The narrower sibling of materialiseOutboundTemplate, and narrow on purpose.
+ * By the time a flow is past its entry node the customer has tapped something,
+ * so the contact, the conversation and the window are all already there - and
+ * upserting them again would be three statements that can only produce what is
+ * in front of us.
+ *
+ * What it does NOT skip is the opt-out filter and the conversation advance.
+ * Those are the two halves that have gone wrong before: a contact can opt out
+ * between one question and the next, and a thread whose last_message_at never
+ * moves sorts below every silent thread in the inbox while a customer is
+ * actively in a conversation with it.
+ *
+ * Returns null when the contact must not be messaged, exactly as the function
+ * above does. The engine reads that as a reason to end the run rather than as
+ * an error: somebody who has opted out has not failed, they have left.
+ */
+export async function materialiseFlowMessage(
+  db: CompanyClient,
+  companyId: string,
+  input: FlowMessageInput,
+): Promise<{ messageId: string; sendAttempt: number } | null> {
+  const contact = await db.contact.findFirst({
+    where: { id: input.contactId },
+    select: { optedOutAt: true, undeliverableAt: true },
+  });
+
+  /*
+   * The last filter, at the last moment - and it is not redundant with the
+   * check the entry send already made. Hours or days pass between a flow's
+   * first question and its third, and a customer replying STOP in between is
+   * the exact case this exists for.
+   */
+  if (!contact || contact.optedOutAt !== null || contact.undeliverableAt !== null) {
+    return null;
+  }
+
+  const message = await db.message.create({
+    data: {
+      companyId,
+      conversationId: input.conversationId,
+      direction: "OUTBOUND",
+      status: "PENDING",
+      /*
+       * Meta's own vocabulary, as the column's comment requires. "interactive"
+       * is what arrives on the way in for a tap, so a thread holds the same
+       * word for both directions of the same kind of message.
+       */
+      type: input.interactive ? "interactive" : "text",
+      body: input.renderedBody,
+      interactivePayload: (input.interactive ?? null) as never,
+      mediaId: input.mediaId ?? null,
+      occurredAt: input.occurredAt,
+      /* Nobody pressed send. A flow step has no author beyond whoever
+         published the version, and that is recorded on the version. */
+      sentByUserId: null,
+      sendAttempt: 0,
+    },
+    select: { id: true, sendAttempt: true },
+  });
+
+  /*
+   * windowExpiresAt stays null here too, and for the same reason it does in
+   * materialiseOutboundTemplate: only the customer writing opens a window. A
+   * flow sending three questions in a row must not extend its own deadline.
+   */
+  await advanceConversation(db, companyId, input.conversationId, {
+    occurredAt: input.occurredAt,
+    preview: input.renderedBody,
+    inbound: false,
+    windowExpiresAt: null,
+    unread: 0,
+  });
+
+  return { messageId: message.id, sendAttempt: message.sendAttempt };
 }

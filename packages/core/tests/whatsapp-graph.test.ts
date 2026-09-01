@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendWhatsAppText } from "../src/whatsapp/graph.ts";
+import {
+  sendWhatsAppInteractive,
+  sendWhatsAppTemplate,
+  sendWhatsAppText,
+} from "../src/whatsapp/graph.ts";
 import { conversationUsageKind, findPrice, ACTIVE_PRICE_VERSION } from "../src/usage.ts";
 
 const SECRETS = {
@@ -236,5 +240,186 @@ describe("pricing records facts rather than modelling Meta", () => {
     ] as const) {
       expect(findPrice(kind, ACTIVE_PRICE_VERSION)?.micros, kind).toBe(0);
     }
+  });
+});
+
+describe("the two shapes a flow sends", () => {
+  /**
+   * A flow is a third PRODUCER of messages, not a third send path, and these
+   * assertions are about the JSON that distinction produces.
+   *
+   * The template arm carries payloads on buttons whose TEXT Meta fixed at
+   * approval time - the one hook that lets a tap on an approved template start
+   * a run, and therefore the only way a flow can begin before a 24-hour window
+   * is open. The interactive arm needs no approval and only works inside one.
+   */
+
+  it("puts one component per quick-reply button, each naming its index", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, ACCEPTED));
+
+    await sendWhatsAppTemplate(
+      SECRETS,
+      {
+        to: "919876543210",
+        name: "enquiry_open",
+        language: "en_US",
+        parameters: ["Asha"],
+        buttonPayloads: ["f1.e.ver1.start", "f1.e.ver1.start2"],
+      },
+      impl,
+    );
+
+    const body = JSON.parse(String(calls[0]?.init?.body));
+
+    /* Meta takes them as separate components rather than as a list, and an
+       index that does not match an approved button is refused. */
+    expect(body.template.components).toEqual([
+      { type: "body", parameters: [{ type: "text", text: "Asha" }] },
+      {
+        type: "button",
+        sub_type: "quick_reply",
+        index: "0",
+        parameters: [{ type: "payload", payload: "f1.e.ver1.start" }],
+      },
+      {
+        type: "button",
+        sub_type: "quick_reply",
+        index: "1",
+        parameters: [{ type: "payload", payload: "f1.e.ver1.start2" }],
+      },
+    ]);
+  });
+
+  it("sends button components even when the template has no variables", async () => {
+    /*
+     * The regression this guards: the components array used to be omitted
+     * entirely when `parameters` was empty, because Meta rejects an empty one.
+     * A template with buttons and no {{1}} is completely ordinary, and under
+     * the old condition its payloads would have been dropped in silence - so
+     * every tap on that flow's entry would arrive with Meta's default payload
+     * and resolve as not_ours.
+     */
+    const { impl, calls } = stubFetch(jsonResponse(200, ACCEPTED));
+
+    await sendWhatsAppTemplate(
+      SECRETS,
+      {
+        to: "919876543210",
+        name: "enquiry_open",
+        language: "en_US",
+        parameters: [],
+        buttonPayloads: ["f1.e.ver1.start"],
+      },
+      impl,
+    );
+
+    const body = JSON.parse(String(calls[0]?.init?.body));
+
+    expect(body.template.components).toEqual([
+      {
+        type: "button",
+        sub_type: "quick_reply",
+        index: "0",
+        parameters: [{ type: "payload", payload: "f1.e.ver1.start" }],
+      },
+    ]);
+  });
+
+  it("omits components entirely when there is nothing to fill in", async () => {
+    /* Meta rejects an empty components array rather than ignoring it. */
+    const { impl, calls } = stubFetch(jsonResponse(200, ACCEPTED));
+
+    await sendWhatsAppTemplate(
+      SECRETS,
+      { to: "919876543210", name: "plain", language: "en_US", parameters: [] },
+      impl,
+    );
+
+    const body = JSON.parse(String(calls[0]?.init?.body));
+    expect(body.template.components).toBeUndefined();
+  });
+
+  it("sends an interactive message as its own type", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, ACCEPTED));
+
+    const result = await sendWhatsAppInteractive(
+      SECRETS,
+      {
+        to: "919876543210",
+        interactive: {
+          type: "button",
+          body: { text: "What are you after?" },
+          action: {
+            buttons: [
+              { type: "reply", reply: { id: "f1.r.run1.menu.shoes", title: "Shoes" } },
+            ],
+          },
+        },
+      },
+      impl,
+    );
+
+    const body = JSON.parse(String(calls[0]?.init?.body));
+
+    expect(body.type).toBe("interactive");
+    expect(body.interactive.action.buttons[0].reply.id).toBe("f1.r.run1.menu.shoes");
+    expect(result.ok).toBe(true);
+  });
+
+  it("gives an interactive send the same three endings as every other send", async () => {
+    /*
+     * The reason all three shapes share decodeSendResult. The interesting
+     * outcome is UNCONFIRMED - Meta may or may not have processed the request -
+     * and a second implementation getting that one branch subtly wrong would
+     * send a real customer the same question twice.
+     */
+    const interactive = {
+      type: "button" as const,
+      body: { text: "?" },
+      action: { buttons: [] },
+    };
+
+    const timedOut = stubFetch(timeoutError());
+    const unknown = await sendWhatsAppInteractive(
+      SECRETS,
+      { to: "919876543210", interactive },
+      timedOut.impl,
+    );
+
+    expect(unknown.ok).toBe(false);
+    if (unknown.ok) return;
+    expect(unknown.delivery).toBe("unknown");
+
+    const answered = stubFetch(
+      jsonResponse(400, {
+        error: { message: "Bad interactive", code: 131009, type: "OAuthException" },
+      }),
+    );
+    const refused = await sendWhatsAppInteractive(
+      SECRETS,
+      { to: "919876543210", interactive },
+      answered.impl,
+    );
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    /* Meta answered, so non-delivery is proven and a retry is safe. */
+    expect(refused.delivery).toBe("refused");
+  });
+
+  it("refuses without credentials rather than calling Meta", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, ACCEPTED));
+
+    const result = await sendWhatsAppInteractive(
+      {},
+      {
+        to: "919876543210",
+        interactive: { type: "button", body: { text: "?" }, action: {} },
+      },
+      impl,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 });

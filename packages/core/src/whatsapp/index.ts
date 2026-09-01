@@ -36,6 +36,7 @@ export type { SendDecision, SendFacts, SendIntent, SendRefusal } from "./send-po
 export {
   MAX_MEDIA_BYTES,
   markWhatsAppRead,
+  sendWhatsAppInteractive,
   sendWhatsAppTemplate,
   sendWhatsAppText,
 } from "./graph.ts";

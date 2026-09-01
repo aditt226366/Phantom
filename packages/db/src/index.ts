@@ -111,7 +111,7 @@ export type {
   MaterialisedRecipient,
   TemplateForSend,
 } from "./broadcast-run.ts";
-export { materialiseOutboundTemplate } from "./outbound.ts";
+export { materialiseFlowMessage, materialiseOutboundTemplate } from "./outbound.ts";
 export type { OutboundTemplate, OutboundTemplateInput } from "./outbound.ts";
 export {
   claimLeadRow,

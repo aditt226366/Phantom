@@ -6,6 +6,7 @@ import {
 } from "@whatsapp-os/core";
 import { classifyBulkError } from "@whatsapp-os/core/bulk";
 import {
+  sendWhatsAppInteractive,
   sendWhatsAppTemplate,
   sendWhatsAppText,
 } from "@whatsapp-os/core/whatsapp";
@@ -68,8 +69,12 @@ export async function handleWhatsAppMessageSend(
         body: true,
         wamid: true,
         /* Present means this row is a template send. The payload holds the
-           name, language and the parameter values chosen at send time. */
+           name, language and the parameter values chosen at send time - and,
+           for a flow's entry, one payload per quick-reply button. */
         templatePayload: true,
+        /* Present means this row is a flow's interactive step: reply buttons
+           or a list, with ids naming the run and the node that asked. */
+        interactivePayload: true,
         /* Present means this row is one recipient of a broadcast, and that the
            run's status has to be consulted before anything is sent. */
         broadcastId: true,
@@ -182,6 +187,7 @@ export async function handleWhatsAppMessageSend(
 
   /* Decided once, before the check and the call, so they cannot disagree. */
   const template = readTemplatePayload(loaded.templatePayload);
+  const interactive = readInteractivePayload(loaded.interactivePayload);
 
   const sendability = await withCompany(companyId, (db, scoped) =>
     canSend(
@@ -198,6 +204,13 @@ export async function handleWhatsAppMessageSend(
        * the row was written from one. Meta re-checks anyway, and an approval
        * withdrawn between listing and sending comes back as a refusal with its
        * own reason rather than as something guessed at here.
+       *
+       * An interactive step is FREEFORM, which is the whole reason a flow can
+       * pause. Interactive messages need no approval and only work inside the
+       * 24-hour window, so asking with a template intent here would send a
+       * customer a question Meta refuses - and the flow would fail rather than
+       * pause with its position kept. This is where that check lives: in the
+       * send path, immediately before the call, never in a disabled control.
        */
       template ? { kind: "template", approved: true } : { kind: "freeform" },
       now,
@@ -221,20 +234,29 @@ export async function handleWhatsAppMessageSend(
     return { result: "declined" };
   }
 
-  /* 4. The call. No scope is open. Same outcome union either way, so step 5
-     below does not branch - a template that times out becomes UNCONFIRMED by
-     exactly the path a text does. */
+  /* 4. The call. No scope is open. One outcome union whichever shape goes out,
+     so step 5 below does not branch - an interactive question that times out
+     becomes UNCONFIRMED by exactly the path a template does, which is what
+     keeps a flow from inventing its own idea of what "sent" means. */
   const outcome = template
     ? await sendWhatsAppTemplate(secrets, {
         to: sendability.waId,
         name: template.name,
         language: template.language,
         parameters: template.parameters,
+        ...(template.buttonPayloads.length > 0
+          ? { buttonPayloads: template.buttonPayloads }
+          : {}),
       })
-    : await sendWhatsAppText(secrets, {
-        to: sendability.waId,
-        body: loaded.body ?? "",
-      });
+    : interactive
+      ? await sendWhatsAppInteractive(secrets, {
+          to: sendability.waId,
+          interactive,
+        })
+      : await sendWhatsAppText(secrets, {
+          to: sendability.waId,
+          body: loaded.body ?? "",
+        });
 
   /* 5. Write what happened. */
   if (outcome.ok) {
@@ -450,9 +472,12 @@ async function reconcileWaId(
  * text send, which is the safe direction - the message goes out as its body
  * rather than as a template nobody could reconstruct.
  */
-function readTemplatePayload(
-  raw: unknown,
-): { name: string; language: string; parameters: string[] } | null {
+function readTemplatePayload(raw: unknown): {
+  name: string;
+  language: string;
+  parameters: string[];
+  buttonPayloads: string[];
+} | null {
   if (!raw || typeof raw !== "object") return null;
 
   const payload = raw as Record<string, unknown>;
@@ -465,5 +490,38 @@ function readTemplatePayload(
     ? payload["parameters"].filter((v): v is string => typeof v === "string")
     : [];
 
-  return { name, language, parameters };
+  /* Absent on every template row written before flows existed, and on every
+     one written since by a producer with no buttons to fill. */
+  const buttonPayloads = Array.isArray(payload["buttonPayloads"])
+    ? payload["buttonPayloads"].filter((v): v is string => typeof v === "string")
+    : [];
+
+  return { name, language, parameters, buttonPayloads };
+}
+
+/**
+ * What an interactive row carries, or null if this is not one.
+ *
+ * Parsed as defensively as the template payload beside it and for the same
+ * reason: the column is jsonb and holds whatever was written. A payload this
+ * cannot read falls through to a text send of the row's body, which is the
+ * safe direction - the customer gets the question without the buttons rather
+ * than nothing at all, and the thread shows what happened.
+ *
+ * The shape is only checked as far as Meta needs it to be. Rebuilding it from
+ * the flow version instead would be the tempting alternative and is wrong: the
+ * ids inside name a specific run and node, and re-deriving them at send time
+ * would silently repair a payload whose ids no longer match the run - turning
+ * a bug into a question a customer actually receives.
+ */
+function readInteractivePayload(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+
+  const payload = raw as Record<string, unknown>;
+  const type = payload["type"];
+
+  if (type !== "button" && type !== "list") return null;
+  if (!payload["action"] || typeof payload["action"] !== "object") return null;
+
+  return payload;
 }

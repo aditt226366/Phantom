@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { withCompany } from "../src/index.ts";
+import { materialiseFlowMessage, withCompany } from "../src/index.ts";
 import { prisma } from "../src/client.ts";
 import { seedCompany, truncateAll, type SeededCompany } from "./helpers.ts";
 
@@ -470,5 +470,159 @@ describe("a lead source binding names the target its action needs", () => {
 
     expect(binding.action).toBe("FLOW");
     expect(binding.flowVersionId).toBe(fixture.versionId);
+  });
+});
+
+describe("a flow step is an ordinary outbound message", () => {
+  async function seedRun(): Promise<string> {
+    const run = await withCompany(company.id, (db, companyId) =>
+      db.flowRun.create({ data: { companyId, ...runData() }, select: { id: true } }),
+    );
+    return run.id;
+  }
+
+  it("writes an interactive row and advances the thread", async () => {
+    /*
+     * The advance is the half that has gone wrong before. Phase 5 shipped a
+     * producer that did not call advanceConversation: typecheck, lint and the
+     * whole db suite passed, and the screenshot showed sixteen threads reading
+     * "No preview" sorting ABOVE the customers who had actually written in,
+     * because last_message_at was null.
+     *
+     * A flow is worse than bulk in that respect, not better - the customer is
+     * mid-conversation, so the thread being buried is happening while somebody
+     * is waiting for an answer.
+     */
+    await seedRun();
+
+    const result = await withCompany(company.id, (db, companyId) =>
+      materialiseFlowMessage(db, companyId, {
+        conversationId: fixture.conversationId,
+        contactId: fixture.contactId,
+        renderedBody: "What are you after?",
+        interactive: {
+          type: "button",
+          body: { text: "What are you after?" },
+          action: { buttons: [] },
+        },
+        occurredAt: new Date("2026-09-06T10:00:00.000Z"),
+      }),
+    );
+
+    expect(result).not.toBeNull();
+
+    const [message, conversation] = await withCompany(company.id, async (db) => [
+      await db.message.findFirstOrThrow({
+        where: { id: result!.messageId },
+        select: { type: true, direction: true, status: true, interactivePayload: true },
+      }),
+      await db.conversation.findFirstOrThrow({
+        where: { id: fixture.conversationId },
+        select: {
+          lastMessageAt: true,
+          lastMessagePreview: true,
+          windowExpiresAt: true,
+        },
+      }),
+    ]);
+
+    /* Meta's own vocabulary, so a thread holds one word for both directions. */
+    expect(message.type).toBe("interactive");
+    expect(message.direction).toBe("OUTBOUND");
+    expect(message.status).toBe("PENDING");
+    expect(message.interactivePayload).toMatchObject({ type: "button" });
+
+    expect(conversation.lastMessageAt).toEqual(new Date("2026-09-06T10:00:00.000Z"));
+    expect(conversation.lastMessagePreview).toBe("What are you after?");
+
+    /*
+     * And the window is untouched. Only the customer writing opens one - a
+     * flow sending three questions in a row must not extend its own deadline,
+     * which would make every run look reachable for another day and is exactly
+     * the mistake sendPolicy exists to prevent.
+     */
+    expect(conversation.windowExpiresAt).toBeNull();
+  });
+
+  it("writes a plain text row for a node with no buttons", async () => {
+    await seedRun();
+
+    const result = await withCompany(company.id, (db, companyId) =>
+      materialiseFlowMessage(db, companyId, {
+        conversationId: fixture.conversationId,
+        contactId: fixture.contactId,
+        renderedBody: "Thanks, someone will be in touch.",
+        interactive: null,
+        occurredAt: new Date(),
+      }),
+    );
+
+    const message = await withCompany(company.id, (db) =>
+      db.message.findFirstOrThrow({
+        where: { id: result!.messageId },
+        select: { type: true, interactivePayload: true },
+      }),
+    );
+
+    expect(message.type).toBe("text");
+    expect(message.interactivePayload).toBeNull();
+  });
+
+  it("refuses to send to a contact who opted out mid-flow", async () => {
+    /*
+     * Not redundant with the check the entry send already made. Hours or days
+     * pass between a flow's first question and its third, and a customer
+     * replying STOP in between is the exact case this exists for.
+     */
+    await seedRun();
+
+    await withCompany(company.id, (db) =>
+      db.contact.update({
+        where: { id: fixture.contactId },
+        data: { optedOutAt: new Date() },
+      }),
+    );
+
+    const result = await withCompany(company.id, (db, companyId) =>
+      materialiseFlowMessage(db, companyId, {
+        conversationId: fixture.conversationId,
+        contactId: fixture.contactId,
+        renderedBody: "Still there?",
+        interactive: null,
+        occurredAt: new Date(),
+      }),
+    );
+
+    /* Null rather than a refused message row: no row means nothing to explain
+       to whoever opens the thread. */
+    expect(result).toBeNull();
+
+    const messages = await withCompany(company.id, (db) =>
+      db.message.count({ where: { conversationId: fixture.conversationId } }),
+    );
+    expect(messages).toBe(0);
+  });
+
+  it("refuses a contact Meta says cannot receive WhatsApp", async () => {
+    await seedRun();
+
+    await withCompany(company.id, (db) =>
+      db.contact.update({
+        where: { id: fixture.contactId },
+        data: { undeliverableAt: new Date() },
+      }),
+    );
+
+    const result = await withCompany(company.id, (db, companyId) =>
+      materialiseFlowMessage(db, companyId, {
+        conversationId: fixture.conversationId,
+        contactId: fixture.contactId,
+        renderedBody: "Still there?",
+        interactive: null,
+        occurredAt: new Date(),
+      }),
+    );
+
+    expect(result).toBeNull();
   });
 });

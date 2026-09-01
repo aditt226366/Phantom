@@ -205,10 +205,36 @@ function decodeSendResult(result: GraphResult<SendResponse>): SendOutcome {
  * matches them positionally against {{1}}, {{2}} and so on, so the order here
  * is the numbering there - which is why templateVariables returns them sorted
  * and why the composer collects them in that order.
+ *
+ * ---------------------------------------------------------------------------
+ * buttonPayloads, and why a template is the only way a flow can start
+ * ---------------------------------------------------------------------------
+ *
+ * A quick-reply button's TEXT is fixed at approval time, but its payload is
+ * supplied per send, as a component naming the button's index. That is the one
+ * hook the flow builder needs: an approved template can carry ids encoding a
+ * flow version and its entry node, which is what lets a tap on it start a run.
+ *
+ * It matters because interactive messages are free-form and only work inside
+ * the 24-hour customer service window. An approved template is the only thing
+ * that may go out after it closes, so it is the only legal way to open a flow
+ * and the only way to resume one whose window lapsed. Without the payloads
+ * here, a flow could only ever be started by a customer who had written in
+ * first - which is not a flow, it is a reply.
+ *
+ * Positional: index 0 is the template's first button. Omitted entirely when
+ * there are none, because Meta rejects an empty components array.
  */
 export async function sendWhatsAppTemplate(
   secrets: Readonly<Record<string, string>>,
-  input: { to: string; name: string; language: string; parameters: string[] },
+  input: {
+    to: string;
+    name: string;
+    language: string;
+    parameters: string[];
+    /** One per quick-reply button, in the template's own button order. */
+    buttonPayloads?: readonly string[];
+  },
   fetchImpl: FetchImpl = fetch,
 ): Promise<SendOutcome> {
   const phoneNumberId = secrets["WHATSAPP_PHONE_NUMBER_ID"] ?? "";
@@ -235,20 +261,87 @@ export async function sendWhatsAppTemplate(
         language: { code: input.language },
         /* Omitted entirely when there are none: Meta rejects an empty
            components array rather than ignoring it. */
-        ...(input.parameters.length > 0
+        ...(input.parameters.length > 0 || (input.buttonPayloads?.length ?? 0) > 0
           ? {
               components: [
-                {
-                  type: "body",
-                  parameters: input.parameters.map((text) => ({
-                    type: "text",
-                    text,
-                  })),
-                },
+                ...(input.parameters.length > 0
+                  ? [
+                      {
+                        type: "body",
+                        parameters: input.parameters.map((text) => ({
+                          type: "text",
+                          text,
+                        })),
+                      },
+                    ]
+                  : []),
+                /* One component per button, each naming its own index. Meta
+                   takes them separately rather than as a list, and an index
+                   that does not match an approved button is refused. */
+                ...(input.buttonPayloads ?? []).map((payload, index) => ({
+                  type: "button",
+                  sub_type: "quick_reply",
+                  index: String(index),
+                  parameters: [{ type: "payload", payload }],
+                })),
               ],
             }
           : {}),
       },
+    },
+    accessToken,
+    Object.values(secrets),
+    fetchImpl,
+  );
+
+  return decodeSendResult(result);
+}
+
+/**
+ * Send an interactive message: reply buttons, or a list.
+ *
+ * The third send shape, and it shares decodeSendResult with the other two for
+ * the reason they share it with each other: the interesting outcome is
+ * UNCONFIRMED, where Meta may or may not have processed the request, and a
+ * second implementation getting that one branch subtly wrong sends a real
+ * customer the same question twice.
+ *
+ * `interactive` is built by buildInteractivePayload in @whatsapp-os/core/flows,
+ * which is also what the builder previews - one producer of the shape, so the
+ * message an author approves is the message a customer receives.
+ *
+ * No approval is needed for this and no template is involved, which is what
+ * makes a visual flow builder possible at all. The price is the 24-hour window:
+ * this is free-form, so it is refused outside one. That check is sendPolicy's
+ * and happens on the send path immediately before this call, never in a
+ * disabled control - by the time a queued step reaches here the window may have
+ * closed since the step was decided on.
+ */
+export async function sendWhatsAppInteractive(
+  secrets: Readonly<Record<string, string>>,
+  input: { to: string; interactive: Record<string, unknown> },
+  fetchImpl: FetchImpl = fetch,
+): Promise<SendOutcome> {
+  const phoneNumberId = secrets["WHATSAPP_PHONE_NUMBER_ID"] ?? "";
+  const accessToken = secrets["WHATSAPP_ACCESS_TOKEN"] ?? "";
+
+  if (!phoneNumberId || !accessToken) {
+    return {
+      ok: false,
+      delivery: "refused",
+      kind: "config",
+      error: "Phone number ID and access token are both required.",
+    };
+  }
+
+  const result: GraphResult<SendResponse> = await graphPost<SendResponse>(
+    `${encodeURIComponent(phoneNumberId)}/messages`,
+    {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: input.to,
+      type: "interactive",
+      interactive: input.interactive,
     },
     accessToken,
     Object.values(secrets),

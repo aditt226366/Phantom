@@ -50,3 +50,24 @@ export type {
   VerseTurn,
   VerseUsage,
 } from "./router.ts";
+
+export {
+  RETRIEVAL_TOP_K,
+  SIMILARITY_FLOOR,
+  groundingFor,
+  similarityFromCosineDistance,
+} from "./retrieval.ts";
+export type { Grounding, RetrievedChunk } from "./retrieval.ts";
+
+export {
+  A5_HONESTY_RULE,
+  A5_OFF_TOPIC_RULE,
+  MAX_TURNS_WITHOUT_PROGRESS,
+  buildSystemPrompt,
+  escalationBefore,
+  handoffMessage,
+  handoffReason,
+  isRestrictedSubject,
+  turnsFrom,
+} from "./prompt.ts";
+export type { EscalationInput, EscalationReason, PromptInput } from "./prompt.ts";

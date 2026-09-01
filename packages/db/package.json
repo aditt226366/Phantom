@@ -19,6 +19,7 @@
     "roles": "node scripts/db-roles.mjs",
     "nuke": "node scripts/db-nuke.mjs",
     "test:setup": "node scripts/migrate-test.mjs",
+    "explain:dashboard": "node scripts/explain-dashboard.mjs",
     "studio": "prisma studio",
     "typecheck": "tsc --noEmit"
   },

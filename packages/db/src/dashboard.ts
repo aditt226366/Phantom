@@ -28,10 +28,13 @@ import { Prisma } from "./generated/prisma/client.ts";
  * and the row's tenancy comes from the same place RLS reads it from.
  *
  * Everything else in this file goes through the query builder, and the time
- * bounds every one of them binds are computed in TypeScript. Never `now()`:
- * a range predicate on a volatile expression has no value at plan time, so the
- * planner estimates one row and ignores the index. See the header of
- * @whatsapp-os/core/dashboard for the measurement.
+ * bounds every one of them binds are computed in TypeScript rather than written
+ * as `now()`. NOT for the planner reason usually given - `now()` is STABLE and
+ * Postgres 17 estimates it exactly as well as a parameter, which
+ * `npm run db:explain:dashboard` demonstrates by printing both plans. The
+ * reasons are the platform day having no SQL form, the tests needing a fixed
+ * instant, and `computed_at` having to exist outside the statement that used
+ * it. See the header of @whatsapp-os/core/dashboard.
  */
 
 /* ------------------------------------------------------------------------- *
@@ -247,10 +250,12 @@ export interface ClosingWindow {
  * also the cheapest query on the page - a range seek on
  * (company_id, window_expires_at) returning a handful of rows.
  *
- * Both bounds are bound parameters, which is the entire reason it is a seek.
- * `window_expires_at BETWEEN now() AND now() + interval '1 hour'` is volatile:
- * the planner has no value to look up, estimates one row, and takes the
- * sequential scan. Measured at 63x on this exact query.
+ * It is a seek because of the index, not because of how the bounds are passed:
+ * measured over 50,000 conversations, the bound-parameter form and the
+ * `now()`-inline form produce an identical Index Scan on
+ * (company_id, window_expires_at) with the same estimate. What would make it a
+ * scan is dropping that index, and what would make the bounds untestable is
+ * writing them inline - which is the reason they are arguments.
  *
  * `gt: now` and not `gte`: a window that expired a second ago is closed, and
  * listing it under "closing soon" sends somebody to a thread they cannot

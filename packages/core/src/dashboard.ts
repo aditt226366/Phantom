@@ -8,19 +8,33 @@
  * Every windowed query on this page binds two instants that were computed in
  * TypeScript and passed as parameters. None of them says `now()`.
  *
- * That is a planner fact, not a style preference. Postgres estimates the
- * selectivity of a range predicate from the column's histogram, and it can only
- * do that when it knows the bound at plan time. `window_expires_at BETWEEN
- * now() AND now() + interval '1 hour'` is a *volatile* expression: the planner
- * has no value to look up, falls back to a fixed guess of one row, and decides
- * an index is not worth the trip. Measured here at 63x on the closing-windows
- * query, which is the one this page exists for.
+ * The reason usually given for that is a planner one, and on this database it
+ * is WRONG - which is worth writing down, because it is the kind of claim that
+ * gets repeated for years. The story goes: a range predicate built from `now()`
+ * cannot be estimated, so the planner guesses one row and skips the index.
  *
- * A bound parameter is the opposite: the value is present when the plan is
- * chosen, the histogram answers honestly, and the composite index on
- * (company_id, window_expires_at) gets used. Every function in
- * packages/db/src/dashboard.ts therefore takes its instants as arguments, and
- * this module is where they come from.
+ * It does not happen. `now()` is STABLE, not VOLATILE - its value is fixed for
+ * the duration of a statement, so the planner evaluates it while planning and
+ * estimates the range from the histogram exactly as it would a parameter.
+ * Measured on Postgres 17.11 over 50,000 seeded conversations, the two forms
+ * produce the SAME plan and the same row estimate:
+ * `npm run db:explain:dashboard` prints both, side by side, so the next person
+ * to wonder does not have to take this on trust. The rule still holds for a
+ * genuinely volatile bound; `now()` is not one.
+ *
+ * What the bounds are actually for, and each of these is load-bearing:
+ *
+ *   1. The platform day has no SQL form. "Midnight in Asia/Kolkata, as a UTC
+ *      instant" is Intl arithmetic - see time.ts - and writing it into a WHERE
+ *      clause would mean hardcoding +05:30, which is right for India and wrong
+ *      the moment this is pointed anywhere with daylight saving.
+ *   2. A test can pass a fixed instant. Every exact-count assertion in
+ *      packages/db/tests/dashboard-rollup.test.ts depends on it; against
+ *      `now()` the whole suite would need the database's clock frozen.
+ *   3. One clock across two processes. The worker stamps `computed_at` with the
+ *      value it counted against, and the page compares the day boundary it was
+ *      given with the boundary now. Neither is possible if the instant only
+ *      ever exists inside a statement.
  *
  * ---------------------------------------------------------------------------
  * And why "today" is not the server's today

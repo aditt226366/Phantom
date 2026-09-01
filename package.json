@@ -35,6 +35,7 @@
     "db:roles": "npm run roles --workspace=@whatsapp-os/db",
     "db:nuke": "npm run nuke --workspace=@whatsapp-os/db --",
     "db:verify": "node scripts/db-verify.mjs",
+    "db:explain:dashboard": "npm run explain:dashboard --workspace=@whatsapp-os/db",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",

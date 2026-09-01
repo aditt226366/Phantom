@@ -1309,3 +1309,43 @@ person is now having — neither side aware of the other, and only the customer
 able to see both. Sending from the inbox hands off any live run for that
 conversation. Anything else that starts writing into a thread inherits the same
 obligation.
+
+**A derived signal is right until it has a second writer, and the failure is
+silent.** "Needs a person" was `assigned_user_id IS NULL AND unread_count > 0`,
+which was correct while a customer writing in was the only way a thread came to
+need somebody. A flow's handoff node is a *proactive* claim and satisfies
+neither half: nothing is unread, because no message arrived.
+
+What made it dangerous rather than merely wrong is how the first version
+compensated — it faked the derivation's inputs by incrementing `unread_count`.
+That put the signal in a column another feature already owns, and
+`markConversationRead` decrements it. **Opening the thread to see why a person
+was wanted destroyed the record that one was.**
+
+The general rule: when a derivation gains a second source, the fix is a state
+column, not a writer that fabricates the first source's inputs. And a signal
+stored in somebody else's column inherits every writer that column has.
+
+`conversations.needs_human_at` is the worked example. Also worth copying: it is
+a nullable timestamp rather than a boolean, because a queue sorted oldest-first
+needs "since when"; `flagNeedsHuman` COALESCEs so re-flagging cannot send a
+thread to the back of the queue it is already in; and a CHECK ties it to its
+reason so a flagged thread cannot render as a blank row.
+
+**Count and list must read one predicate, in one place.** `waitingForAHuman`
+and `countWaitingForAHuman` now share a `WAITING_FOR_A_HUMAN` fragment. Two
+copies is how a card says "3" above a list of five, and the discrepancy is
+invisible until somebody counts — at which point the number nobody trusts is
+the one they were meant to act on.
+
+**A column nothing writes is not a feature, and its readers are lying.**
+`conversations.assigned_user_id` shipped in Phase 1 and nothing wrote it for
+nine phases. Every read treated null as "nobody has picked this up", which was
+true only because picking something up was impossible. That is survivable while
+nothing depends on the column changing; it stops being survivable the moment
+something needs clearing, because a queue with no way to take a thread off it
+is a list that only grows.
+
+Before adding a state that something must later clear, check that the clearing
+action exists. Here it did not, and "cleared on assignment" meant building
+assignment.

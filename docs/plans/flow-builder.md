@@ -324,6 +324,76 @@ arrived. That is the boundary; the first is feedback.
 
 ---
 
+## The handoff signal, which shipped derived and should not have been
+
+A handoff node originally "raised the thread" by incrementing `unread_count`,
+so that Phase 5's derivation — `assigned_user_id IS NULL AND unread_count > 0`
+— would hold. That was wrong twice.
+
+It lies. `unread_count` means inbound messages nobody here has read, and a flow
+deciding by itself that a person is needed produces no such message.
+
+And `markConversationRead` decrements it. **Opening the thread to see why a
+person was wanted is what destroyed the record that one was**: the count went
+to zero, the thread left waiting-for-a-human with nobody assigned and nothing
+resolved, and it was then invisible in exactly the queue it had been put into.
+A signal a glance erases is not a signal.
+
+`conversations.needs_human_at` is explicit and nothing derives it. A nullable
+timestamp rather than a boolean, because "since when" is what a queue sorted
+oldest-first has to answer. `flagNeedsHuman` COALESCEs, so re-flagging does not
+move it — a customer who taps through into a second handoff has been waiting
+since the first. The reason IS updated, because the newest sentence is the most
+useful one. A CHECK keeps the two columns agreeing.
+
+`notify` had the identical defect and shares the fix, without ending the run.
+
+`handOff` takes `flagIfUnattended`, because its two callers mean opposite
+things: a flow that could not understand a typed reply wants somebody, and an
+operator who has just replied IS somebody. The previous version incremented
+unread unconditionally, so replying to a customer raised the operator's own
+badge.
+
+### Three readers, and none of them was tested
+
+| Site | What it is |
+| --- | --- |
+| `waitingForAHuman` | the dashboard card and its count |
+| `needsHuman()` | the inbox row badge — the same derivation, in the web layer |
+| `inboxWhere()` | the default view |
+
+Each reads the flag **alongside** what it already checked, never instead: the
+derivation describes a different thing that is still true, and replacing it
+would have stopped showing every ordinary unread thread.
+
+`waitingForAHuman` had no test at all, which is part of how the handoff shipped
+satisfying neither clause — nothing asserted what the queue should contain, so
+nothing noticed a new writer producing threads it could not see. It has five
+now, including that the count and the list read one predicate.
+
+### A handoff needs somewhere to go
+
+`conversations.assigned_user_id` had been in the schema since Phase 1 and
+**nothing ever wrote it**. Every read treated null as "nobody has picked this
+up", which was true by construction because there was no way to pick anything
+up.
+
+That was survivable while the signal was an unread count: reading the thread
+cleared it, so the queue drained itself. It stops being survivable when a flag
+persists until somebody clears it deliberately — a queue with no way to take a
+thread off it is a list that only grows.
+
+So there is a `?view=attention` queue, a **Take this** button that assigns and
+clears, and a release that is deliberately not symmetrical: it clears the
+assignment and does not re-flag, because whoever took it may have finished and
+re-raising the request every time somebody let go would make the queue
+un-emptiable.
+
+Taking it is a button and not something the thread page does while rendering.
+Opening a conversation is how somebody decides whether they want it.
+
+---
+
 ## At the tag
 
 **The destructive policy audit.** RLS disabled on all 28 tenant tables, the
@@ -370,7 +440,11 @@ sharper reason: this script's entire job is to take the boundary off.
   binding names a version deliberately, and republishing a flow leaves it on
   the old one — which is correct, and means the page needs a control saying so.
   Today it is an edit-and-rebind.
-- **A handoff does not assign the thread to anybody.** It marks the
-  conversation unread so it surfaces in the inbox, which is what makes it
-  visible; choosing *who* picks it up is the inbox's assignment feature and
-  not this phase's.
+- ~~A handoff does not assign the thread to anybody.~~ **Fixed**, and it was
+  worse than the note said: the "marks the conversation unread" mechanism was
+  itself the bug, because reading the thread undid it. See the handoff-signal
+  section above.
+- **Assignment is one person taking a thread, and nothing more.** There is no
+  assigning to somebody else, no queue-per-user and no notification to whoever
+  it lands on. `Take this` writes `assigned_user_id` to the person who pressed
+  it, which is what clearing the flag needs and no more than that.

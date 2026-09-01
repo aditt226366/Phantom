@@ -139,6 +139,31 @@ const SINGLE_ROW_PER_COMPANY_TABLES = new Map<string, string>([
   ],
 ]);
 
+/**
+ * Tables app_runtime may INSERT and SELECT but never UPDATE or DELETE.
+ *
+ * The CRUD assertion below requires all four privileges on every tenant table,
+ * because a missing one is normally a default-privileges accident that presents
+ * as a feature half-working. A table that is append-only ON PURPOSE therefore
+ * has to say so here, with the reason - and the waiver is not a hole, because
+ * the assertion is inverted rather than skipped: the two privileges must be
+ * ABSENT, so restoring them by accident is a failing test too.
+ *
+ * The same shape as GLOBAL_TABLES and SINGLE_ROW_PER_COMPANY_TABLES: opting out
+ * of an invariant is a visible diff in a security test.
+ */
+const APPEND_ONLY_TABLES = new Map<string, string>([
+  [
+    "flow_run_steps",
+    "the only record of what a customer was actually asked and what they " +
+      "actually answered. See 20260906090000: the version they were asked " +
+      "FROM is immutable, but the path they took through it is what a dispute " +
+      "is about, and a row that can be updated is a record that can be tidied " +
+      "by the party the dispute is with. app_admin keeps both privileges, " +
+      "because DPDP erasure is discharged through the audited admin space.",
+  ],
+]);
+
 /** Prisma's own bookkeeping. */
 const INFRASTRUCTURE_TABLES = new Set(["_prisma_migrations"]);
 
@@ -578,12 +603,38 @@ describe("schema invariants", () => {
         );
 
         const held = rows.map((r) => r.privilege_type);
-        expect(held, `${table}: missing CRUD grants`).toEqual(
-          expect.arrayContaining(["SELECT", "INSERT", "UPDATE", "DELETE"]),
-        );
+
+        if (APPEND_ONLY_TABLES.has(table)) {
+          /*
+           * Inverted rather than skipped. An append-only table still needs to
+           * be readable and writable once, and the two privileges it gave up
+           * must stay gone - so a later migration handing UPDATE back fails
+           * here rather than silently making the record editable again.
+           */
+          expect(held, `${table}: missing SELECT/INSERT`).toEqual(
+            expect.arrayContaining(["SELECT", "INSERT"]),
+          );
+          expect(
+            held.filter((p) => p === "UPDATE" || p === "DELETE"),
+            `${table} is append-only: ${APPEND_ONLY_TABLES.get(table)}`,
+          ).toEqual([]);
+        } else {
+          expect(held, `${table}: missing CRUD grants`).toEqual(
+            expect.arrayContaining(["SELECT", "INSERT", "UPDATE", "DELETE"]),
+          );
+        }
 
         /* TRUNCATE ignores RLS entirely — a one-statement bypass. */
         expect(held, `${table}: TRUNCATE is granted`).not.toContain("TRUNCATE");
+      }
+    });
+
+    it("names only tables that exist as append-only", () => {
+      /* Both directions, like GLOBAL_TABLES. A name that no longer describes a
+         real table is a waiver nobody is reading any more. */
+      for (const [table, reason] of APPEND_ONLY_TABLES) {
+        expect(protectedTables(), `${table} is not a tenant table`).toContain(table);
+        expect(reason.length, `${table} has no reason`).toBeGreaterThan(40);
       }
     });
   });

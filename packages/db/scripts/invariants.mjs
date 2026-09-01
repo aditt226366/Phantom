@@ -181,6 +181,30 @@ export const OUT_OF_BAND_DDL = new Set([
      rate's denominator bounds its numerator, so a rate over 100% is impossible
      rather than merely unlikely. */
   "check:dashboard_rollups.dashboard_rollups_replied_within_messaged",
+  /* A version is numbered from one, and a published one names who published
+     it. A published_at with nobody beside it is the shape of "the system
+     turned this on by itself", and who turned an automated conversation on is
+     the audit question a tenant asks first. */
+  "check:flow_versions.flow_versions_version_positive",
+  "check:flow_versions.flow_versions_published_has_publisher",
+  /* The two halves of the partial-unique trick on flow_runs, and neither is
+     optional. active_conversation_id is NULL exactly when the run is not live,
+     which is what makes the plain unique index MEAN "one live run per
+     conversation" - without it a live run carrying NULL slips a second live run
+     straight past the index. And when it is non-null it is the run's OWN
+     conversation, or the run holds somebody else's slot while advancing this
+     one. */
+  "check:flow_runs.flow_runs_active_conversation_matches_status",
+  "check:flow_runs.flow_runs_active_conversation_is_its_own",
+  /* A live run knows where it is standing, and PAUSED is the half that matters:
+     a run whose window shut keeps its position, which is the whole difference
+     between pausing and failing. A PAUSED row with no current_node_id has lost
+     the thing pausing exists to keep, and the only symptom is a customer
+     answering the same three questions twice. */
+  "check:flow_runs.flow_runs_live_run_has_a_position",
+  "check:flow_runs.flow_runs_ended_when_finished",
+  "check:flow_runs.flow_runs_step_count_non_negative",
+  "check:flow_run_steps.flow_run_steps_seq_positive",
 ]);
 
 /**

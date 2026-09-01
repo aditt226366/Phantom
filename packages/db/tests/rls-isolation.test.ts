@@ -1233,6 +1233,236 @@ describe("lead sources and the rows they have claimed", () => {
   });
 });
 
+describe("flows, their versions, and the runs pinned to them", () => {
+  /* A fixture, deliberately outside any `it` - seeding goes through the ORM on
+     purpose, and no-orm-in-isolation examines assertion bodies only. */
+  interface SeededFlow {
+    flowId: string;
+    versionId: string;
+    runId: string;
+    conversationId: string;
+    contactId: string;
+    templateId: string;
+  }
+
+  async function seedFlow(
+    company: SeededCompany,
+    label: string,
+  ): Promise<SeededFlow> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: `${label}-flows` },
+        select: { id: true },
+      });
+
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          phoneNumberId: `${label}-flow-pn`,
+          displayNumber: "+91 98765 43210",
+          status: "CONNECTED",
+        },
+        select: { id: true },
+      });
+
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name: `${label}_flow_entry`,
+          language: "en_US",
+          category: "MARKETING",
+          status: "APPROVED",
+          components: [{ type: "BODY", text: "Hello" }],
+        },
+        select: { id: true },
+      });
+
+      const contact = await db.contact.create({
+        data: { companyId, waId: `${label}-flow-wa`, phoneE164: "+919876543210" },
+        select: { id: true },
+      });
+
+      const conversation = await db.conversation.create({
+        data: {
+          companyId,
+          contactId: contact.id,
+          whatsappNumberId: number.id,
+        },
+        select: { id: true },
+      });
+
+      const flow = await db.flow.create({
+        data: { companyId, name: `${label} enquiry flow` },
+        select: { id: true },
+      });
+
+      const version = await db.flowVersion.create({
+        data: {
+          companyId,
+          flowId: flow.id,
+          version: 1,
+          entryTemplateId: template.id,
+          graph: {
+            entryNodeId: "start",
+            nodes: [
+              {
+                id: "start",
+                kind: "entry",
+                templateId: template.id,
+                variables: [],
+                choices: [{ key: "yes", label: "Yes", next: "done" }],
+              },
+              { id: "done", kind: "end", body: null },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+
+      const run = await db.flowRun.create({
+        data: {
+          companyId,
+          flowId: flow.id,
+          flowVersionId: version.id,
+          conversationId: conversation.id,
+          activeConversationId: conversation.id,
+          contactId: contact.id,
+          currentNodeId: "start",
+        },
+        select: { id: true },
+      });
+
+      await db.flowRunStep.create({
+        data: {
+          companyId,
+          flowRunId: run.id,
+          seq: 1,
+          kind: "STARTED",
+          nodeId: "start",
+        },
+      });
+
+      return {
+        flowId: flow.id,
+        versionId: version.id,
+        runId: run.id,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        templateId: template.id,
+      };
+    });
+  }
+
+  it("does not show one company's flows to another", async () => {
+    await seedFlow(alpha, "alpha");
+    await seedFlow(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM flows ORDER BY name`,
+    );
+
+    expect(rows).toEqual([{ name: "beta enquiry flow" }]);
+  });
+
+  it("does not show one company's versions or the trees inside them", async () => {
+    /*
+     * The graph is the tenant's product. A competitor reading another tenant's
+     * flow would have their decision tree, their copy and their qualifying
+     * questions - which is a worse leak than a contact list, because it is the
+     * thing that took work to write.
+     */
+    await seedFlow(alpha, "alpha");
+    await seedFlow(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ graph: unknown }>>`SELECT graph FROM flow_versions`,
+    );
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it("does not show one company's runs or the answers in them", async () => {
+    /*
+     * variables holds what a customer typed and tapped. It is the most
+     * personal column this phase adds, and it is per run rather than per
+     * contact precisely so it does not accumulate into a profile.
+     */
+    await seedFlow(alpha, "alpha");
+    await seedFlow(beta, "beta");
+
+    const runs = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ id: string }>>`SELECT id FROM flow_runs`,
+    );
+    const steps = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ id: string }>>`SELECT id FROM flow_run_steps`,
+    );
+
+    expect(runs).toHaveLength(1);
+    expect(steps).toHaveLength(1);
+  });
+
+  it("refuses to write a flow into another company", async () => {
+    const target = await seedFlow(alpha, "alpha");
+
+    await expect(
+      withCompany(beta.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO flows (id, company_id, name, updated_at)
+          VALUES ('planted-flow', ${alpha.id}, 'planted', now())`,
+      ),
+    ).rejects.toThrow();
+
+    await expect(
+      withCompany(beta.id, (db) =>
+        db.$executeRaw`
+          INSERT INTO flow_runs
+            (id, company_id, flow_id, flow_version_id, conversation_id,
+             contact_id, current_node_id, updated_at)
+          VALUES ('planted-run', ${alpha.id}, ${target.flowId}, ${target.versionId},
+                  ${target.conversationId}, ${target.contactId}, 'start', now())`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("cannot advance another company's run", async () => {
+    /*
+     * The write that would matter most if the policy were missing. A run is a
+     * position in somebody's conversation, and moving it sends that customer
+     * the next question in a tree they were never put into.
+     */
+    await seedFlow(alpha, "alpha");
+    await seedFlow(beta, "beta");
+
+    const touched = await withCompany(beta.id, (db) =>
+      db.$executeRaw`UPDATE flow_runs SET current_node_id = 'hijacked'`,
+    );
+
+    expect(touched).toBe(1);
+
+    const alphaNodes = await withCompany(alpha.id, (db) =>
+      db.$queryRaw<Array<{ current_node_id: string }>>`
+        SELECT current_node_id FROM flow_runs`,
+    );
+
+    expect(alphaNodes).toEqual([{ current_node_id: "start" }]);
+  });
+
+  it("hides flows, versions, runs and steps from the table's own owner", async () => {
+    await seedFlow(alpha, "alpha");
+
+    for (const table of ["flows", "flow_versions", "flow_runs", "flow_run_steps"]) {
+      const { rows } = await owner.query(`SELECT * FROM ${table}`);
+      expect(
+        rows,
+        `FORCE ROW LEVEL SECURITY is not in effect on ${table}`,
+      ).toEqual([]);
+    }
+  });
+});
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

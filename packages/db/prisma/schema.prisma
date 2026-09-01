@@ -124,6 +124,10 @@ model Company {
   broadcastRecipients    BroadcastRecipient[]
   leadSources            LeadSource[]
   leadSourceRows         LeadSourceRow[]
+  flows                  Flow[]
+  flowVersions           FlowVersion[]
+  flowRuns               FlowRun[]
+  flowRunSteps           FlowRunStep[]
   dashboardRollup        DashboardRollup?
 
   @@map("companies")
@@ -187,6 +191,9 @@ model User {
   messagesSent            Message[]                @relation("MessagesSent")
   broadcastsCreated       Broadcast[]              @relation("BroadcastsCreated")
   leadSourcesCreated      LeadSource[]             @relation("LeadSourcesCreated")
+  flowsCreated            Flow[]                   @relation("FlowsCreated")
+  flowVersionsCreated     FlowVersion[]            @relation("FlowVersionsCreated")
+  flowVersionsPublished   FlowVersion[]            @relation("FlowVersionsPublished")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -688,14 +695,47 @@ model Contact {
   /// contact from future broadcasts; only one of them is a choice.
   undeliverableAt DateTime? @db.Timestamptz(3) @map("undeliverable_at")
 
+  /// How warm this lead is, as a flow's action node last set it.
+  ///
+  /// -----------------------------------------------------------------------
+  /// The column that turns a pending dashboard card into a real one
+  /// -----------------------------------------------------------------------
+  ///
+  /// "Lead temperature" has been an honest empty state since Phase 9, saying
+  /// the scoring did not exist. It does now, and it is deterministic: a flow
+  /// author draws "this answer makes them hot", so the score is a rule
+  /// somebody wrote rather than a model's opinion. That is a different and
+  /// smaller claim than the one the pending card described, and the copy has
+  /// to say so - which is why replacing that card is part of this phase
+  /// rather than a later tidy-up.
+  ///
+  /// Null means nothing has scored them, and is distinct from COLD. A report
+  /// counting unscored contacts as cold would tell a business its whole
+  /// contact book was uninterested.
+  leadScore LeadScore? @map("lead_score")
+  /// When, and by which run. Both, because "scored six months ago" is a
+  /// different fact from "scored this morning" and the card says which.
+  leadScoreAt     DateTime? @db.Timestamptz(3) @map("lead_score_at")
+  leadScoreRunId  String?   @map("lead_score_run_id")
+
+  /// Labels a flow's action node attached. Free text the tenant chose.
+  ///
+  /// An array rather than a join table, because nothing counts them across
+  /// contacts and nothing renames one. A tag is read only with the contact
+  /// that carries it, which is the case an array is for.
+  tags String[] @default([])
+
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
   updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  flowRuns      FlowRun[]
 
   @@unique([companyId, waId])
   @@index([companyId, createdAt(sort: Desc)])
+  /// The dashboard's lead-temperature card, grouped by score.
+  @@index([companyId, leadScore])
   /// Phase 5 excludes opted-out contacts from every campaign. Composite and
   /// company-first so that exclusion is a seek and not a scan of the whole
   /// contact book.
@@ -751,6 +791,7 @@ model Conversation {
   /// handled. The thread is the company's record of what a customer was told.
   assignedUser   User?          @relation("ConversationsAssigned", fields: [assignedUserId], references: [id], onDelete: SetNull)
   messages       Message[]
+  flowRuns       FlowRun[]
 
   /// One thread per contact per number, and the conflict target the inbound
   /// upsert needs. Without it two deliveries for the same contact arriving
@@ -799,6 +840,21 @@ model Message {
   /// the Graph call carries. Stored on the message rather than only referenced,
   /// because a template edited or deleted later must not rewrite history.
   templatePayload Json? @map("template_payload")
+
+  /// The interactive message as sent - reply buttons or a list, with the ids.
+  ///
+  /// A sibling of template_payload rather than a reuse of it, and a new
+  /// message TYPE on the existing send path rather than a second path. The
+  /// send worker branches on which of the two columns is populated exactly the
+  /// way it already branches on template_payload, and everything downstream -
+  /// the status ladder, the delivery callbacks, the retry, the thread, the
+  /// usage row - needed no change at all.
+  ///
+  /// Stored rather than rebuilt from the flow version, because the ids in it
+  /// name a run and a node and are the only record of what a specific customer
+  /// was offered. A flow archived a year later must not make an old thread
+  /// unreadable.
+  interactivePayload Json? @map("interactive_payload")
 
   /// Why this message is not going to arrive. Only META rows carry errorCode; a
   /// canSend refusal - the window closed between enqueue and send - writes
@@ -858,6 +914,8 @@ model Message {
   /// a list because Prisma models the back side of an optional relation that
   /// way, not because a message can belong to two bindings.
   leadSourceRows LeadSourceRow[]
+  /// The flow steps that produced this message. Same shape, same reason.
+  flowRunSteps   FlowRunStep[]
   /// SetNull for the same reason as Conversation.assignedUser: deleting an
   /// employee must not delete the messages they sent to customers.
   sentBy       User?          @relation("MessagesSent", fields: [sentByUserId], references: [id], onDelete: SetNull)
@@ -1194,6 +1252,7 @@ model WhatsAppTemplate {
   edits       WhatsAppTemplateEdit[]
   broadcasts  Broadcast[]
   leadSources LeadSource[]
+  flowVersions FlowVersion[]
 
   /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
   @@unique([companyId, name, language])
@@ -1527,8 +1586,21 @@ model BroadcastRecipient {
 /// column from the start rather than an assumption spread across a poll job, a
 /// form and a report. The CHECK in 20260902090000 ties each arm to the target
 /// it needs.
+/// What a binding does with a row it has not seen before.
+///
+/// The discriminated column that Phase 6 built with one member and said was
+/// meant to gain a second. This is the second, and wiring it is what proves
+/// the shape was right: a binding keeps its sheet, its tab, its mapping, its
+/// cleaning, its cursor and its idempotency index, and only the last step
+/// changes. Nothing in the poll handler above the action switch moved.
 enum LeadSourceAction {
+  /// Send one approved template and stop. The original.
   TEMPLATE
+  /// Start a flow, whose entry node sends an approved template with
+  /// quick-reply buttons - so the row is contacted exactly as a TEMPLATE
+  /// binding would contact it, and what differs is that a tap now goes
+  /// somewhere.
+  FLOW
 
   @@map("lead_source_action")
 }
@@ -1588,6 +1660,15 @@ model LeadSource {
   /// Required for a TEMPLATE binding, by CHECK constraint rather than by
   /// convention. Cold recipients, so template-only.
   templateId       String? @map("template_id")
+  /// Required for a FLOW binding, by the same CHECK constraint.
+  ///
+  /// A VERSION rather than a flow, and deliberately: a run pins the version it
+  /// started on, and a binding that named the flow would put every row it read
+  /// into whatever happened to be published that minute. Naming the version
+  /// means a tenant republishing mid-import does not split one afternoon's
+  /// leads across two trees. Repointing the binding at the new version is a
+  /// deliberate edit on its page.
+  flowVersionId    String? @map("flow_version_id")
   whatsappNumberId String  @map("whatsapp_number_id")
 
   status              LeadSourceStatus @default(ACTIVE)
@@ -1647,6 +1728,7 @@ model LeadSource {
 
   company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   template       WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  flowVersion    FlowVersion?      @relation(fields: [flowVersionId], references: [id], onDelete: Restrict)
   whatsappNumber WhatsAppNumber    @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
   createdBy      User?             @relation("LeadSourcesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
   rows           LeadSourceRow[]
@@ -1726,6 +1808,314 @@ model LeadSourceRow {
   /// The binding's live feed: its most recent rows, newest first.
   @@index([companyId, leadSourceId, createdAt(sort: Desc)])
   @@map("lead_source_rows")
+}
+
+/// A run's position in its flow.
+///
+/// PAUSED is the member that carries the phase's second unretrofittable
+/// decision. A customer stops replying for a day and the 24-hour window shuts
+/// with the run halfway down the tree: nothing has gone wrong, the flow simply
+/// cannot speak until spoken to. Failing it would discard the customer's
+/// answers and show an operator an error for something that is merely waiting.
+///
+/// HANDED_OFF is kept apart from COMPLETED deliberately. Both are endings, but
+/// one of them is the flow saying it could not finish the job - and a report
+/// that called them the same thing would hide the question every tenant asks
+/// first, which is how often the automation gives up.
+enum FlowRunStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  HANDED_OFF
+  FAILED
+
+  @@map("flow_run_status")
+}
+
+/// What one appended step records.
+///
+/// Ours, so an enum. The vocabulary is chosen so that reading a run's steps
+/// answers the two questions an operator actually has - what did we send, and
+/// why did it stop - without joining anything.
+enum FlowStepKind {
+  /// The run was created, at the entry node.
+  STARTED
+  /// A message went out for a node. Carries the message it became.
+  SENT
+  /// A tap or a typed reply moved the run. Carries the choice key.
+  ADVANCED
+  /// An action node wrote something down. Carries what, in detail.
+  ACTION
+  /// The window shut before an outbound step. The position is kept.
+  PAUSED
+  /// An entry template picked a paused run back up where it left off.
+  RESUMED
+  /// A tap that named a node this run had already left, or a run that had
+  /// ended. Acknowledged, recorded, and deliberately not executed.
+  DECLINED
+  /// end or handoff.
+  ENDED
+  /// The step ceiling, or something that could not be recovered from.
+  FAILED
+
+  @@map("flow_step_kind")
+}
+
+/// How warm a lead is, as a flow's action node set it.
+///
+/// Three members and no numeric score. A number invites arithmetic - an
+/// average lead score is not a quantity that means anything - and it invites a
+/// scale nobody agrees on. What a tenant draws in the builder is "this answer
+/// makes them hot", which is these three and nothing else.
+enum LeadScore {
+  HOT
+  WARM
+  COLD
+
+  @@map("lead_score")
+}
+
+/// A decision tree the tenant drew.
+///
+/// The flow itself holds almost nothing: a name, and a pointer at the version
+/// that is live. Everything that describes behaviour is on a version, because
+/// behaviour is the thing a run has to be pinned to.
+model Flow {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  name String
+
+  /// The version customers are being put into. Null means nothing is live.
+  ///
+  /// A pointer rather than a flag on the version, so "which one is live" has
+  /// exactly one answer. Two published versions is not a state this schema can
+  /// represent, which is the point - publishing is moving this pointer.
+  publishedVersionId String? @unique @map("published_version_id")
+
+  /// Set rather than deleted. A flow with runs in its history is a record of
+  /// what customers were told, and deleting it would take the runs with it.
+  archivedAt DateTime? @db.Timestamptz(3) @map("archived_at")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("FlowsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  /// The live version. NoAction rather than Cascade or SetNull, because the
+  /// cycle between these two tables has to be broken somewhere: a version's
+  /// flow_id cascades, and this side does nothing, so deleting a flow deletes
+  /// its versions rather than the two referential actions chasing each other.
+  publishedVersion FlowVersion? @relation("FlowPublishedVersion", fields: [publishedVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  versions FlowVersion[] @relation("FlowVersions")
+  runs     FlowRun[]
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("flows")
+}
+
+/// One saved state of a tree, draft or published.
+///
+/// -------------------------------------------------------------------------
+/// Why a run pins one of these, and what it costs not to
+/// -------------------------------------------------------------------------
+///
+/// A customer is three questions into a flow. The tenant opens the builder,
+/// deletes the branch that customer is standing on, and publishes. If runs
+/// read the flow's current graph, that customer's next tap arrives naming a
+/// node that no longer exists - and the honest thing the runtime could do with
+/// it is nothing at all.
+///
+/// So a run names a version and never changes it. Editing a published flow
+/// creates a new draft; publishing moves the flow's pointer; and every run
+/// already in flight finishes on the tree it started on. The cost is that a
+/// fix to a live flow does not reach the customers currently in it, which is
+/// the right trade: they are mid-conversation, and changing the questions
+/// underneath somebody mid-conversation is the worse outcome.
+model FlowVersion {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  flowId    String @map("flow_id")
+
+  /// Monotonic per flow, and what the builder shows. Version 3 of a flow is a
+  /// thing people say to each other.
+  version Int
+
+  /// The tree, validated by validateFlow in @whatsapp-os/core/flows.
+  ///
+  /// jsonb rather than a table of nodes and a table of edges, and the reason
+  /// is the pinning above: a version is immutable once published and is read
+  /// whole on every advance. Normalised, "the tree as it was" becomes a join
+  /// across two tables that both have to be versioned too, and the immutability
+  /// stops being a property of one row.
+  graph Json
+
+  /// The template the entry node sends, denormalised out of the graph.
+  ///
+  /// Here so it can carry a foreign key. Restrict, not Cascade: deleting a
+  /// template that a published flow opens with would leave a flow whose only
+  /// legal entry point is gone, and it would fail at the moment a customer
+  /// arrived rather than at the moment somebody pressed delete.
+  entryTemplateId String @map("entry_template_id")
+
+  /// Null while this is a draft. Set once, when it goes live.
+  publishedAt       DateTime? @db.Timestamptz(3) @map("published_at")
+  publishedByUserId String?   @map("published_by_user_id")
+
+  createdByUserId String? @map("created_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  flow        Flow             @relation("FlowVersions", fields: [flowId], references: [id], onDelete: Cascade)
+  template    WhatsAppTemplate @relation(fields: [entryTemplateId], references: [id], onDelete: Restrict)
+  createdBy   User?            @relation("FlowVersionsCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  publishedBy User?            @relation("FlowVersionsPublished", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+
+  /// The back side of Flow.publishedVersionId.
+  publishedForFlow Flow[] @relation("FlowPublishedVersion")
+  runs             FlowRun[]
+  leadSources      LeadSource[]
+
+  @@unique([companyId, flowId, version])
+  @@index([companyId, flowId, version(sort: Desc)])
+  @@map("flow_versions")
+}
+
+/// One customer's journey through one version of one flow.
+model FlowRun {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  flowId        String @map("flow_id")
+  /// The pin. Never updated after insert.
+  flowVersionId String @map("flow_version_id")
+
+  conversationId String @map("conversation_id")
+  contactId      String @map("contact_id")
+
+  /// A duplicate of conversation_id, present only while the run is live.
+  ///
+  /// -----------------------------------------------------------------------
+  /// A redundant column, because the guarantee it buys is not expressible
+  /// otherwise
+  /// -----------------------------------------------------------------------
+  ///
+  /// A conversation must never be in two flows at once - two runs would both
+  /// send, both wait, and the customer would get two questions and be able to
+  /// answer only one. But a conversation may hold many FINISHED runs, because
+  /// a customer coming back next month is an ordinary thing.
+  ///
+  /// That is a partial unique index - unique on conversation WHERE the status
+  /// is live - and schema.prisma cannot express one, so a hand-written partial
+  /// index would show up as permanent drift on every `prisma migrate diff`.
+  ///
+  /// Postgres treats NULLs as distinct, which is the same property that lets
+  /// messages.wamid be unique while many pending sends carry none. So this
+  /// column holds the conversation while the run is live and NULL once it is
+  /// not, and the plain unique below does the work. Two CHECK constraints in
+  /// the migration keep it honest: it is non-null exactly when the status is
+  /// live, and when non-null it equals conversation_id.
+  activeConversationId String? @map("active_conversation_id")
+
+  status FlowRunStatus @default(ACTIVE)
+
+  /// Where the customer is standing. Null once the run has ended.
+  currentNodeId String? @map("current_node_id")
+
+  /// What the flow has collected, as {"want": "shoes"}.
+  ///
+  /// Per run rather than on the contact, because these are answers to this
+  /// conversation's questions. A "size" collected in a shoe flow is not a fact
+  /// about the person that a later flow should read.
+  variables Json @default("{}")
+
+  /// Steps taken over the run's whole life. The ceiling reads this.
+  stepCount Int @default(0) @map("step_count")
+
+  /// Why it stopped, when it stopped badly. Safe to show a tenant.
+  lastError String? @map("last_error")
+
+  startedAt DateTime  @db.Timestamptz(3) @default(now()) @map("started_at")
+  /// When the window shut on it. Null unless it is or has been paused.
+  pausedAt  DateTime? @db.Timestamptz(3) @map("paused_at")
+  endedAt   DateTime? @db.Timestamptz(3) @map("ended_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  flow         Flow         @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  flowVersion  FlowVersion  @relation(fields: [flowVersionId], references: [id], onDelete: Restrict)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  steps        FlowRunStep[]
+
+  /// One live run per conversation. See activeConversationId above.
+  @@unique([companyId, activeConversationId])
+  /// The thread's own history, and the inbox's "is this thread automated".
+  @@index([companyId, conversationId, startedAt(sort: Desc)])
+  /// The flow's report: every run of one flow, grouped by how it ended.
+  @@index([companyId, flowId, status])
+  @@map("flow_runs")
+}
+
+/// What a run did, one row at a time, for ever.
+///
+/// -------------------------------------------------------------------------
+/// Append-only, and enforced by a revoked grant rather than by convention
+/// -------------------------------------------------------------------------
+///
+/// This table is the only record of what a customer was actually asked and
+/// what they actually answered. A flow's version is immutable, but the run's
+/// path through it is the thing a dispute is about - "your bot told me it was
+/// in stock" - and a row that can be updated is a record that can be tidied.
+///
+/// app_runtime holds SELECT and INSERT here and neither UPDATE nor DELETE, so
+/// the guarantee is the database's rather than a rule somebody remembers. The
+/// waiver is named in APPEND_ONLY_TABLES in schema-invariants.test.ts, which
+/// otherwise requires full CRUD on every tenant table - so removing it is a
+/// visible diff in a security test.
+model FlowRunStep {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  flowRunId String @map("flow_run_id")
+
+  /// Position in the run, from 1. Unique per run, so two writers cannot both
+  /// think they were step 4.
+  seq Int
+
+  kind FlowStepKind
+
+  /// The node this step is about. Text, not a foreign key: nodes live inside a
+  /// version's jsonb, and a step has to survive being read after the flow it
+  /// belonged to was archived.
+  nodeId String? @map("node_id")
+
+  /// The choice key the customer tapped, for an ADVANCED step.
+  choice String?
+
+  /// The message this step sent. Null for everything that sends nothing.
+  messageId String? @map("message_id")
+
+  /// Everything else, keyed by what the step was: the variables an ADVANCED
+  /// step set, the actions an ACTION step performed, the reason a DECLINED
+  /// step declined.
+  detail Json @default("{}")
+
+  occurredAt DateTime @db.Timestamptz(3) @default(now()) @map("occurred_at")
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  flowRun FlowRun  @relation(fields: [flowRunId], references: [id], onDelete: Cascade)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, flowRunId, seq])
+  @@index([companyId, flowRunId, seq(sort: Desc)])
+  @@map("flow_run_steps")
 }
 
 model UsageEvent {

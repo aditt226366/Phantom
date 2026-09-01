@@ -78,6 +78,10 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "LeadSource",
   "LeadSourceRow",
   "DashboardRollup",
+  "Flow",
+  "FlowVersion",
+  "FlowRun",
+  "FlowRunStep",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

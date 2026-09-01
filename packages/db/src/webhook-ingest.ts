@@ -42,6 +42,28 @@ export interface MediaFetchRequest {
 }
 
 /**
+ * An inbound message that might move a flow, for the caller to act on.
+ *
+ * Collected here and advanced by the caller, exactly like the media requests
+ * above and for the same reason: advancing a flow sends messages, and this
+ * function must not enqueue anything while a company scope is open.
+ *
+ * Only messages that could possibly matter are collected - a tap of any kind,
+ * or a typed reply in a conversation that has a run waiting on it. The
+ * alternative, handing every inbound text to the engine, would be a job per
+ * customer message across every tenant for the sake of the handful that are
+ * answering a collect node.
+ */
+export interface FlowAdvanceRequest {
+  conversationId: string;
+  messageId: string;
+  /** The button or list-row id, when the customer tapped one. */
+  replyId: string | null;
+  text: string | null;
+  occurredAt: Date;
+}
+
+/**
  * Why some part of a delivery was not applied. Codes, never prose - they end up
  * in whatsapp_webhook_events.skipped_reason and in the operator counts commit
  * 26 puts on the admin Overview, and a reworded sentence would silently stop
@@ -70,6 +92,8 @@ export interface IngestSummary {
   skipped: IngestSkipReason[];
   /** For the caller to enqueue, once it is no longer holding a scope. */
   media: MediaFetchRequest[];
+  /** Inbound messages that might move a flow. Same rule as media above. */
+  flowAdvances: FlowAdvanceRequest[];
   /**
    * Meta said a number's quality or tier moved, so the cache is stale.
    *
@@ -105,6 +129,7 @@ function emptySummary(status: IngestSummary["status"]): IngestSummary {
     advanced: 0,
     skipped: [],
     media: [],
+    flowAdvances: [],
     numberQualityUpdates: 0,
     templatesUpdated: 0,
     templatesUnmatched: 0,
@@ -223,6 +248,7 @@ export async function ingestWebhookDelivery(
   const numbers = new Map<string, string | null>();
   let inserted = 0;
   const media: MediaFetchRequest[] = [];
+  const flowAdvances: FlowAdvanceRequest[] = [];
 
   /*
    * Messages before statuses, and the order is load-bearing.
@@ -250,6 +276,13 @@ export async function ingestWebhookDelivery(
 
     if (outcome.inserted) inserted++;
     if (outcome.media) media.push(outcome.media);
+    /*
+     * Only on an insert. A redelivery of a tap must not advance the run a
+     * second time - Meta redelivers freely, and the second advance would send
+     * the next question again and move the position past an answer the
+     * customer gave once.
+     */
+    if (outcome.flow) flowAdvances.push(outcome.flow);
   }
 
   let advanced = 0;
@@ -318,6 +351,7 @@ export async function ingestWebhookDelivery(
     advanced,
     skipped,
     media,
+    flowAdvances,
     numberQualityUpdates: parsed.qualityUpdates.length,
     templatesUpdated,
     templatesUnmatched,
@@ -365,6 +399,8 @@ async function resolveNumber(
 interface MessageOutcome {
   inserted: boolean;
   media: MediaFetchRequest | null;
+  /** Set when this message could move a flow. See FlowAdvanceRequest. */
+  flow: FlowAdvanceRequest | null;
 }
 
 async function ingestMessage(
@@ -469,7 +505,25 @@ async function ingestMessage(
     });
   }
 
-  if (!message.mediaId) return { inserted, media: null };
+  /*
+   * Whether this message could move a flow.
+   *
+   * Only on an insert, because a redelivery must not advance a run twice - the
+   * second advance would send the next question again and move the position
+   * past an answer the customer gave once. Meta redelivers freely, so this is
+   * an ordinary Tuesday rather than an edge case.
+   *
+   * A tap of any kind always qualifies: it may be an entry that starts a run
+   * where none exists. A typed reply qualifies only when this conversation has
+   * a run waiting on it, which is one indexed lookup - the alternative, handing
+   * every inbound text to the engine, would be a job per customer message
+   * across every tenant for the sake of the few answering a collect node.
+   */
+  const flow = inserted
+    ? await flowAdvanceFor(db, companyId, message, conversation.id)
+    : null;
+
+  if (!message.mediaId) return { inserted, media: null, flow };
 
   /*
    * The row is read back rather than returned by the insert, because
@@ -481,9 +535,54 @@ async function ingestMessage(
     select: { id: true, mediaId: true },
   });
 
-  if (!row || row.mediaId) return { inserted, media: null };
+  if (!row || row.mediaId) return { inserted, media: null, flow };
 
-  return { inserted, media: { messageId: row.id, metaMediaId: message.mediaId } };
+  return {
+    inserted,
+    media: { messageId: row.id, metaMediaId: message.mediaId },
+    flow,
+  };
+}
+
+/**
+ * The advance request for one inserted inbound message, or null.
+ *
+ * Reads the message row back for its id, which is what the flow's step log
+ * points at. createMany does not return rows, and the id is needed on the
+ * DECLINED step as much as on the successful one - a refused tap that named no
+ * message would be a log entry nobody could tie to a thread.
+ */
+async function flowAdvanceFor(
+  db: CompanyClient,
+  companyId: string,
+  message: InboundMessage,
+  conversationId: string,
+): Promise<FlowAdvanceRequest | null> {
+  if (message.replyId === null) {
+    if (message.text === null) return null;
+
+    const waiting = await db.flowRun.findFirst({
+      where: { activeConversationId: conversationId },
+      select: { id: true },
+    });
+
+    if (!waiting) return null;
+  }
+
+  const row = await db.message.findFirst({
+    where: { wamid: message.wamid },
+    select: { id: true },
+  });
+
+  if (!row) return null;
+
+  return {
+    conversationId,
+    messageId: row.id,
+    replyId: message.replyId,
+    text: message.text,
+    occurredAt: message.occurredAt,
+  };
 }
 
 /**

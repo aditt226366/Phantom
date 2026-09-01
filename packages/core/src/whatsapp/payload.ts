@@ -122,6 +122,34 @@ export interface InboundMessage {
   mediaMimeType: string | null;
   mediaFilename: string | null;
   caption: string | null;
+  /**
+   * The id on the button or list row the customer tapped.
+   *
+   * -------------------------------------------------------------------------
+   * Two message types, one field, because they are one event
+   * -------------------------------------------------------------------------
+   *
+   * Meta delivers a tap two different ways depending on which kind of message
+   * carried the button, and neither is obvious from the other:
+   *
+   *   type "button"       a quick reply on an APPROVED TEMPLATE. The id is at
+   *                       button.payload, and it is the string we supplied per
+   *                       send - which is the only hook that lets a tap on a
+   *                       template start a flow.
+   *   type "interactive"  a reply button or list row on a free-form
+   *                       interactive message. The id is at
+   *                       interactive.button_reply.id or
+   *                       interactive.list_reply.id.
+   *
+   * Collapsed into one field here rather than left to every reader, because a
+   * reader that handled only one of them would work perfectly for flows a
+   * customer answered inside the window and silently ignore every entry tap -
+   * and entry taps are the ones that start conversations.
+   *
+   * Null for every other message type, and for a tap whose payload Meta did
+   * not include.
+   */
+  replyId: string | null;
   occurredAt: Date;
 }
 
@@ -236,6 +264,53 @@ function readMedia(
     mediaFilename: str(record["filename"]),
     caption: str(record["caption"]),
   };
+}
+
+/**
+ * The id and the label on whatever the customer tapped.
+ *
+ * Total, like everything else in this file: a shape Meta has changed, or a
+ * message type that carries neither, produces two nulls rather than a throw.
+ * An inbound webhook is the worst place in the system to fail - nobody is
+ * watching, the delivery retries, and the customer's message is lost.
+ */
+function readReply(
+  raw: Record<string, unknown>,
+  type: string,
+): { id: string | null; title: string | null } {
+  const str = (value: unknown): string | null =>
+    typeof value === "string" && value.length > 0 ? value : null;
+
+  /* A quick reply on an approved template. This is how a flow starts. */
+  if (type === "button") {
+    const button = raw["button"];
+    if (typeof button !== "object" || button === null) {
+      return { id: null, title: null };
+    }
+    const record = button as Record<string, unknown>;
+    return { id: str(record["payload"]), title: str(record["text"]) };
+  }
+
+  /* A reply button or list row on a free-form interactive message. */
+  if (type === "interactive") {
+    const interactive = raw["interactive"];
+    if (typeof interactive !== "object" || interactive === null) {
+      return { id: null, title: null };
+    }
+
+    const record = interactive as Record<string, unknown>;
+    /* Meta names the two shapes differently and sends exactly one of them. */
+    const reply = record["button_reply"] ?? record["list_reply"];
+
+    if (typeof reply !== "object" || reply === null) {
+      return { id: null, title: null };
+    }
+
+    const chosen = reply as Record<string, unknown>;
+    return { id: str(chosen["id"]), title: str(chosen["title"]) };
+  }
+
+  return { id: null, title: null };
 }
 
 /**
@@ -355,10 +430,7 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
       for (const message of value.messages ?? []) {
         const raw = message as Record<string, unknown>;
         const supported = RENDERABLE_TYPES.has(message.type);
-        const text =
-          message.type === "text"
-            ? ((raw["text"] as { body?: string } | undefined)?.body ?? null)
-            : null;
+        const reply = readReply(raw, message.type);
 
         result.messages.push({
           kind: "message",
@@ -368,7 +440,20 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
           profileName: profileByWaId.get(message.from) ?? null,
           type: message.type,
           supported,
-          text,
+          /*
+           * A tap's visible label is its text.
+           *
+           * Without it the thread shows an empty bubble where the customer
+           * pressed something, and an operator reading back cannot see what
+           * they chose - which is the half of the conversation a support call
+           * is usually about. The id is deliberately NOT the text: it is
+           * correct, unique per run, and unreadable.
+           */
+          text:
+            message.type === "text"
+              ? ((raw["text"] as { body?: string } | undefined)?.body ?? null)
+              : reply.title,
+          replyId: reply.id,
           ...readMedia(raw, message.type),
           occurredAt: toDate(message.timestamp),
         });

@@ -1,5 +1,11 @@
-import { JOB_NAMES, type WhatsAppWebhookJob } from "@whatsapp-os/core";
-import { ingestWebhookDelivery, type MediaFetchRequest } from "@whatsapp-os/db";
+import { JOB_NAMES, sendJobId, type WhatsAppWebhookJob } from "@whatsapp-os/core";
+import {
+  advanceFlow,
+  ingestWebhookDelivery,
+  type FlowAdvanceRequest,
+  type MediaFetchRequest,
+} from "@whatsapp-os/db";
+import { SEND_JOB_OPTIONS } from "@whatsapp-os/core";
 import { log } from "../logger.ts";
 import { systemQueue } from "../queue.ts";
 
@@ -17,15 +23,35 @@ import { systemQueue } from "../queue.ts";
  * accident, and every enqueue below happens after the last transaction has
  * closed.
  */
-export async function handleWhatsAppWebhook(
-  payload: WhatsAppWebhookJob,
-): Promise<{ status: string; inserted: number; advanced: number; media: number }> {
+export async function handleWhatsAppWebhook(payload: WhatsAppWebhookJob): Promise<{
+  status: string;
+  inserted: number;
+  advanced: number;
+  media: number;
+  flows: number;
+}> {
   const { companyId, eventId } = payload;
 
   const summary = await ingestWebhookDelivery(companyId, eventId);
 
   for (const request of summary.media) {
     await enqueueMediaFetch(companyId, request);
+  }
+
+  /*
+   * Flows, after the messages are written and with no scope open.
+   *
+   * Sequential rather than concurrent, and that is not caution about load. Two
+   * taps from one customer in the same delivery are two answers to the same
+   * run, and the second one is only meaningful once the first has moved the
+   * position - run in parallel they would both read the run standing on the
+   * same node and both be treated as live, which is exactly the double-advance
+   * the button ids exist to prevent.
+   */
+  let flows = 0;
+
+  for (const request of summary.flowAdvances) {
+    flows += await advanceOneFlow(companyId, request);
   }
 
   /*
@@ -50,6 +76,7 @@ export async function handleWhatsAppWebhook(
     inserted: summary.inserted,
     advanced: summary.advanced,
     media: summary.media.length,
+    flows,
   };
 
   log.info("webhook delivery ingested", {
@@ -67,6 +94,65 @@ export async function handleWhatsAppWebhook(
   });
 
   return result;
+}
+
+/**
+ * Advance one run, and hand whatever it produced to the send queue.
+ *
+ * Returns 1 when a run actually moved, so the log line distinguishes a
+ * delivery that drove a flow from one that carried a tap this system declined.
+ * A decline is logged at info with its machine reason: it is an ordinary
+ * outcome - a customer scrolling up three days and pressing an old button -
+ * and not an error, but it is also the thing somebody asks about when they say
+ * the bot ignored them.
+ */
+async function advanceOneFlow(
+  companyId: string,
+  request: FlowAdvanceRequest,
+): Promise<number> {
+  const result = await advanceFlow(companyId, request);
+
+  if (result.outcome === "no_flow") return 0;
+
+  if (result.outcome === "declined") {
+    log.info("flow tap declined", {
+      companyId,
+      messageId: request.messageId,
+      reason: result.reason,
+      ...(result.runId ? { runId: result.runId } : {}),
+    });
+    return 0;
+  }
+
+  for (const send of result.sends) {
+    await systemQueue.add(
+      JOB_NAMES.WHATSAPP_MESSAGE_SEND,
+      {
+        companyId,
+        messageId: send.messageId,
+        sendAttempt: send.sendAttempt,
+      },
+      {
+        /*
+         * The same id and the same options as every other send. A flow's
+         * message is an ordinary outbound message, which is the whole point -
+         * attempts: 1 included, because /messages has no idempotency key and a
+         * retried question reaches a real customer twice.
+         */
+        jobId: sendJobId(send.messageId, send.sendAttempt),
+        ...SEND_JOB_OPTIONS,
+      },
+    );
+  }
+
+  log.info("flow advanced", {
+    companyId,
+    runId: result.runId,
+    outcome: result.outcome,
+    sends: result.sends.length,
+  });
+
+  return 1;
 }
 
 async function enqueueMediaFetch(

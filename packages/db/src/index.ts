@@ -59,7 +59,11 @@ export {
 export type { TemplateEditQuota } from "./templates.ts";
 export type { NumberRefreshCounts } from "./numbers.ts";
 export { ingestWebhookDelivery } from "./webhook-ingest.ts";
-export type { IngestSummary, MediaFetchRequest } from "./webhook-ingest.ts";
+export type {
+  FlowAdvanceRequest,
+  IngestSummary,
+  MediaFetchRequest,
+} from "./webhook-ingest.ts";
 export { recordUnroutableWebhook } from "./unroutable-webhooks.ts";
 export type {
   UnroutableWebhookInput,
@@ -112,6 +116,13 @@ export type {
   TemplateForSend,
 } from "./broadcast-run.ts";
 export { materialiseFlowMessage, materialiseOutboundTemplate } from "./outbound.ts";
+export {
+  advanceFlow,
+  entryButtonPayloads,
+  handOff,
+  pauseRunForMessage,
+} from "./flows.ts";
+export type { FlowAdvanceInput, FlowAdvanceResult, FlowDecline, FlowSendRequest } from "./flows.ts";
 export type { OutboundTemplate, OutboundTemplateInput } from "./outbound.ts";
 export {
   claimLeadRow,
@@ -183,6 +194,10 @@ export type {
   LeadSource,
   LeadSourceRow,
   DashboardRollup,
+  Flow,
+  FlowVersion,
+  FlowRun,
+  FlowRunStep,
   LoginAttempt,
   AdminUser,
   AdminSession,
@@ -209,4 +224,7 @@ export {
   LeadSourceAction,
   LeadSourceStatus,
   LeadSourceRowState,
+  FlowRunStatus,
+  FlowStepKind,
+  LeadScore,
 } from "./generated/prisma/enums.ts";

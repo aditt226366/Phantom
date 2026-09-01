@@ -15,6 +15,7 @@ import {
   canSend,
   markContactUndeliverable,
   pauseBroadcastForRateLimit,
+  pauseRunForMessage,
   recordSendAccepted,
   recordSendDeclined,
   recordSendRefused,
@@ -229,6 +230,29 @@ export async function handleWhatsAppMessageSend(
     await withCompany(companyId, (db, scoped) =>
       recordSendDeclined(db, scoped, messageId, reason, now),
     );
+
+    /*
+     * The second trigger for pausing a flow run, and the one the executor's
+     * own pre-check cannot cover: the window can close between a step being
+     * planned and the queue reaching it. Without this the run sits ACTIVE for
+     * ever beside a thread of POLICY failures, and the tenant's only signal
+     * that a deadline passed is a red bubble.
+     *
+     * Only for window_closed. Every other refusal here is about the workspace,
+     * the number or the contact, and none of those is a state the entry
+     * template can resume from - pausing on one would promise a recovery that
+     * is not available.
+     */
+    if (reason === "window_closed") {
+      const runId = await pauseRunForMessage(companyId, messageId);
+      if (runId) {
+        log.info("flow run paused: the window closed before the send", {
+          companyId,
+          messageId,
+          runId,
+        });
+      }
+    }
 
     log.info("send declined by policy", { companyId, messageId, reason });
     return { result: "declined" };

@@ -24,7 +24,9 @@ const add = vi.fn<
   ) => Promise<{ id: string }>
 >(async () => ({ id: "job-1" }));
 
-vi.mock("@whatsapp-os/db", () => ({ ingestWebhookDelivery }));
+const advanceFlow = vi.fn(async () => ({ outcome: "no_flow" }) as never);
+
+vi.mock("@whatsapp-os/db", () => ({ ingestWebhookDelivery, advanceFlow }));
 vi.mock("../src/queue.ts", () => ({ systemQueue: { add } }));
 
 const { handleWhatsAppWebhook } = await import("../src/jobs/whatsapp-webhook.ts");
@@ -38,6 +40,7 @@ function summary(over: Partial<IngestSummary> = {}): IngestSummary {
     advanced: 0,
     skipped: [],
     media: [],
+    flowAdvances: [],
     numberQualityUpdates: 0,
     templatesUpdated: 0,
     templatesUnmatched: 0,
@@ -69,6 +72,7 @@ describe("a delivery with no media", () => {
       inserted: 1,
       advanced: 0,
       media: 0,
+      flows: 0,
     });
   });
 });

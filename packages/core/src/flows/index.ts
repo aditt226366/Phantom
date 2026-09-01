@@ -38,4 +38,6 @@ export type {
   QuestionNode,
 } from "./nodes.ts";
 export { buildInteractivePayload, describeInteractive } from "./interactive.ts";
+export { planAdvance, planEntry } from "./engine.ts";
+export type { AdvanceFailure, AdvancePlan, FlowEffect, FlowInput } from "./engine.ts";
 export type { InteractivePayload } from "./interactive.ts";

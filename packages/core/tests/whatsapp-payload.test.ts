@@ -376,3 +376,124 @@ describe("message_template_status_update", () => {
     expect(parsed.templateUpdates[0]?.status).toBe("SOMETHING_NEW");
   });
 });
+
+describe("the two ways a tap arrives", () => {
+  /**
+   * Meta delivers a button press two different ways depending on which kind of
+   * message carried the button, and neither is derivable from the other. A
+   * reader that handled only the interactive shape would work perfectly for
+   * flows a customer answered inside the window and silently ignore every
+   * entry tap - and entry taps are the ones that start conversations.
+   */
+
+  function delivery(message: Record<string, unknown>) {
+    return {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "PN1" },
+                messages: [message],
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("reads the payload off a template's quick reply", () => {
+    /* type "button" - the only thing that can start a flow, because a template
+       is the only thing that may go out before a window is open. */
+    const parsed = parseWebhookPayload(
+      delivery({
+        id: "wamid.1",
+        from: "919876543210",
+        timestamp: "1789000000",
+        type: "button",
+        button: { payload: "f1.e.ver1.start", text: "Yes please" },
+      }),
+    );
+
+    expect(parsed.messages[0]?.replyId).toBe("f1.e.ver1.start");
+    /* The label is the text, so the thread shows what they pressed. */
+    expect(parsed.messages[0]?.text).toBe("Yes please");
+  });
+
+  it("reads the id off an interactive reply button", () => {
+    const parsed = parseWebhookPayload(
+      delivery({
+        id: "wamid.2",
+        from: "919876543210",
+        timestamp: "1789000000",
+        type: "interactive",
+        interactive: {
+          type: "button_reply",
+          button_reply: { id: "f1.r.run1.menu.shoes", title: "Shoes" },
+        },
+      }),
+    );
+
+    expect(parsed.messages[0]?.replyId).toBe("f1.r.run1.menu.shoes");
+    expect(parsed.messages[0]?.text).toBe("Shoes");
+  });
+
+  it("reads the id off a list row, which Meta names differently", () => {
+    const parsed = parseWebhookPayload(
+      delivery({
+        id: "wamid.3",
+        from: "919876543210",
+        timestamp: "1789000000",
+        type: "interactive",
+        interactive: {
+          type: "list_reply",
+          list_reply: { id: "f1.r.run1.menu.bags", title: "Bags" },
+        },
+      }),
+    );
+
+    expect(parsed.messages[0]?.replyId).toBe("f1.r.run1.menu.bags");
+  });
+
+  it("leaves replyId null on an ordinary text message", () => {
+    const parsed = parseWebhookPayload(
+      delivery({
+        id: "wamid.4",
+        from: "919876543210",
+        timestamp: "1789000000",
+        type: "text",
+        text: { body: "hello" },
+      }),
+    );
+
+    expect(parsed.messages[0]?.replyId).toBeNull();
+    expect(parsed.messages[0]?.text).toBe("hello");
+  });
+
+  it("does not throw on a shape Meta has changed", () => {
+    /* An inbound webhook is the worst place in the system to fail: nobody is
+       watching, the delivery retries, and the customer's message is lost. */
+    for (const broken of [
+      { type: "button" },
+      { type: "button", button: null },
+      { type: "button", button: "not an object" },
+      { type: "interactive", interactive: {} },
+      { type: "interactive", interactive: { button_reply: null } },
+    ]) {
+      const parsed = parseWebhookPayload(
+        delivery({
+          id: `wamid.${Math.random()}`,
+          from: "919876543210",
+          timestamp: "1789000000",
+          ...broken,
+        }),
+      );
+
+      expect(parsed.messages[0]?.replyId).toBeNull();
+    }
+  });
+});

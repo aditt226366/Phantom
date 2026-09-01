@@ -123,6 +123,10 @@ vi.mock("@whatsapp-os/db", () => ({
   },
   markContactUndeliverable,
   pauseBroadcastForRateLimit,
+  /* A flow message declined for window_closed pauses its run. Returns null
+     here because these fixtures are ordinary sends with no run behind
+     them, which is the case the guard has to leave alone. */
+  pauseRunForMessage: async () => null,
 }));
 
 vi.mock("@whatsapp-os/core/whatsapp", () => ({

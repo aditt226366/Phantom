@@ -87,9 +87,19 @@ export default async function Page({
        * a ten thousand recipient run buries every genuine conversation.
        */
       where: inboxWhere(view),
-      /* The index is (company_id, last_message_at DESC). Tie-broken on id
-         because Meta's timestamps are whole seconds, so ties are real. */
-      orderBy: [{ lastMessageAt: "desc" }, { id: "asc" }],
+      /*
+       * The index is (company_id, last_message_at DESC). Tie-broken on id
+       * because Meta's timestamps are whole seconds, so ties are real.
+       *
+       * The queue sorts the other way, oldest first, and on when the thread
+       * started waiting rather than on its newest message. A feed answers
+       * "what is going on"; a queue answers "what has been ignored longest",
+       * and the thread at the top of a queue is the one that has waited most.
+       */
+      orderBy:
+        view === "attention"
+          ? [{ needsHumanAt: "asc" }, { id: "asc" }]
+          : [{ lastMessageAt: "desc" }, { id: "asc" }],
       take: 50,
       select: {
         id: true,
@@ -99,6 +109,8 @@ export default async function Page({
         windowExpiresAt: true,
         unreadCount: true,
         assignedUserId: true,
+        needsHumanAt: true,
+        needsHumanReason: true,
         contact: {
           select: {
             displayName: true,
@@ -118,7 +130,9 @@ export default async function Page({
         lede={
           view === "all"
             ? "Every conversation on your numbers, including the one-way threads a broadcast creates."
-            : "Conversations a customer has written in, most recent first."
+            : view === "attention"
+              ? "Threads somebody asked a person to take, longest wait first. A flow puts one here when it hands over."
+              : "Conversations a customer has written in, most recent first."
         }
       />
 
@@ -127,6 +141,9 @@ export default async function Page({
       <nav aria-label="Inbox views" className="mb-lg flex gap-lg border-b border-hairline">
         <ViewTab href="/inbox" active={view === "replies"}>
           Replies
+        </ViewTab>
+        <ViewTab href="/inbox?view=attention" active={view === "attention"}>
+          Needs a person
         </ViewTab>
         <ViewTab href="/inbox?view=all" active={view === "all"}>
           All conversations
@@ -147,7 +164,11 @@ export default async function Page({
         <EmptyState
           tone="mint"
           title={
-            view === "all" ? "No conversations yet" : "No replies yet"
+            view === "all"
+              ? "No conversations yet"
+              : view === "attention"
+                ? "Nothing waiting for a person"
+                : "No replies yet"
           }
           /*
            * Different copy per view, because "empty" means two different
@@ -156,7 +177,13 @@ export default async function Page({
            * no conversations at all, and telling somebody it is would send
            * them looking for a fault.
            */
-          description={view === "all" ? EMPTY_COPY["inbox#all"] : EMPTY_COPY.inbox}
+          description={
+            view === "all"
+              ? EMPTY_COPY["inbox#all"]
+              : view === "attention"
+                ? EMPTY_COPY["inbox#attention"]
+                : EMPTY_COPY.inbox
+          }
           action={
             view === "replies" ? (
               <Button asChild variant="outline">
@@ -175,7 +202,7 @@ function ViewTab({
   active,
   children,
 }: {
-  href: "/inbox" | "/inbox?view=all";
+  href: "/inbox" | "/inbox?view=all" | "/inbox?view=attention";
   active: boolean;
   children: React.ReactNode;
 }) {
@@ -202,6 +229,9 @@ interface ConversationListItem {
   windowExpiresAt: Date | null;
   unreadCount: number;
   assignedUserId: string | null;
+  /** Set when somebody decided a person is needed. See needsHuman. */
+  needsHumanAt: Date | null;
+  needsHumanReason: string | null;
   contact: {
     displayName: string | null;
     profileName: string | null;
@@ -247,6 +277,21 @@ function ConversationRow({
       <p className="mt-xxs min-w-0 truncate text-body-sm text-body">
         {previewLabel(conversation.lastMessagePreview)}
       </p>
+
+      {/*
+        * Why a person was asked for, on its own line under the preview.
+        *
+        * Not INSTEAD of the preview, which the dashboard card does - that card
+        * has one line per thread and has to choose. Here there is room for
+        * both, and they answer different questions: the preview is what was
+        * last said, and this is what somebody wants done about it. For a
+        * handoff the preview is the flow's own goodbye, which says nothing.
+        */}
+      {conversation.needsHumanReason ? (
+        <p className="mt-xxs min-w-0 truncate text-caption text-ink">
+          {conversation.needsHumanReason}
+        </p>
+      ) : null}
 
       {/* Wraps rather than truncates: these are short, fixed-vocabulary chips,
           and a wrapped second row is better than a hidden window state. */}

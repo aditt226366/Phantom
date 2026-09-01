@@ -71,21 +71,34 @@ export function windowVariant(
 }
 
 /**
- * Whether a person is needed here, as far as this build can tell.
+ * Whether a person is needed here.
  *
- * There is no handover flag in the schema and this does not invent one. The AI
- * that would set it is a later phase; what exists today is the schema's own
- * notion — `assignedUserId` null means nobody has picked the thread up — and
- * the fact that the customer is waiting on a reply.
+ * ---------------------------------------------------------------------------
+ * There IS a flag now, and it is the first thing this reads
+ * ---------------------------------------------------------------------------
  *
- * Both halves are load-bearing. Unassigned alone would flag every thread that
- * was ever answered and closed out, which makes the signal worthless within a
- * day. Unread alone would flag threads a colleague has already taken.
+ * This used to say "there is no handover flag in the schema and this does not
+ * invent one", and derived it from `assignedUserId` being null and the
+ * customer waiting on a reply. That was right while a customer writing in was
+ * the only way a thread came to need somebody.
+ *
+ * A flow's handoff node is a proactive claim - the automation has decided it
+ * cannot finish - and it satisfies neither half of that derivation: nothing is
+ * unread, because no message arrived. `needsHumanAt` is set by whoever makes
+ * that decision and cleared by somebody taking the thread.
+ *
+ * The derivation stays as the second arm. It describes a different thing that
+ * is still true, and a build that replaced it would stop showing every
+ * ordinary unread thread the moment the column shipped. Both halves of it
+ * remain load-bearing: unassigned alone would flag every thread ever answered
+ * and closed out, and unread alone would flag threads a colleague has taken.
  */
 export function needsHuman(conversation: {
   assignedUserId: string | null;
   unreadCount: number;
+  needsHumanAt?: Date | null;
 }): boolean {
+  if (conversation.needsHumanAt) return true;
   return conversation.assignedUserId === null && conversation.unreadCount > 0;
 }
 
@@ -119,11 +132,19 @@ export function previewLabel(preview: string | null): string {
  * Which conversations the inbox shows
  * ------------------------------------------------------------------------- */
 
-export type InboxView = "replies" | "all";
+export type InboxView = "replies" | "all" | "attention";
 
-/** `?view=all` and nothing else. Anything unrecognised falls back to the default. */
+/**
+ * `?view=all`, `?view=attention`, and nothing else.
+ *
+ * Anything unrecognised falls back to the default rather than erroring: a view
+ * is a URL people share and bookmark, and a 400 on a typo is worse than the
+ * list they were probably after.
+ */
 export function parseInboxView(raw: string | string[] | undefined): InboxView {
-  return raw === "all" ? "all" : "replies";
+  if (raw === "all") return "all";
+  if (raw === "attention") return "attention";
+  return "replies";
 }
 
 /**
@@ -163,7 +184,36 @@ export function parseInboxView(raw: string | string[] | undefined): InboxView {
 export function inboxWhere(view: InboxView): Record<string, unknown> {
   if (view === "all") return {};
 
+  /*
+   * The queue. A handoff has to have somewhere to GO, or it is a decision the
+   * product records and never shows anybody - which is what "raises the
+   * thread" amounted to before this view existed.
+   *
+   * Its own view rather than a filter on the default one, because the two
+   * answer different questions. The default is "what is going on"; this is
+   * "what should I pick up next", and mixing them means the answer to the
+   * second is however far down the first you are willing to scroll.
+   */
+  if (view === "attention") {
+    return { needsHumanAt: { not: null } };
+  }
+
+  /*
+   * The default view gains the flag as a third arm.
+   *
+   * Without it a handoff is invisible here: a flow that decides by itself that
+   * a person is needed produces no inbound message, so `lastInboundAt` is
+   * untouched, and it produces nothing unread either. In practice a run only
+   * advances on a customer tap so the first arm usually holds anyway - but
+   * "usually" is not a property to leave a queue resting on, and a lead-source
+   * flow whose entry template is answered and then handed off in one advance
+   * is exactly the case where it would not.
+   */
   return {
-    OR: [{ lastInboundAt: { not: null } }, { unreadCount: { gt: 0 } }],
+    OR: [
+      { lastInboundAt: { not: null } },
+      { unreadCount: { gt: 0 } },
+      { needsHumanAt: { not: null } },
+    ],
   };
 }

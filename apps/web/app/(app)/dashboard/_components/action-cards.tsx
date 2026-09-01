@@ -367,8 +367,8 @@ export function WaitingCard({
     >
       {rows.length === 0 ? (
         <p className="text-body-sm text-body">
-          Nothing is unread and unassigned. Threads nobody has picked up appear
-          here, longest wait first.
+          Nothing is waiting. Threads nobody has picked up appear here, and so
+          do the ones a flow handed over, longest wait first.
         </p>
       ) : (
         <ul className="flex flex-col gap-sm">
@@ -382,12 +382,35 @@ export function WaitingCard({
                   <span className="block truncate text-body-sm text-ink">
                     {row.name}
                   </span>
+                  {/*
+                    * The reason when there is one, the preview otherwise.
+                    *
+                    * A flagged thread is in this queue because somebody said
+                    * so, and the sentence they wrote is more use than the last
+                    * message - which for a handoff is the flow's own goodbye
+                    * and says nothing about what is wanted. An ordinary unread
+                    * thread has no reason and shows its preview, which is
+                    * exactly what it did before.
+                    */}
                   <span className="block truncate text-caption text-muted">
-                    {row.lastMessagePreview ?? "No preview"}
+                    {row.needsHumanReason ?? row.lastMessagePreview ?? "No preview"}
                   </span>
                 </span>
-                <Badge variant="default" className="shrink-0">
-                  {formatCount(row.unreadCount)}
+                {/*
+                  * The unread count, or a word.
+                  *
+                  * A flagged thread very often has nothing unread - a flow
+                  * decides by itself that a person is needed - and a badge
+                  * reading "0" beside it would say the opposite of why it is
+                  * in this list.
+                  */}
+                <Badge
+                  variant={row.needsHumanReason ? "outline" : "default"}
+                  className="shrink-0"
+                >
+                  {row.needsHumanReason && row.unreadCount === 0
+                    ? "Handed over"
+                    : formatCount(row.unreadCount)}
                 </Badge>
               </Link>
             </li>

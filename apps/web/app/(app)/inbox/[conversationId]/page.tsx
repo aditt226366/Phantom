@@ -16,7 +16,12 @@ import {
   retryOffer,
   statusDisplay,
 } from "@/lib/thread-display";
+import { Button } from "@/components/ui/button";
 import { SectionShell } from "../../_components/section";
+import {
+  releaseConversationAction,
+  takeConversationAction,
+} from "../actions";
 import { ComposerBlock } from "../_components/composer";
 import { RetryButton } from "../_components/retry-button";
 import { ThreadRefresh } from "../_components/thread-refresh";
@@ -76,6 +81,10 @@ export default async function Page({
       select: {
         id: true,
         windowExpiresAt: true,
+        needsHumanAt: true,
+        needsHumanReason: true,
+        assignedUserId: true,
+        assignedUser: { select: { fullName: true } },
         contact: {
           select: {
             displayName: true,
@@ -218,6 +227,67 @@ export default async function Page({
         <p className="mt-xxs text-body-sm text-muted">
           On {conversation.whatsappNumber.displayNumber}
         </p>
+
+        {conversation.needsHumanAt ? (
+          <div className="mt-sm flex flex-wrap items-center justify-between gap-sm rounded-lg border border-hairline-strong bg-surface-card px-base py-sm">
+            <p className="min-w-0 text-body-sm text-body">
+              <span className="text-body-strong text-ink">
+                Somebody asked for a person here.
+              </span>{" "}
+              {conversation.needsHumanReason}
+            </p>
+            {/*
+              * Taking it is a decision, so it is a button.
+              *
+              * Deliberately not cleared by rendering this page. Opening a
+              * thread is how somebody decides whether they want it, and a
+              * queue that emptied on being looked at is the exact bug the
+              * needs_human_at column replaced.
+              *
+              * One action, two labels. A thread can legitimately be flagged
+              * AND assigned - the flag is stored state and assignment is what
+              * clears it, so anything that sets one without the other leaves
+              * both true - but offering "Take this" to the person who already
+              * has it is nonsense. The action is idempotent, so pressing it
+              * from that state simply clears the flag, which is what the
+              * second label says.
+              */}
+            <form action={takeConversationAction}>
+              <CsrfField />
+              <input type="hidden" name="conversationId" value={conversationId} />
+              <Button type="submit">
+                {conversation.assignedUserId === session.userId
+                  ? "Mark as handled"
+                  : "Take this"}
+              </Button>
+            </form>
+          </div>
+        ) : null}
+
+        {conversation.assignedUser && !conversation.needsHumanAt ? (
+          <p className="mt-sm text-caption text-muted">
+            {conversation.assignedUserId === session.userId ? (
+              <>
+                You have this conversation.{" "}
+                <span className="inline-block align-middle">
+                  <form action={releaseConversationAction}>
+                    <CsrfField />
+                    <input
+                      type="hidden"
+                      name="conversationId"
+                      value={conversationId}
+                    />
+                    <Button type="submit" variant="ghost">
+                      Put it back
+                    </Button>
+                  </form>
+                </span>
+              </>
+            ) : (
+              `${conversation.assignedUser.fullName} has this conversation.`
+            )}
+          </p>
+        ) : null}
 
         {flowRun ? (
           <p className="mt-sm rounded-lg border border-hairline bg-surface-card px-base py-sm text-body-sm text-body">

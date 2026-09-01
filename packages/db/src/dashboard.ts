@@ -337,12 +337,31 @@ export async function countClosingWindows(
   });
 }
 
+/**
+ * What "waiting for a human" means, in one place.
+ *
+ * The card and its count MUST read the same predicate. Two copies of it is how
+ * a page ends up saying "3" above a list of five, and the discrepancy is
+ * invisible until somebody counts - at which point the number nobody trusts is
+ * the one they were meant to act on.
+ */
+const WAITING_FOR_A_HUMAN: Prisma.ConversationWhereInput = {
+  OR: [
+    /* Somebody decided a person is needed, explicitly. */
+    { needsHumanAt: { not: null } },
+    /* Phase 5's: the customer is waiting and nobody has taken the thread. */
+    { assignedUserId: null, unreadCount: { gt: 0 } },
+  ],
+};
+
 export interface WaitingThread {
   conversationId: string;
   name: string;
   unreadCount: number;
   lastMessageAt: Date | null;
   lastMessagePreview: string | null;
+  /** Why a person was asked for. Null for an ordinary unread thread. */
+  needsHumanReason: string | null;
 }
 
 /**
@@ -353,20 +372,50 @@ export interface WaitingThread {
  * queue, and the thread at the top of a queue is the one that has been waiting
  * longest. Sorting it newest-first would bury the customer who has been ignored
  * since Tuesday under the one who wrote a minute ago.
+ *
+ * ---------------------------------------------------------------------------
+ * Two ways in, because there are now two kinds of waiting
+ * ---------------------------------------------------------------------------
+ *
+ * The original clause is Phase 5's and still holds: an unread inbound message
+ * on a thread nobody has taken. That is the customer waiting on us.
+ *
+ * `needs_human_at` is the other kind, and it is not derivable from anything.
+ * A flow's handoff node decides the automation cannot finish, which is true
+ * with nothing unread and nobody assigned - and the first version of it faked
+ * the unread count precisely because this clause did not exist, which meant
+ * opening the thread erased the request.
+ *
+ * An OR rather than a replacement: the flag does not describe an unread
+ * customer message, and a queue that showed only flagged threads would lose
+ * every ordinary one the moment this column shipped.
  */
 export async function waitingForAHuman(
   db: CompanyClient,
   limit: number = DASHBOARD_LIST_LIMIT,
 ): Promise<WaitingThread[]> {
   const rows = await db.conversation.findMany({
-    where: { assignedUserId: null, unreadCount: { gt: 0 } },
-    orderBy: { lastMessageAt: "asc" },
+    where: WAITING_FOR_A_HUMAN,
+    /*
+     * By when the thread started waiting, not by its newest message.
+     *
+     * A flagged thread whose customer then went quiet keeps its place: the
+     * flag is what is waiting, and last_message_at would send it to the back
+     * of the queue every time anything happened in it. NULLS LAST puts the
+     * ordinary unread threads - which have no flag - after the flagged ones,
+     * which is the right order for somebody picking work up.
+     */
+    orderBy: [
+      { needsHumanAt: { sort: "asc", nulls: "last" } },
+      { lastMessageAt: "asc" },
+    ],
     take: limit,
     select: {
       id: true,
       unreadCount: true,
       lastMessageAt: true,
       lastMessagePreview: true,
+      needsHumanReason: true,
       contact: { select: { displayName: true, profileName: true, waId: true } },
     },
   });
@@ -377,15 +426,20 @@ export async function waitingForAHuman(
     unreadCount: row.unreadCount,
     lastMessageAt: row.lastMessageAt,
     lastMessagePreview: row.lastMessagePreview,
+    /*
+     * Null for an ordinary unread thread, which is not a gap: nobody claimed
+     * anything about it, the customer simply wrote. The card shows the reason
+     * only where there is one, so a flagged thread says why it is in the queue
+     * and an unread one does not pretend to.
+     */
+    needsHumanReason: row.needsHumanReason,
   }));
 }
 
 export async function countWaitingForAHuman(
   db: CompanyClient,
 ): Promise<number> {
-  return db.conversation.count({
-    where: { assignedUserId: null, unreadCount: { gt: 0 } },
-  });
+  return db.conversation.count({ where: WAITING_FOR_A_HUMAN });
 }
 
 export interface RecentThread {

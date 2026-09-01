@@ -13,6 +13,7 @@ import {
 import {
   advanceConversation,
   canSend,
+  clearNeedsHuman,
   handOff,
   withCompany,
 } from "@whatsapp-os/db";
@@ -470,4 +471,97 @@ function extractBody(components: unknown): string {
     }
   }
   return "";
+}
+
+/* ------------------------------------------------------------------------- *
+ * Taking a thread
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Assign this conversation to whoever pressed the button, and clear the flag.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this exists at all
+ * ---------------------------------------------------------------------------
+ *
+ * `conversations.assigned_user_id` has been in the schema since Phase 1 and
+ * until now nothing ever wrote it. Every read treated null as "nobody has
+ * picked this up", which was true by construction because there was no way to
+ * pick anything up.
+ *
+ * That was survivable while the signal was derived from an unread count -
+ * reading the thread cleared it, so the queue drained by itself. It stops being
+ * survivable the moment a flag persists until somebody clears it deliberately,
+ * which is the whole point of the flag: a queue with no way to take a thread
+ * off it is a list that only grows.
+ *
+ * ---------------------------------------------------------------------------
+ * Assignment is what clears it, and reading is not
+ * ---------------------------------------------------------------------------
+ *
+ * Deliberately not wired into the thread page's render. Opening a conversation
+ * is how somebody decides whether they want it, and a queue that emptied on
+ * being looked at is the exact bug `needs_human_at` replaced - one glance from
+ * anybody and the request was gone.
+ *
+ * Taking it is a decision, so it is a button.
+ */
+export async function takeConversationAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+  await assertFeatureAccess();
+
+  const conversationId = String(formData.get("conversationId") ?? "");
+  if (!conversationId) return;
+
+  await withCompany(session.companyId, async (db, companyId) => {
+    /*
+     * updateMany, not update: the extension merges companyId - a non-unique
+     * column - into `where`, which update's where type does not accept. It
+     * also means a conversation belonging to another company matches nothing
+     * and silently does nothing, which is rule 6 rather than a 404 that would
+     * confirm the id exists.
+     */
+    const touched = await db.conversation.updateMany({
+      where: { id: conversationId, companyId },
+      data: { assignedUserId: session.userId, assignedAt: new Date() },
+    });
+
+    if (touched.count === 0) return;
+
+    await clearNeedsHuman(db, companyId, conversationId);
+  });
+
+  revalidatePath(`/inbox/${conversationId}`);
+  revalidatePath("/inbox");
+  /* The dashboard's waiting-for-a-human card reads the same predicate. */
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Put it back on the queue.
+ *
+ * The counterpart, and it is not symmetrical: releasing a thread clears the
+ * assignment but does NOT re-flag it. Whoever took it may have finished, and
+ * re-raising the request every time somebody let go would make the queue
+ * un-emptiable. Something has to decide a person is needed, and this is not
+ * that decision.
+ */
+export async function releaseConversationAction(formData: FormData): Promise<void> {
+  const session = await requireSession();
+  await assertCsrf(formData, session);
+  await assertFeatureAccess();
+
+  const conversationId = String(formData.get("conversationId") ?? "");
+  if (!conversationId) return;
+
+  await withCompany(session.companyId, (db, companyId) =>
+    db.conversation.updateMany({
+      where: { id: conversationId, companyId },
+      data: { assignedUserId: null, assignedAt: null },
+    }),
+  );
+
+  revalidatePath(`/inbox/${conversationId}`);
+  revalidatePath("/inbox");
 }

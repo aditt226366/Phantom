@@ -56,6 +56,11 @@ export const EMPTY_COPY = {
     "A flow is a decision tree built from WhatsApp's reply buttons and lists, where every branch is a rule somebody drew rather than a model's guess.",
   /* The inbox's two views. The default is threads a customer has written in;
      the second is every thread, including the one-way ones a broadcast makes. */
+  /* The queue. Empty is the GOOD state here, unlike every other empty state in
+     this file - so the copy says nothing is waiting rather than offering a way
+     to make something appear. */
+  "inbox#attention":
+    "Nothing is waiting for a person right now. A flow's handoff step puts a conversation here, with the reason its author wrote.",
   "inbox#all":
     "No conversations at all yet, including any a broadcast started. Threads appear here the moment a message goes out or arrives.",
 } as const;

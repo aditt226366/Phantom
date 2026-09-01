@@ -194,6 +194,13 @@ export const ROUTES: readonly VisualRoute[] = [
     path: "/inbox?view=all",
     audience: "tenant",
   },
+  /* The queue. Its empty state is the GOOD one, so the fixture seeds a flagged
+     thread - otherwise this photographs the screen nobody needs to look at. */
+  {
+    name: "inbox-attention",
+    path: "/inbox?view=attention",
+    audience: "tenant",
+  },
   {
     name: "inbox-thread-open",
     path: `/inbox/${FIXTURE.conversationId}`,

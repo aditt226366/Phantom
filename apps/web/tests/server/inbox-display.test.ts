@@ -99,6 +99,48 @@ describe("needsHuman", () => {
   it("does not flag a thread with nothing waiting", () => {
     expect(needsHuman({ assignedUserId: null, unreadCount: 0 })).toBe(false);
   });
+
+  /*
+   * The arm the derivation could not express. A flow's handoff node is a
+   * proactive claim - the automation decided it cannot finish - and it
+   * satisfies neither half above: nothing is unread, because no message
+   * arrived. This is the case the whole column was added for.
+   */
+  it("flags a thread somebody explicitly asked for a person on", () => {
+    expect(
+      needsHuman({
+        assignedUserId: null,
+        unreadCount: 0,
+        needsHumanAt: new Date("2026-09-07T09:00:00Z"),
+      }),
+    ).toBe(true);
+  });
+
+  it("flags it even once somebody has been assigned, until it is cleared", () => {
+    /*
+     * Assignment is what clears the flag, and it does so by writing the
+     * column - not by being read here. If the two ever disagree, the stored
+     * state is the one that is true: this function must not quietly hide a
+     * request that clearNeedsHuman never ran for.
+     */
+    expect(
+      needsHuman({
+        assignedUserId: "user-1",
+        unreadCount: 0,
+        needsHumanAt: new Date("2026-09-07T09:00:00Z"),
+      }),
+    ).toBe(true);
+  });
+
+  it("reads a thread with no flag exactly as it did before", () => {
+    /* The column is optional on the argument, so every existing caller that
+       does not select it keeps the Phase 5 behaviour rather than silently
+       becoming false. */
+    expect(needsHuman({ assignedUserId: null, unreadCount: 3 })).toBe(true);
+    expect(
+      needsHuman({ assignedUserId: null, unreadCount: 3, needsHumanAt: null }),
+    ).toBe(true);
+  });
 });
 
 describe("sourceLabel", () => {
@@ -131,10 +173,24 @@ describe("which conversations the inbox shows", () => {
    * has learned twice: a page test that grepped for a class or a word would
    * pass on a filter that silently matched nothing.
    */
-  it("defaults to threads a customer has written in", () => {
+  it("defaults to threads a customer has written in, or that were flagged", () => {
     expect(inboxWhere("replies")).toEqual({
-      OR: [{ lastInboundAt: { not: null } }, { unreadCount: { gt: 0 } }],
+      OR: [
+        { lastInboundAt: { not: null } },
+        { unreadCount: { gt: 0 } },
+        { needsHumanAt: { not: null } },
+      ],
     });
+  });
+
+  it("shows only flagged threads on the queue", () => {
+    /*
+     * Its own view rather than a filter on the default one, because the two
+     * answer different questions. The default is "what is going on"; this is
+     * "what should I pick up next", and mixing them makes the answer to the
+     * second however far down the first somebody is willing to scroll.
+     */
+    expect(inboxWhere("attention")).toEqual({ needsHumanAt: { not: null } });
   });
 
   it("filters nothing on the all view", () => {
@@ -157,12 +213,27 @@ describe("which conversations the inbox shows", () => {
       OR: Array<Record<string, unknown>>;
     };
 
-    expect(where.OR).toHaveLength(2);
+    expect(where.OR).toHaveLength(3);
     expect(where.OR).toContainEqual({ unreadCount: { gt: 0 } });
   });
 
-  it("reads only the view it knows, and defaults for everything else", () => {
+  it("keeps a flagged thread in the default view with nothing unread", () => {
+    /*
+     * The clause a handoff needs. A flow that decides by itself that a person
+     * is needed writes no inbound message, so lastInboundAt is untouched and
+     * nothing is unread - and without this arm the thread it flagged is
+     * invisible on the view most people leave open.
+     */
+    const where = inboxWhere("replies") as {
+      OR: Array<Record<string, unknown>>;
+    };
+
+    expect(where.OR).toContainEqual({ needsHumanAt: { not: null } });
+  });
+
+  it("reads only the views it knows, and defaults for everything else", () => {
     expect(parseInboxView("all")).toBe("all");
+    expect(parseInboxView("attention")).toBe("attention");
     expect(parseInboxView(undefined)).toBe("replies");
     expect(parseInboxView("nonsense")).toBe("replies");
     /* A repeated query parameter arrives as an array. It must not be read as

@@ -4,9 +4,11 @@ import { windowExpiryFor } from "@whatsapp-os/core/whatsapp";
 import {
   advanceFlow,
   clearNeedsHuman,
+  countWaitingForAHuman,
   flagNeedsHuman,
   handOff,
   markConversationRead,
+  waitingForAHuman,
   withCompany,
 } from "../src/index.ts";
 import { prisma } from "../src/client.ts";
@@ -1008,5 +1010,135 @@ describe("a thread that needs a person", () => {
 
     expect(run.status).toBe("HANDED_OFF");
     expect(row.needsHumanAt).toBeNull();
+  });
+});
+
+describe("the waiting-for-a-human queue", () => {
+  /**
+   * The read site Phase 5 wrote and the flow builder broke.
+   *
+   * It had no test at all before this, which is part of how the handoff shipped
+   * satisfying neither of its clauses: nothing asserted what the queue was
+   * supposed to contain, so nothing noticed when a new writer produced threads
+   * it could not see.
+   */
+
+  it("includes a thread nobody has taken with unread messages", async () => {
+    /* Phase 5's clause, unchanged and still doing its job. */
+    await withCompany(company.id, (db, scoped) =>
+      db.conversation.updateMany({
+        where: { id: fixture.conversationId, companyId: scoped },
+        data: { unreadCount: 2, assignedUserId: null },
+      }),
+    );
+
+    const rows = await withCompany(company.id, (db) => waitingForAHuman(db));
+
+    expect(rows.map((r) => r.conversationId)).toContain(fixture.conversationId);
+    /* No reason, because nobody claimed anything - the customer simply wrote. */
+    expect(rows[0]?.needsHumanReason).toBeNull();
+  });
+
+  it("includes a flagged thread with nothing unread and nobody assigned", async () => {
+    /*
+     * The case the derivation could not express, and the whole reason for the
+     * column. A flow decides by itself that a person is needed: no message
+     * arrived, so nothing is unread, and the old predicate saw nothing.
+     */
+    await withCompany(company.id, (db, scoped) =>
+      db.conversation.updateMany({
+        where: { id: fixture.conversationId, companyId: scoped },
+        data: { unreadCount: 0, assignedUserId: null },
+      }),
+    );
+
+    await withCompany(company.id, (db, scoped) =>
+      flagNeedsHuman(db, scoped, fixture.conversationId, {
+        reason: "Wants a bulk price",
+        at: new Date("2026-09-07T09:00:00Z"),
+      }),
+    );
+
+    const rows = await withCompany(company.id, (db) => waitingForAHuman(db));
+    const row = rows.find((r) => r.conversationId === fixture.conversationId);
+
+    expect(row).toBeDefined();
+    expect(row?.unreadCount).toBe(0);
+    /* The card shows this instead of the preview - for a handoff the last
+       message is the flow's own goodbye and says nothing about what is wanted. */
+    expect(row?.needsHumanReason).toBe("Wants a bulk price");
+  });
+
+  it("keeps a flagged thread even once somebody is assigned to it", async () => {
+    /*
+     * Assignment is what CLEARS the flag, by writing the column. Until that
+     * happens the stored state is the one that is true, and a queue that
+     * hid the row on assignment alone would drop a request nothing resolved.
+     */
+    await withCompany(company.id, (db, scoped) =>
+      flagNeedsHuman(db, scoped, fixture.conversationId, {
+        reason: "Wants a bulk price",
+        at: new Date("2026-09-07T09:00:00Z"),
+      }),
+    );
+
+    await withCompany(company.id, (db, scoped) =>
+      db.conversation.updateMany({
+        where: { id: fixture.conversationId, companyId: scoped },
+        data: { unreadCount: 0, assignedUserId: company.userIds[0]! },
+      }),
+    );
+
+    const rows = await withCompany(company.id, (db) => waitingForAHuman(db));
+
+    expect(rows.map((r) => r.conversationId)).toContain(fixture.conversationId);
+  });
+
+  it("drops it once the flag is cleared", async () => {
+    await withCompany(company.id, (db, scoped) =>
+      flagNeedsHuman(db, scoped, fixture.conversationId, {
+        reason: "Wants a bulk price",
+        at: new Date("2026-09-07T09:00:00Z"),
+      }),
+    );
+
+    await withCompany(company.id, (db, scoped) =>
+      db.conversation.updateMany({
+        where: { id: fixture.conversationId, companyId: scoped },
+        data: { unreadCount: 0, assignedUserId: null },
+      }),
+    );
+
+    await withCompany(company.id, (db, scoped) =>
+      clearNeedsHuman(db, scoped, fixture.conversationId),
+    );
+
+    const rows = await withCompany(company.id, (db) => waitingForAHuman(db));
+
+    expect(rows.map((r) => r.conversationId)).not.toContain(
+      fixture.conversationId,
+    );
+  });
+
+  it("counts exactly what it lists", async () => {
+    /*
+     * The card and its badge MUST read the same predicate. Two copies is how a
+     * page ends up saying "3" above a list of five, and the discrepancy is
+     * invisible until somebody counts - at which point the number nobody
+     * trusts is the one they were meant to act on.
+     */
+    await withCompany(company.id, (db, scoped) =>
+      flagNeedsHuman(db, scoped, fixture.conversationId, {
+        reason: "Wants a bulk price",
+        at: new Date("2026-09-07T09:00:00Z"),
+      }),
+    );
+
+    const [rows, total] = await withCompany(company.id, async (db) => [
+      await waitingForAHuman(db),
+      await countWaitingForAHuman(db),
+    ]);
+
+    expect(total).toBe(rows.length);
   });
 });

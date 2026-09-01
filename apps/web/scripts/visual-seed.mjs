@@ -2074,6 +2074,9 @@ const FLOW = {
   pausedRunId: "c000visualfixtureflowrun02",
   doneRunId: "c000visualfixtureflowrun03",
   handedRunId: "c000visualfixtureflowrun04",
+  /* The queue's ordinary case: handed over, unassigned, nobody on it yet. */
+  handoffContactId: "c000visualfixtureflowcont3",
+  handoffConversationId: "c000visualfixtureflowconv3",
 };
 
 /**
@@ -2206,8 +2209,8 @@ const FLOW_RUNS = [
   },
   {
     id: FLOW.handedRunId,
-    contactId: CONTACTS[1].id,
-    conversationId: CONVERSATION.closed,
+    contactId: FLOW.handoffContactId,
+    conversationId: FLOW.handoffConversationId,
     status: "HANDED_OFF",
     currentNodeId: null,
     variables: { want: "someone" },
@@ -2266,6 +2269,83 @@ await client.query(
     /* 24 hours after the last inbound, and comfortably past. The window shut
        with the customer standing on n2, which is why the run is paused. */
     "2026-08-12T11:05:00Z",
+  ],
+);
+
+/*
+ * The handed-off run's thread says a person is needed, as flagNeedsHuman would
+ * have written it.
+ *
+ * Seeded rather than left out, because "nothing waiting" is the state every
+ * machine this is built on already has - and the queue is the one screen whose
+ * empty state is the GOOD one, so a fixture that only ever showed it would
+ * photograph the case nobody needs to look at.
+ *
+ * A literal instant: the queue sorts on it and the dashboard card renders the
+ * thread. Relative to now() it would differ between the seed and the capture.
+ */
+/*
+ * A third flow thread, purely so the queue photographs its ORDINARY case.
+ *
+ * The obvious candidate was the handed-off run's conversation, and that used
+ * to be CONVERSATION.closed - but the seed assigns that one, and a thread both
+ * flagged and assigned is a legitimate state that is not the common one. A
+ * fixture whose only example of a screen is its odd case is the same mistake
+ * as one that only seeds happy paths.
+ *
+ * So: unassigned, flagged, with the reason a handoff node's note would carry,
+ * and the handed-off run now points here.
+ */
+await client.query(
+  `INSERT INTO contacts (id, company_id, wa_id, phone_e164, profile_name,
+                         created_at, updated_at)
+   VALUES ($1, $2, '919845012503', '+919845012503', 'Nandini Iyer', $3, $3)`,
+  [FLOW.handoffContactId, COMPANY.active, "2026-08-09T05:30:00Z"],
+);
+
+await client.query(
+  `INSERT INTO conversations (id, company_id, contact_id, whatsapp_number_id,
+                              source, last_inbound_at, last_message_at,
+                              last_message_preview, window_expires_at,
+                              unread_count, needs_human_at, needs_human_reason,
+                              created_at, updated_at)
+   VALUES ($1, $2, $3, $4, 'INBOUND'::conversation_source, $5, $6, $7,
+           $8, 0, $9, $10, $5, $6)`,
+  [
+    FLOW.handoffConversationId,
+    COMPANY.active,
+    FLOW.handoffContactId,
+    NUMBERS[0].id,
+    "2026-08-12T07:10:00Z",
+    "2026-08-12T07:11:00Z",
+    "One of our team will pick this up shortly.",
+    /* The window shut afterwards, which is ordinary - a handoff often sits
+       overnight. A literal, because closed stays closed. */
+    "2026-08-13T07:10:00Z",
+    /* Literal, and the oldest wait in the queue, so the ordering is visible in
+       the picture rather than asserted only in a test. */
+    "2026-08-12T07:11:00Z",
+    "Wants a bulk price for 200 units",
+  ],
+);
+
+await client.query(
+  `INSERT INTO messages (id, company_id, conversation_id, direction, status,
+                         type, wamid, body, send_attempt, occurred_at,
+                         delivered_at, created_at, updated_at)
+   VALUES ($1, $2, $3, 'INBOUND'::message_direction,
+           'DELIVERED'::message_status, 'button', 'wamid.FIXTUREHANDOFFIN',
+           'Talk to someone', 0, $4, $4, $4, $4),
+          ($5, $2, $3, 'OUTBOUND'::message_direction,
+           'DELIVERED'::message_status, 'text', 'wamid.FIXTUREHANDOFFOUT',
+           'One of our team will pick this up shortly.', 0, $6, $6, $6, $6)`,
+  [
+    "c000visualfixtureflowmsg7",
+    COMPANY.active,
+    FLOW.handoffConversationId,
+    "2026-08-12T07:10:00Z",
+    "c000visualfixtureflowmsg8",
+    "2026-08-12T07:11:00Z",
   ],
 );
 

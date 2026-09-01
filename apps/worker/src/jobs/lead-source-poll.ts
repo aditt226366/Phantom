@@ -14,6 +14,7 @@ import { buildAudience, type ColumnMapping } from "@whatsapp-os/core/bulk";
 import { parseLeadSourceAction, toRecords } from "@whatsapp-os/core/leads";
 import { newRowsSince, rowHash } from "@whatsapp-os/core/leads-server";
 import { fillVariables } from "@whatsapp-os/core/whatsapp";
+import { encodeEntryButtonId, flowGraphSchema } from "@whatsapp-os/core/flows";
 import {
   claimLeadRow,
   isDuplicateLead,
@@ -77,6 +78,31 @@ export type LeadPollResult =
  */
 const DEFAULT_QUOTA_BACKOFF_MS = 60_000;
 
+/**
+ * One entry payload per quick-reply button on a flow version's entry template.
+ *
+ * Built here rather than read from a column, because the ids are derived from
+ * the version and its entry node and there is exactly one correct answer -
+ * storing a second copy would be a second thing to keep in step with the tree.
+ *
+ * Returns an empty array for a version whose graph cannot be read or has no
+ * entry node, which the caller treats as a misconfigured binding. Sending its
+ * template anyway would contact a real customer with buttons that resolve to
+ * nothing, and that is worse than not sending: they have been asked a question
+ * the system cannot hear the answer to.
+ */
+function entryPayloadsFor(versionId: string, graph: unknown): string[] {
+  const parsed = flowGraphSchema.safeParse(graph);
+  if (!parsed.success) return [];
+
+  const entry = parsed.data.nodes.find((n) => n.id === parsed.data.entryNodeId);
+  if (!entry || entry.kind !== "entry") return [];
+
+  return entry.choices.map(() =>
+    encodeEntryButtonId({ versionId, nodeId: entry.id }),
+  );
+}
+
 export async function handleLeadSourcePoll(
   payload: LeadSourcePollJob,
 ): Promise<{ result: LeadPollResult; sent: number }> {
@@ -118,9 +144,48 @@ export async function handleLeadSourcePoll(
 
   const action = parseLeadSourceAction(binding.actionConfig);
 
-  if (!action || !binding.template) {
+  /*
+   * Which template goes out, and what its buttons carry.
+   *
+   * -------------------------------------------------------------------------
+   * The action switch, and everything above it that did not change
+   * -------------------------------------------------------------------------
+   *
+   * This is the whole of the second action kind. A cold lead has never written
+   * to us, so the 24-hour window is not open and an interactive message cannot
+   * be sent - which means a FLOW binding contacts a row in exactly the way a
+   * TEMPLATE binding does: one approved template, through
+   * materialiseOutboundTemplate, with the same idempotency index in front of
+   * it. What differs is the payloads on its quick-reply buttons.
+   *
+   * The sheet, the tab, the mapping, the cleaning, the cursor and the anchor
+   * are all above this line and untouched. That is what the discriminated
+   * column was built for in Phase 6, and wiring the second member here is what
+   * proves the shape was right rather than merely claimed.
+   *
+   * The template comes from the pinned VERSION, never from the flow's current
+   * published one - so republishing mid-import cannot change what a poll
+   * halfway through a sheet is sending.
+   */
+  const target =
+    action?.kind === "FLOW"
+      ? binding.flowVersion
+        ? {
+            template: binding.flowVersion.template,
+            payloads: entryPayloadsFor(
+              binding.flowVersion.id,
+              binding.flowVersion.graph,
+            ),
+          }
+        : null
+      : binding.template
+        ? { template: binding.template, payloads: [] }
+        : null;
+
+  if (!action || !target || (action.kind === "FLOW" && target.payloads.length === 0)) {
     /*
-     * A config this build cannot read, or a TEMPLATE binding with no template.
+     * A config this build cannot read, a TEMPLATE binding with no template, or
+     * a FLOW binding whose version is gone or whose tree has no entry node.
      * Recorded on the binding rather than thrown: a poll job that throws every
      * thirty seconds is a binding nobody can even look at, and the page has a
      * sentence for this.
@@ -135,7 +200,7 @@ export async function handleLeadSourcePoll(
     return { result: "misconfigured", sent: 0 };
   }
 
-  if (binding.template.status !== "APPROVED") {
+  if (target.template.status !== "APPROVED") {
     /*
      * Checked once here rather than per row. Meta re-checks on every send and a
      * withdrawal comes back as a refusal with its own reason - but sending a
@@ -144,7 +209,7 @@ export async function handleLeadSourcePoll(
      */
     await withCompany(companyId, (db, scoped) =>
       recordPollFailure(db, scoped, leadSourceId, {
-        error: `Meta has not approved this template (${binding.template!.status}), so nothing can be sent.`,
+        error: `Meta has not approved this template (${target.template.status}), so nothing can be sent.`,
         at: startedAt,
         demote: true,
       }),
@@ -217,14 +282,15 @@ export async function handleLeadSourcePoll(
     rejectReasons: tallyReasons(audience.rejects.map((reject) => reject.reason)),
   };
 
-  /* Hoisted out of the loop, and narrowed once. Reading binding.template
+  /* Hoisted out of the loop, and narrowed once. Reading through the binding
      inside the callback below leaves TypeScript unable to see the guard above
      it, which is fair - a closure could run later. */
   const template = {
-    name: binding.template.name,
-    language: binding.template.language,
+    name: target.template.name,
+    language: target.template.language,
   };
-  const body = extractBody(binding.template.components);
+  const body = extractBody(target.template.components);
+  const buttonPayloads = target.payloads;
 
   for (const recipient of audience.recipients) {
     const hash = rowHash(recipient.phoneE164, recipient.variables);
@@ -250,6 +316,7 @@ export async function handleLeadSourcePoll(
           renderedBody: fillVariables(body, recipient.variables),
           occurredAt,
           createdByUserId: binding.createdByUserId,
+          buttonPayloads,
         }),
       );
     } catch (error) {

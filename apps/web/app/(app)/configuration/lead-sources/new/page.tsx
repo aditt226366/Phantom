@@ -38,6 +38,19 @@ export default async function Page() {
         orderBy: [{ name: "asc" }, { id: "asc" }],
         select: { id: true, name: true, language: true, components: true },
       }),
+      /* Published flows only, and their live VERSION - a draft has nothing
+         customers can be put into, and a binding pointed at one would contact
+         real leads with buttons that resolve to nothing. */
+      flows: await db.flow.findMany({
+        where: { archivedAt: null, publishedVersionId: { not: null } },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        select: {
+          name: true,
+          publishedVersion: {
+            select: { id: true, template: { select: { name: true } } },
+          },
+        },
+      }),
       numbers: await db.whatsAppNumber.findMany({
         orderBy: [{ createdAt: "desc" }, { id: "asc" }],
         select: {
@@ -60,7 +73,7 @@ export default async function Page() {
     <SectionShell>
       <SectionHeader
         title="Bind a sheet"
-        lede="Paste the link to a Google Sheet. Every row added from now on becomes a lead and receives the template you choose."
+        lede="Paste the link to a Google Sheet. Every row added from now on becomes a lead, and is either sent one template or put into a flow."
       />
 
       <div className="flex flex-col gap-lg">
@@ -73,6 +86,17 @@ export default async function Page() {
             language: template.language,
             body: extractBody(template.components),
           }))}
+          flows={options.flows.flatMap((flow) =>
+            flow.publishedVersion
+              ? [
+                  {
+                    versionId: flow.publishedVersion.id,
+                    name: flow.name,
+                    templateName: flow.publishedVersion.template.name,
+                  },
+                ]
+              : [],
+          )}
           numbers={options.numbers.map((number) => ({
             id: number.id,
             label: number.verifiedName

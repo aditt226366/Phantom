@@ -47,6 +47,36 @@ export const templateActionSchema = z.object({
 });
 
 /**
+ * Start a flow instead of sending one template and stopping.
+ *
+ * ---------------------------------------------------------------------------
+ * A flow binding still sends a template, and that is the point
+ * ---------------------------------------------------------------------------
+ *
+ * A cold lead has never written to us, so the 24-hour window is not open and
+ * an interactive message cannot be sent - which means a FLOW binding contacts
+ * a row in exactly the way a TEMPLATE binding does: one approved template.
+ * What differs is the payloads on its quick-reply buttons, which encode the
+ * flow version and its entry node, so that a tap starts a run.
+ *
+ * So nothing above the action switch in the poll handler changes. The sheet,
+ * the tab, the mapping, the cleaning, the cursor and the idempotency index are
+ * all untouched - which is what the discriminated column was built for, and
+ * wiring the second member is what proves the shape was right.
+ *
+ * Names a VERSION rather than a flow, for the reason the column does: a run
+ * pins its version, and a binding naming the flow would put every row it read
+ * into whatever happened to be published that minute - so republishing
+ * mid-import would split one afternoon's leads across two different trees with
+ * nothing to say so.
+ */
+export const flowActionSchema = z.object({
+  kind: z.literal("FLOW"),
+  flowVersionId: z.string().min(1),
+  mapping: columnMappingSchema,
+});
+
+/**
  * Every action a binding can carry.
  *
  * A discriminatedUnion rather than a plain union: with one member the two are
@@ -55,13 +85,15 @@ export const templateActionSchema = z.object({
  */
 export const leadSourceActionSchema = z.discriminatedUnion("kind", [
   templateActionSchema,
+  flowActionSchema,
 ]);
 
 export type TemplateAction = z.infer<typeof templateActionSchema>;
+export type FlowAction = z.infer<typeof flowActionSchema>;
 export type LeadSourceAction = z.infer<typeof leadSourceActionSchema>;
 
 /** The kinds, for the enum column and for exhaustiveness. */
-export const LEAD_SOURCE_ACTIONS = ["TEMPLATE"] as const;
+export const LEAD_SOURCE_ACTIONS = ["TEMPLATE", "FLOW"] as const;
 export type LeadSourceActionKind = (typeof LEAD_SOURCE_ACTIONS)[number];
 
 /**

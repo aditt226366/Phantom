@@ -52,6 +52,8 @@ export interface LeadClaimInput {
   phoneE164: string;
   variables: string[];
   template: { name: string; language: string };
+  /** One per quick-reply button, for a binding that starts a flow. */
+  buttonPayloads?: readonly string[];
   renderedBody: string;
   occurredAt: Date;
   createdByUserId: string | null;
@@ -109,6 +111,14 @@ export async function claimLeadRow(
     renderedBody: input.renderedBody,
     occurredAt: input.occurredAt,
     createdByUserId: input.createdByUserId,
+    /*
+     * Present only for a FLOW binding. A cold lead has no open window, so this
+     * is the same approved-template send either way - the payloads are the
+     * only difference, and they are what makes a tap start a run.
+     */
+    ...(input.buttonPayloads && input.buttonPayloads.length > 0
+      ? { buttonPayloads: input.buttonPayloads }
+      : {}),
   });
 
   if (!outbound) {
@@ -177,6 +187,29 @@ export async function leadSourceForPoll(
       backoffUntil: true,
       template: {
         select: { id: true, name: true, language: true, status: true, components: true },
+      },
+      /*
+       * A FLOW binding sends its flow version's ENTRY template, not the
+       * binding's own template column - which is null for one. Selected here
+       * so the handler has both without a second round trip, and so which
+       * template goes out is decided by the pinned version rather than by
+       * whatever is published when the poll happens.
+       */
+      flowVersionId: true,
+      flowVersion: {
+        select: {
+          id: true,
+          graph: true,
+          template: {
+            select: {
+              id: true,
+              name: true,
+              language: true,
+              status: true,
+              components: true,
+            },
+          },
+        },
       },
     },
   });

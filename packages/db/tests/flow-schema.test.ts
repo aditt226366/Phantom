@@ -1,5 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { materialiseFlowMessage, withCompany } from "../src/index.ts";
+import { encodeEntryButtonId } from "@whatsapp-os/core/flows";
+import {
+  materialiseFlowMessage,
+  materialiseOutboundTemplate,
+  withCompany,
+} from "../src/index.ts";
 import { prisma } from "../src/client.ts";
 import { seedCompany, truncateAll, type SeededCompany } from "./helpers.ts";
 
@@ -624,5 +629,90 @@ describe("a flow step is an ordinary outbound message", () => {
     );
 
     expect(result).toBeNull();
+  });
+});
+
+describe("a sheet row can start a flow", () => {
+  /**
+   * The second member of lead_sources.action, and what wiring it proves.
+   *
+   * A cold lead has never written to us, so the 24-hour window is not open and
+   * an interactive message cannot be sent. A FLOW binding therefore contacts a
+   * row in exactly the way a TEMPLATE binding does - one approved template,
+   * through materialiseOutboundTemplate, with the same idempotency index in
+   * front of it. What differs is the payloads on its quick-reply buttons.
+   *
+   * That is the claim Phase 6 made when it built the column with one member,
+   * and this is the assertion that it held: the producer did not fork.
+   */
+  it("carries the payloads onto the message row the send path reads", async () => {
+    const payload = encodeEntryButtonId({
+      versionId: fixture.versionId,
+      nodeId: "start",
+    });
+
+    const number = await withCompany(company.id, (db) =>
+      db.whatsAppNumber.findFirstOrThrow({ select: { id: true } }),
+    );
+
+    const outbound = await withCompany(company.id, (db, companyId) =>
+      materialiseOutboundTemplate(db, companyId, {
+        whatsappNumberId: number.id,
+        phoneE164: "+919845099002",
+        variables: ["Asha"],
+        template: { name: "flow_entry", language: "en_US" },
+        renderedBody: "Hello Asha",
+        occurredAt: new Date(),
+        createdByUserId: null,
+        buttonPayloads: [payload],
+      }),
+    );
+
+    expect(outbound).not.toBeNull();
+
+    const message = await withCompany(company.id, (db) =>
+      db.message.findFirstOrThrow({
+        where: { id: outbound!.messageId },
+        select: { type: true, templatePayload: true },
+      }),
+    );
+
+    /* An ordinary template row. The send worker reads buttonPayloads off it
+       and turns each into a quick_reply component naming its index. */
+    expect(message.type).toBe("template");
+    expect(message.templatePayload).toMatchObject({
+      name: "flow_entry",
+      language: "en_US",
+      buttonPayloads: [payload],
+    });
+  });
+
+  it("omits the payloads entirely for an ordinary template send", async () => {
+    /* So a row written by a TEMPLATE binding and one written before flows
+       existed read identically. */
+    const number = await withCompany(company.id, (db) =>
+      db.whatsAppNumber.findFirstOrThrow({ select: { id: true } }),
+    );
+
+    const outbound = await withCompany(company.id, (db, companyId) =>
+      materialiseOutboundTemplate(db, companyId, {
+        whatsappNumberId: number.id,
+        phoneE164: "+919845099003",
+        variables: [],
+        template: { name: "plain", language: "en_US" },
+        renderedBody: "Hello",
+        occurredAt: new Date(),
+        createdByUserId: null,
+      }),
+    );
+
+    const message = await withCompany(company.id, (db) =>
+      db.message.findFirstOrThrow({
+        where: { id: outbound!.messageId },
+        select: { templatePayload: true },
+      }),
+    );
+
+    expect(message.templatePayload).not.toHaveProperty("buttonPayloads");
   });
 });

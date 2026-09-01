@@ -60,10 +60,28 @@ export async function bindSheetAction(
   const pasted = String(formData.get("sheetUrl") ?? "").trim();
   const templateId = String(formData.get("templateId") ?? "");
   const whatsappNumberId = String(formData.get("whatsappNumberId") ?? "");
+  /*
+   * The second member of the action column, decided here and nowhere else.
+   *
+   * A FLOW binding names a flow VERSION and no template: the template it sends
+   * is the version's entry template, which is the same row the flow itself
+   * opens with. Storing a second copy on the binding would be a second thing
+   * to keep in step when the flow is republished onto a different one.
+   */
+  const actionKind = formData.get("actionKind") === "FLOW" ? "FLOW" : "TEMPLATE";
+  const flowVersionId = String(formData.get("flowVersionId") ?? "");
   const values = { name, sheetUrl: pasted };
 
-  if (!templateId || !whatsappNumberId) {
-    return { message: "Choose a template and a number to send from.", values };
+  if (!whatsappNumberId) {
+    return { message: "Choose a number to send from.", values };
+  }
+
+  if (actionKind === "TEMPLATE" && !templateId) {
+    return { message: "Choose a template to send.", values };
+  }
+
+  if (actionKind === "FLOW" && !flowVersionId) {
+    return { message: "Choose a flow to start.", values };
   }
 
   const ref = parseSheetRef(pasted);
@@ -111,16 +129,50 @@ export async function bindSheetAction(
       /* Rule 6 for both: a template or a number that is not yours does not
          exist. The create would fail on the foreign key anyway; this makes it
          a sentence rather than a 500. */
-      const template = await db.whatsAppTemplate.findFirst({
-        where: { id: templateId },
-        select: { id: true, status: true },
-      });
       const number = await db.whatsAppNumber.findFirst({
         where: { id: whatsappNumberId },
         select: { id: true },
       });
 
-      if (!template || !number || template.status !== "APPROVED") return null;
+      if (!number) return null;
+
+      /*
+       * For a flow, the version has to be the one that is LIVE - not merely
+       * published once. A superseded version would put every row of this sheet
+       * into a tree the tenant has stopped using, and nothing would say so.
+       */
+      const version =
+        actionKind === "FLOW"
+          ? await db.flowVersion.findFirst({
+              where: { id: flowVersionId, publishedAt: { not: null } },
+              select: {
+                id: true,
+                template: { select: { id: true, status: true } },
+                flow: { select: { publishedVersionId: true, archivedAt: true } },
+              },
+            })
+          : null;
+
+      if (actionKind === "FLOW") {
+        if (
+          !version ||
+          version.flow.publishedVersionId !== version.id ||
+          version.flow.archivedAt !== null
+        ) {
+          return null;
+        }
+      }
+
+      /* Rule 6: a template that is not yours does not exist. The create would
+         fail on the foreign key anyway; this makes it a sentence, not a 500. */
+      const template =
+        version?.template ??
+        (await db.whatsAppTemplate.findFirst({
+          where: { id: templateId },
+          select: { id: true, status: true },
+        }));
+
+      if (!template || template.status !== "APPROVED") return null;
 
       const created = await db.leadSource.create({
         data: {
@@ -129,15 +181,26 @@ export async function bindSheetAction(
           spreadsheetId: ref.spreadsheetId,
           tab: chosen.title,
           sheetGid: chosen.sheetId,
-          action: "TEMPLATE",
+          action: actionKind,
           /* Mapped at the next step. Stored now so the row is complete and the
-             CHECK constraint is satisfied by a real action from the start. */
-          actionConfig: {
-            kind: "TEMPLATE",
-            templateId,
-            mapping: { phone: "", variables: {} },
-          },
-          templateId,
+             CHECK constraint is satisfied by a real action from the start -
+             and the constraint has two arms, so exactly one of the two columns
+             below is set for each kind. */
+          actionConfig:
+            actionKind === "FLOW"
+              ? {
+                  kind: "FLOW",
+                  flowVersionId: version!.id,
+                  mapping: { phone: "", variables: {} },
+                }
+              : {
+                  kind: "TEMPLATE",
+                  templateId,
+                  mapping: { phone: "", variables: {} },
+                },
+          ...(actionKind === "FLOW"
+            ? { flowVersionId: version!.id }
+            : { templateId }),
           whatsappNumberId,
           /* Not polling yet. An unmapped binding that started reading would
              reject every row for a missing phone column and fill its own
@@ -156,7 +219,7 @@ export async function bindSheetAction(
   if (!leadSourceId) {
     return {
       message:
-        "That template is not approved, or the number is not one of yours. Only an approved template can be sent to a new lead.",
+        "That template or flow is not available, or the number is not one of yours. A new lead has never written to you, so only an approved template can reach them - which is also what a flow opens with.",
       values,
     };
   }
@@ -191,17 +254,28 @@ export async function mapLeadSourceAction(formData: FormData): Promise<void> {
         id: true,
         spreadsheetId: true,
         tab: true,
+        action: true,
         actionConfig: true,
         templateId: true,
+        flowVersionId: true,
         template: { select: { components: true } },
+        /* A FLOW binding's template is its version's entry template. The
+           columns a sheet has to supply are that template's variables, so the
+           mapping question is identical and only its source differs. */
+        flowVersion: { select: { template: { select: { components: true } } } },
       },
     });
 
-    if (!binding || !binding.templateId || !binding.template) return null;
+    if (!binding) return null;
 
-    const variableCount = templateVariables(
-      extractBody(binding.template.components),
-    ).length;
+    const components =
+      binding.action === "FLOW"
+        ? binding.flowVersion?.template.components
+        : binding.template?.components;
+
+    if (components === undefined || components === null) return null;
+
+    const variableCount = templateVariables(extractBody(components)).length;
 
     const mapping: ColumnMapping = {
       phone: String(formData.get("phoneColumn") ?? ""),
@@ -228,11 +302,18 @@ export async function mapLeadSourceAction(formData: FormData): Promise<void> {
         /* Cast at the boundary: the shape is validated by
            leadSourceActionSchema on the way back out, and Prisma's Json input
            type does not accept a structurally-typed object. */
-        actionConfig: {
-          kind: "TEMPLATE",
-          templateId: binding.templateId,
-          mapping: { phone: mapping.phone, variables: mapping.variables },
-        },
+        actionConfig:
+          binding.action === "FLOW"
+            ? {
+                kind: "FLOW",
+                flowVersionId: binding.flowVersionId,
+                mapping: { phone: mapping.phone, variables: mapping.variables },
+              }
+            : {
+                kind: "TEMPLATE",
+                templateId: binding.templateId,
+                mapping: { phone: mapping.phone, variables: mapping.variables },
+              },
         pollIntervalSeconds: interval,
         /*
          * The cursor is reset whenever the mapping changes, and this is a

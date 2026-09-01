@@ -24,12 +24,14 @@ export {
   parseLeadSourceAction,
   parseSheetRef,
   pollIntervalSchema,
+  flowActionSchema,
   templateActionSchema,
 } from "./binding.ts";
 export type {
   LeadSourceAction,
   LeadSourceActionKind,
   SheetRefResult,
+  FlowAction as LeadSourceFlowAction,
   TemplateAction,
 } from "./binding.ts";
 export {

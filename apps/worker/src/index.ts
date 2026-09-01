@@ -21,6 +21,7 @@ import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
 import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
+import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -114,6 +115,17 @@ async function processJob(job: Job): Promise<unknown> {
        */
       return handleLeadSourcePoll(
         parseJobPayload(JOB_NAMES.LEAD_SOURCE_POLL, job.data),
+      );
+
+    case JOB_NAMES.DASHBOARD_ROLLUP:
+      /*
+       * Also delivered by a per-company scheduler, and for the same reason as
+       * the poll above - this process cannot enumerate companies, so a single
+       * sweeping refresh would select zero rows, succeed, and leave every
+       * dashboard frozen at whatever it said the day the feature shipped.
+       */
+      return handleDashboardRollup(
+        parseJobPayload(JOB_NAMES.DASHBOARD_ROLLUP, job.data),
       );
 
     default:

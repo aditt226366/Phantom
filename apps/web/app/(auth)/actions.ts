@@ -20,6 +20,7 @@ import { checkSignupAllowed, recordSignupAttempt } from "@/lib/auth/lockout";
 import { requestContext } from "@/lib/auth/request";
 import { signIn } from "@/lib/auth/signin";
 import { signUp } from "@/lib/auth/signup";
+import { scheduleDashboardRollup } from "@/lib/dashboard/scheduler";
 
 /**
  * Sign-up and sign-in.
@@ -127,6 +128,29 @@ export async function signUpAction(
     subject: "Verify your email",
     text: `Welcome to whatsapp-os. Confirm your address:\n\n${verifyUrl}\n\nThe link expires in 24 hours.`,
   });
+
+  /*
+   * Register the dashboard's refresh, for the same reason and with the same
+   * tolerance as the mail above: this is a post-commit side effect, and the
+   * account exists whether it succeeds or not.
+   *
+   * Redis being down must not show a failure page for a company that was
+   * created - the user would try again and be told their email is taken. What
+   * a missed registration costs is a dashboard with no rollup row, which the
+   * page already renders as "not counted yet" rather than as zeroes, and which
+   * scripts/schedule-dashboard-rollups.mjs repairs for every company at once.
+   *
+   * The fan-out is here rather than in the worker because the worker cannot
+   * enumerate companies. See lib/dashboard/scheduler.ts.
+   */
+  try {
+    await scheduleDashboardRollup(value.companyId);
+  } catch (error) {
+    console.error("signup: could not register the dashboard rollup", {
+      companyId: value.companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   await setSessionCookies(value.sessionToken, value.csrfSecret);
 

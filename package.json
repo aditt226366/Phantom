@@ -42,7 +42,8 @@
     "services:down": "docker compose down",
     "services:logs": "docker compose logs -f",
     "vault:status": "npm run vault:status --workspace=web --",
-    "vault:rotate": "npm run vault:rotate --workspace=web --"
+    "vault:rotate": "npm run vault:rotate --workspace=web --",
+    "dashboard:schedule": "npm run dashboard:schedule --workspace=web --"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

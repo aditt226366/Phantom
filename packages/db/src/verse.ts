@@ -215,3 +215,113 @@ export async function readDocumentBytes(
 
   return row?.bytes ? new Uint8Array(row.bytes) : null;
 }
+
+/* ------------------------------------------------------------------------- *
+ * What one Verse turn needs to know
+ * ------------------------------------------------------------------------- */
+
+export interface VerseContext {
+  conversationId: string;
+  contactId: string;
+  /** Which campaign is driving, and therefore whose goal and base to use. */
+  campaignId: string;
+  campaignName: string;
+  goal: string;
+  modelTier: string;
+  knowledgeBaseId: string;
+  businessName: string;
+  /** The approved template that reopens a lapsed conversation. */
+  templateId: string;
+  /** Oldest first. What the model reads as the conversation so far. */
+  history: Array<{ inbound: boolean; body: string | null }>;
+}
+
+/**
+ * Everything one reply needs, or null if Verse must not answer.
+ *
+ * ---------------------------------------------------------------------------
+ * The driver is read here, and it is the authorisation
+ * ---------------------------------------------------------------------------
+ *
+ * Null when this conversation is not Verse's to answer - it is held by an
+ * operator, by a flow, or by nobody at all. That is not an error and is not
+ * logged as one: it is the ordinary outcome of a customer replying to a thread
+ * a person has since taken over, which happens constantly.
+ *
+ * Reading it here rather than trusting the enqueue site matters because time
+ * passes between the two. A webhook enqueues, an operator opens the thread and
+ * replies, and the job then runs against a conversation somebody else is now
+ * having. The claim at enqueue time is worth nothing; the claim at answer time
+ * is the whole guarantee.
+ */
+export async function verseContextFor(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+  historyLimit = 20,
+): Promise<VerseContext | null> {
+  const conversation = await db.conversation.findFirst({
+    where: { id: conversationId },
+    select: {
+      id: true,
+      contactId: true,
+      driver: true,
+      driverRef: true,
+      company: { select: { name: true } },
+    },
+  });
+
+  if (!conversation) return null;
+  if (conversation.driver !== "VERSE" || !conversation.driverRef) return null;
+
+  const campaign = await db.verseCampaign.findFirst({
+    where: { id: conversation.driverRef },
+    select: {
+      id: true,
+      name: true,
+      goal: true,
+      modelTier: true,
+      knowledgeBaseId: true,
+      templateId: true,
+      status: true,
+    },
+  });
+
+  /*
+   * A campaign that has stopped does not keep answering.
+   *
+   * PAUSED and STOPPED both land here. The driver is deliberately NOT released
+   * as a side effect of this read - releasing it would let another automation
+   * take the thread the moment a person paused a campaign to look at it, which
+   * is the opposite of what pausing is for.
+   */
+  if (!campaign) return null;
+  if (campaign.status !== "RUNNING") return null;
+
+  const history = await db.message.findMany({
+    where: { conversationId },
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    take: historyLimit,
+    select: { direction: true, body: true },
+  });
+
+  return {
+    conversationId: conversation.id,
+    contactId: conversation.contactId,
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    goal: campaign.goal,
+    modelTier: campaign.modelTier,
+    knowledgeBaseId: campaign.knowledgeBaseId,
+    businessName: conversation.company.name,
+    templateId: campaign.templateId,
+    /* Reversed: the query sorts newest-first so the LIMIT keeps the most
+       recent turns, and the model reads oldest-first. */
+    history: history
+      .reverse()
+      .map((message) => ({
+        inbound: message.direction === "INBOUND",
+        body: message.body,
+      })),
+  };
+}

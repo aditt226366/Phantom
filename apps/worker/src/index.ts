@@ -23,6 +23,7 @@ import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
 import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
 import { handleVerseIngest } from "./jobs/verse-ingest.ts";
+import { handleVerseReply } from "./jobs/verse-reply.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -139,6 +140,18 @@ async function processJob(job: Job): Promise<unknown> {
        */
       return handleVerseIngest(
         parseJobPayload(JOB_NAMES.VERSE_INGEST, job.data),
+      );
+
+    case JOB_NAMES.VERSE_REPLY:
+      /*
+       * One customer message answered, or handed to a person.
+       *
+       * The driver is re-read inside the handler rather than trusted from this
+       * payload: time passes between the webhook enqueuing and this running,
+       * and an operator may have taken the thread in between.
+       */
+      return handleVerseReply(
+        parseJobPayload(JOB_NAMES.VERSE_REPLY, job.data),
       );
 
     default:

@@ -239,5 +239,6 @@ export {
   readDocumentBytes,
   replaceChunks,
   retrieveChunks,
+  verseContextFor,
 } from "./verse.ts";
-export type { ChunkToStore } from "./verse.ts";
+export type { ChunkToStore, VerseContext } from "./verse.ts";

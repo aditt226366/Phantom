@@ -54,6 +54,25 @@ export interface MediaFetchRequest {
  * customer message across every tenant for the sake of the handful that are
  * answering a collect node.
  */
+/**
+ * An inbound message Verse should answer, for the caller to act on.
+ *
+ * Collected here and enqueued by the caller, exactly like the media and flow
+ * requests above and for the same reason: answering sends messages, and this
+ * function must not enqueue anything while a company scope is open.
+ *
+ * Gated on the conversation's DRIVER rather than on the existence of a
+ * campaign. A thread an operator has taken over is not Verse's to answer even
+ * though its campaign is still running, and the driver is the one column that
+ * knows that. The handler re-reads it anyway - time passes between here and
+ * there - but collecting on it keeps a job per customer message from being
+ * enqueued for every thread of every campaign that a person is handling.
+ */
+export interface VerseReplyRequest {
+  conversationId: string;
+  messageId: string;
+}
+
 export interface FlowAdvanceRequest {
   conversationId: string;
   messageId: string;
@@ -94,6 +113,7 @@ export interface IngestSummary {
   media: MediaFetchRequest[];
   /** Inbound messages that might move a flow. Same rule as media above. */
   flowAdvances: FlowAdvanceRequest[];
+  verseReplies: VerseReplyRequest[];
   /**
    * Meta said a number's quality or tier moved, so the cache is stale.
    *
@@ -130,6 +150,7 @@ function emptySummary(status: IngestSummary["status"]): IngestSummary {
     skipped: [],
     media: [],
     flowAdvances: [],
+    verseReplies: [],
     numberQualityUpdates: 0,
     templatesUpdated: 0,
     templatesUnmatched: 0,
@@ -249,6 +270,7 @@ export async function ingestWebhookDelivery(
   let inserted = 0;
   const media: MediaFetchRequest[] = [];
   const flowAdvances: FlowAdvanceRequest[] = [];
+  const verseReplies: VerseReplyRequest[] = [];
 
   /*
    * Messages before statuses, and the order is load-bearing.
@@ -283,6 +305,7 @@ export async function ingestWebhookDelivery(
      * customer gave once.
      */
     if (outcome.flow) flowAdvances.push(outcome.flow);
+    if (outcome.verse) verseReplies.push(outcome.verse);
   }
 
   let advanced = 0;
@@ -352,6 +375,7 @@ export async function ingestWebhookDelivery(
     skipped,
     media,
     flowAdvances,
+    verseReplies,
     numberQualityUpdates: parsed.qualityUpdates.length,
     templatesUpdated,
     templatesUnmatched,
@@ -401,6 +425,8 @@ interface MessageOutcome {
   media: MediaFetchRequest | null;
   /** Set when this message could move a flow. See FlowAdvanceRequest. */
   flow: FlowAdvanceRequest | null;
+  /** Set when Verse should answer it. See VerseReplyRequest. */
+  verse: VerseReplyRequest | null;
 }
 
 async function ingestMessage(
@@ -523,7 +549,24 @@ async function ingestMessage(
     ? await flowAdvanceFor(db, companyId, message, conversation.id)
     : null;
 
-  if (!message.mediaId) return { inserted, media: null, flow };
+  /*
+   * Whether Verse should answer this message.
+   *
+   * Only on an insert, for the reason the flow gate gives: a redelivery must
+   * not produce a second answer. Meta redelivers freely.
+   *
+   * And only when a flow is NOT also advancing. Both driving one thread is the
+   * two-writer bug the driver column exists to prevent - and while the column
+   * makes it unrepresentable, enqueueing both would still spend a model call
+   * to discover that. The driver check below is what actually decides; this
+   * ordering just avoids paying for the answer.
+   */
+  const verse =
+    inserted && !flow
+      ? await verseReplyFor(db, message, conversation.id)
+      : null;
+
+  if (!message.mediaId) return { inserted, media: null, flow, verse };
 
   /*
    * The row is read back rather than returned by the insert, because
@@ -535,12 +578,13 @@ async function ingestMessage(
     select: { id: true, mediaId: true },
   });
 
-  if (!row || row.mediaId) return { inserted, media: null, flow };
+  if (!row || row.mediaId) return { inserted, media: null, flow, verse };
 
   return {
     inserted,
     media: { messageId: row.id, metaMediaId: message.mediaId },
     flow,
+    verse,
   };
 }
 
@@ -552,6 +596,39 @@ async function ingestMessage(
  * DECLINED step as much as on the successful one - a refused tap that named no
  * message would be a log entry nobody could tie to a thread.
  */
+/**
+ * Whether this inbound message is one Verse should answer.
+ *
+ * One indexed lookup on the conversation's driver. A typed reply in a thread
+ * Verse is driving qualifies; everything else does not - a thread held by an
+ * operator, by a flow, or by nobody.
+ *
+ * A tap is deliberately NOT collected. Verse answers words, and a customer
+ * tapping a button left over from a flow that has since handed over is not
+ * asking Verse anything.
+ */
+async function verseReplyFor(
+  db: CompanyClient,
+  message: InboundMessage,
+  conversationId: string,
+): Promise<VerseReplyRequest | null> {
+  if (message.text === null) return null;
+
+  const conversation = await db.conversation.findFirst({
+    where: { id: conversationId },
+    select: { driver: true },
+  });
+
+  if (conversation?.driver !== "VERSE") return null;
+
+  const row = await db.message.findFirst({
+    where: { conversationId, wamid: message.wamid },
+    select: { id: true },
+  });
+
+  return row ? { conversationId, messageId: row.id } : null;
+}
+
 async function flowAdvanceFor(
   db: CompanyClient,
   companyId: string,

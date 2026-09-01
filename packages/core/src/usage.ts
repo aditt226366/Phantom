@@ -62,6 +62,37 @@ export const USAGE_KINDS = [
    * climbing is the first sign somebody wired it to a page load after all.
    */
   "whatsapp.numbers.refresh",
+  /*
+   * One Verse answer, deduped on OUR message id.
+   *
+   * The message id and not the job id, and not the wamid. The job can be
+   * retried and the wamid does not exist until Meta answers, so either would
+   * charge twice for one answer - and this table is an invoice.
+   *
+   * Recorded even when the answer is a handoff, because the model call
+   * happened and cost real money whether or not the customer got an answer
+   * out of it. A usage record that only counts successes under-reports spend
+   * in exactly the situations where somebody is asking why the bill is high.
+   */
+  "verse.reply",
+  /*
+   * One embedding call during ingestion, deduped on the document.
+   *
+   * Per document rather than per chunk: a 2,000-chunk PDF is one act of
+   * ingestion that a tenant asked for once, and a per-chunk row would make the
+   * usage table larger than the thing it measures.
+   */
+  "verse.embedding",
+  /*
+   * One lead score. Always on the cheapest tier - see VERSE_SCORING_TIER.
+   *
+   * Its own kind rather than folded into verse.reply, because it runs on every
+   * inbound message of every campaign and is therefore the highest-VOLUME
+   * thing in the phase while being the cheapest per call. Collapsed together,
+   * nobody could tell a tenant whose bill is answers from one whose bill is
+   * scoring.
+   */
+  "verse.lead_score",
 ] as const;
 
 export type UsageKind = (typeof USAGE_KINDS)[number];
@@ -118,6 +149,21 @@ const PRICES: readonly UsagePrice[] = [
   { kind: "whatsapp.conversation.authentication", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.conversation.service", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.numbers.refresh", currency: "INR", version: 1, micros: 0 },
+  /*
+   * Zero, like everything else here, and for the same reason: this table
+   * records the facts we own - a call happened, against this company, at this
+   * moment - and turning them into money against a real rate card is Phase 11.
+   *
+   * Verse is the first kind where we DO know the price at call time: the
+   * provider returns token counts and the rate card is public. It is still
+   * zero, deliberately, because a priced row here beside seven unpriced ones
+   * would make "Est. spend this month" look complete while omitting every
+   * WhatsApp charge - a number that is wrong in the direction of reassuring.
+   * Every row carries its price version, so these are repriceable in arrears.
+   */
+  { kind: "verse.reply", currency: "INR", version: 1, micros: 0 },
+  { kind: "verse.embedding", currency: "INR", version: 1, micros: 0 },
+  { kind: "verse.lead_score", currency: "INR", version: 1, micros: 0 },
 ];
 
 /** The conversation kind for one of Meta's pricing categories, if we know it. */

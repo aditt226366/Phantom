@@ -1,7 +1,14 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { encodeEntryButtonId, encodeReplyButtonId } from "@whatsapp-os/core/flows";
 import { windowExpiryFor } from "@whatsapp-os/core/whatsapp";
-import { advanceFlow, withCompany } from "../src/index.ts";
+import {
+  advanceFlow,
+  clearNeedsHuman,
+  flagNeedsHuman,
+  handOff,
+  markConversationRead,
+  withCompany,
+} from "../src/index.ts";
 import { prisma } from "../src/client.ts";
 import { seedCompany, truncateAll, type SeededCompany } from "./helpers.ts";
 
@@ -52,7 +59,13 @@ const GRAPH = {
       next: "bye",
     },
     { id: "bye", kind: "end", body: "Thanks!" },
-    { id: "human", kind: "handoff", body: "Someone will be in touch.", note: null },
+    {
+      id: "human",
+      kind: "handoff",
+      body: "Someone will be in touch.",
+      /* The author's own words, which become the queue's reason. */
+      note: "wants help",
+    },
   ],
 };
 
@@ -554,7 +567,7 @@ describe("handing off", () => {
       }),
       await db.conversation.findFirstOrThrow({
         where: { id: fixture.conversationId },
-        select: { unreadCount: true },
+        select: { needsHumanAt: true, needsHumanReason: true },
       }),
     ]);
 
@@ -564,10 +577,16 @@ describe("handing off", () => {
     expect(run.activeConversationId).toBeNull();
     expect(run.currentNodeId).toBeNull();
 
-    /* Unread, or nobody picks it up: the inbox shows unread and sorts on
-       last_message_at, so a handoff whose only trace is a status column is a
-       conversation that sits there. */
-    expect(conversation.unreadCount).toBeGreaterThan(0);
+    /*
+     * And the thread says a person is needed, explicitly.
+     *
+     * This assertion used to read `unreadCount > 0`, because the handoff faked
+     * Phase 5's derivation by incrementing it. That is the bug the column
+     * replaced - a status on the RUN is not something the inbox reads, and the
+     * faked count was undone by anybody opening the thread.
+     */
+    expect(conversation.needsHumanAt).not.toBeNull();
+    expect(conversation.needsHumanReason).toBe("wants help");
   });
 });
 
@@ -707,5 +726,287 @@ describe("a customer who types instead of tapping", () => {
 
   it("ignores a typed message when no run is waiting", async () => {
     expect(await tap(null, "hello?")).toEqual({ outcome: "no_flow" });
+  });
+});
+
+describe("a thread that needs a person", () => {
+  /**
+   * The state that replaced a derivation, and the bug that made it necessary.
+   *
+   * Phase 5 derived "needs a person" as `assigned_user_id IS NULL AND
+   * unread_count > 0`, which was right while a customer writing in was the only
+   * way a thread came to need somebody. A handoff node is a proactive claim,
+   * and the first version faked the derivation by incrementing unread_count -
+   * which markConversationRead then undid.
+   */
+
+  async function handoffFlow() {
+    const started = await tap(
+      encodeEntryButtonId({ versionId: fixture.versionId, nodeId: "start" }),
+      "Yes please",
+    );
+    if (started.outcome !== "started") throw new Error("expected a run");
+
+    await tap(
+      encodeReplyButtonId({ runId: started.runId, nodeId: "menu", choice: "help" }),
+    );
+
+    return started.runId;
+  }
+
+  function conversation() {
+    return withCompany(company.id, (db) =>
+      db.conversation.findFirstOrThrow({
+        where: { id: fixture.conversationId },
+        select: {
+          needsHumanAt: true,
+          needsHumanReason: true,
+          unreadCount: true,
+          assignedUserId: true,
+        },
+      }),
+    );
+  }
+
+  it("flags the thread with the reason the author wrote", async () => {
+    await handoffFlow();
+    const row = await conversation();
+
+    expect(row.needsHumanAt).not.toBeNull();
+    /* The handoff node's own note, which is the only sentence in the system
+       that says what the author wanted a person to do. */
+    expect(row.needsHumanReason).toBe("wants help");
+  });
+
+  it("names the node when the author wrote no note", async () => {
+    /*
+     * The fallback is not decoration. A flagged thread with no reason is a
+     * blank cell in the queue somebody is reading to decide what to pick up,
+     * and the CHECK refuses one - so a handoff drawn without a note still has
+     * to say something, and where in the tree the customer stopped is the most
+     * useful thing available.
+     */
+    await withCompany(company.id, (db) =>
+      db.flowVersion.update({
+        where: { id: fixture.versionId },
+        data: {
+          graph: {
+            ...GRAPH,
+            nodes: GRAPH.nodes.map((n) =>
+              n.id === "start"
+                ? { ...n, templateId: fixture.templateId }
+                : n.id === "human"
+                  ? { ...n, note: null }
+                  : n,
+            ),
+          },
+        },
+      }),
+    );
+
+    await handoffFlow();
+    const row = await conversation();
+
+    expect(row.needsHumanAt).not.toBeNull();
+    expect(row.needsHumanReason).toContain("did not say why");
+  });
+
+  it("survives somebody opening the thread to see why", async () => {
+    /*
+     * The regression this column exists for. The flag used to BE the unread
+     * count, so reading the thread destroyed it: the conversation left
+     * waiting-for-a-human with nobody assigned and nothing resolved, and was
+     * then invisible in exactly the queue it had been put into.
+     *
+     * Opening a thread is how somebody decides whether they want it. A signal
+     * a glance erases is not a signal.
+     */
+    await handoffFlow();
+
+    await withCompany(company.id, (db, scoped) =>
+      markConversationRead(db, scoped, fixture.conversationId, 99),
+    );
+
+    const row = await conversation();
+
+    expect(row.unreadCount).toBe(0);
+    expect(row.needsHumanAt).not.toBeNull();
+    expect(row.needsHumanReason).toBe("wants help");
+  });
+
+  it("does not move the instant when a thread is flagged twice", async () => {
+    /*
+     * The queue sorts oldest first, so re-flagging must not send a thread to
+     * the back. A customer who taps through into a second handoff has been
+     * waiting since the first one, and that is the number the person picking
+     * work up needs.
+     */
+    await handoffFlow();
+    const first = await conversation();
+
+    await withCompany(company.id, (db, scoped) =>
+      flagNeedsHuman(db, scoped, fixture.conversationId, {
+        reason: "and again",
+        at: new Date(Date.now() + 60_000),
+      }),
+    );
+
+    const second = await conversation();
+
+    expect(second.needsHumanAt).toEqual(first.needsHumanAt);
+    /* The reason IS updated - the newest one is the most useful sentence. */
+    expect(second.needsHumanReason).toBe("and again");
+  });
+
+  it("clears both columns together, because the CHECK requires it", async () => {
+    await handoffFlow();
+
+    await withCompany(company.id, (db, scoped) =>
+      clearNeedsHuman(db, scoped, fixture.conversationId),
+    );
+
+    const row = await conversation();
+
+    expect(row.needsHumanAt).toBeNull();
+    expect(row.needsHumanReason).toBeNull();
+  });
+
+  it("refuses a flag with no reason", async () => {
+    /*
+     * A flagged thread with no reason renders as a blank cell in the queue
+     * somebody is reading to decide what to pick up.
+     */
+    await expect(
+      withCompany(company.id, (db) =>
+        db.conversation.updateMany({
+          where: { id: fixture.conversationId },
+          data: { needsHumanAt: new Date() },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("refuses a reason with no flag", async () => {
+    await expect(
+      withCompany(company.id, (db) =>
+        db.conversation.updateMany({
+          where: { id: fixture.conversationId },
+          data: { needsHumanReason: "orphaned" },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("does not raise the unread count, because no message arrived", async () => {
+    /*
+     * unread_count means inbound messages nobody here has read. A flow deciding
+     * by itself that a person is needed produces no such message, and saying
+     * otherwise put a number on a badge that nothing in the thread explained.
+     */
+    await handoffFlow();
+    const row = await conversation();
+
+    /* The customer's own taps are inbound and DO count; what is asserted here
+       is that the handoff added nothing on top of them. */
+    const inbound = await withCompany(company.id, (db) =>
+      db.message.count({
+        where: { conversationId: fixture.conversationId, direction: "INBOUND" },
+      }),
+    );
+
+    expect(row.unreadCount).toBeLessThanOrEqual(inbound);
+  });
+
+  it("flags on a notify step without ending the run", async () => {
+    /*
+     * notify had the identical defect and shares the fix. Unlike a handoff it
+     * does not end the run: the flow carries on and the thread is flagged
+     * beside it.
+     */
+    await withCompany(company.id, (db) =>
+      db.flowVersion.update({
+        where: { id: fixture.versionId },
+        data: {
+          graph: {
+            entryNodeId: "start",
+            nodes: [
+              {
+                id: "start",
+                kind: "entry",
+                templateId: fixture.templateId,
+                variables: [],
+                choices: [{ key: "yes", label: "Yes please", next: "shout" }],
+              },
+              {
+                id: "shout",
+                kind: "action",
+                actions: [{ kind: "notify", note: "Asked about bulk pricing." }],
+                next: "ask",
+              },
+              {
+                id: "ask",
+                kind: "question",
+                body: "How many are you after?",
+                variable: null,
+                presentation: {
+                  as: "buttons",
+                  choices: [{ key: "lots", label: "A lot", next: null }],
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const started = await tap(
+      encodeEntryButtonId({ versionId: fixture.versionId, nodeId: "start" }),
+      "Yes please",
+    );
+
+    expect(started.outcome).toBe("started");
+
+    const [row, run] = await withCompany(company.id, async (db) => [
+      await db.conversation.findFirstOrThrow({
+        where: { id: fixture.conversationId },
+        select: { needsHumanAt: true, needsHumanReason: true },
+      }),
+      await db.flowRun.findFirstOrThrow({ select: { status: true } }),
+    ]);
+
+    expect(row.needsHumanReason).toBe("Asked about bulk pricing.");
+    /* Still running - the flag and the ending are two decisions. */
+    expect(run.status).toBe("ACTIVE");
+  });
+
+  it("does not flag when an operator's own reply ends the run", async () => {
+    /*
+     * handOff has two callers meaning opposite things. A flow that could not
+     * understand a typed reply wants somebody; an operator who has just replied
+     * IS somebody. Flagging there would put a request for a person into the
+     * queue in front of the person who had already taken the thread, and bounce
+     * it back every time they answered again.
+     */
+    const runId = await (async () => {
+      const started = await tap(
+        encodeEntryButtonId({ versionId: fixture.versionId, nodeId: "start" }),
+        "Yes please",
+      );
+      if (started.outcome !== "started") throw new Error("expected a run");
+      return started.runId;
+    })();
+
+    await handOff(company.id, runId, "Someone from the team replied.", false);
+
+    const [row, run] = await withCompany(company.id, async (db) => [
+      await db.conversation.findFirstOrThrow({
+        where: { id: fixture.conversationId },
+        select: { needsHumanAt: true },
+      }),
+      await db.flowRun.findFirstOrThrow({ select: { status: true } }),
+    ]);
+
+    expect(run.status).toBe("HANDED_OFF");
+    expect(row.needsHumanAt).toBeNull();
   });
 });

@@ -776,6 +776,31 @@ model Conversation {
 
   unreadCount Int @default(0) @map("unread_count")
 
+  /// When somebody decided a person is needed here. Null for almost every row.
+  ///
+  /// -----------------------------------------------------------------------
+  /// Explicit, because it stopped having one source
+  /// -----------------------------------------------------------------------
+  ///
+  /// Phase 5 derived this as `assigned_user_id IS NULL AND unread_count > 0`,
+  /// and that was correct while a customer writing in was the only way a
+  /// thread came to need somebody. A flow's handoff node is a PROACTIVE claim
+  /// - the automation has decided it cannot finish - which is true whether or
+  /// not anybody has read the thread and whether or not a reply is owed.
+  ///
+  /// The handoff originally faked the derivation by incrementing unread_count,
+  /// which lies about what that column means and, worse, is undone by
+  /// markConversationRead: opening the thread to see why a person was wanted
+  /// destroyed the only record that one was.
+  ///
+  /// Three writers now - an unread inbound, a handoff node, an action node's
+  /// notify - and Verse's escalation is the fourth. Reading the flag is not
+  /// the same act as clearing it.
+  needsHumanAt     DateTime? @db.Timestamptz(3) @map("needs_human_at")
+  /// Why, in words the queue can show. Set and cleared with the instant above,
+  /// by CHECK constraint rather than by convention.
+  needsHumanReason String?   @map("needs_human_reason")
+
   /// Null means nobody has picked it up.
   assignedUserId String?   @map("assigned_user_id")
   assignedAt     DateTime? @db.Timestamptz(3) @map("assigned_at")
@@ -803,6 +828,8 @@ model Conversation {
   /// canSend, and Phase 9's "windows closing within the hour".
   @@index([companyId, windowExpiresAt])
   @@index([companyId, assignedUserId])
+  /// The needs-a-person queue, and the dashboard card above it.
+  @@index([companyId, needsHumanAt])
   @@map("conversations")
 }
 

@@ -14,6 +14,7 @@ import {
   type FlowInput,
 } from "@whatsapp-os/core/flows";
 import { describeWindow, isWindowOpen } from "@whatsapp-os/core/whatsapp";
+import { flagNeedsHuman } from "./conversations.ts";
 import { materialiseFlowMessage } from "./outbound.ts";
 import { withCompany, type CompanyClient } from "./with-company.ts";
 
@@ -634,14 +635,26 @@ async function emit(companyId: string, input: EmitInput): Promise<FlowSendReques
 
       if (node.kind === "handoff") {
         /*
-         * Raise the thread. A handoff whose only trace is a status column is a
-         * conversation nobody picks up: the inbox sorts on last_message_at and
-         * shows unread, so the thread has to be unread for a person to see it.
+         * Raise the thread, explicitly.
+         *
+         * This used to increment unread_count so that Phase 5's derivation -
+         * `assigned_user_id IS NULL AND unread_count > 0` - would hold. Two
+         * things were wrong with that. It lies: unread_count means inbound
+         * messages nobody has read, and there is no such message here. And
+         * markConversationRead decrements it, so opening the thread to see WHY
+         * a person was wanted destroyed the only record that one was.
+         *
+         * The author's note is the reason when they wrote one, because it is
+         * the only sentence in the system that says what they wanted a person
+         * to do. The fallback names the node, which at least says where in the
+         * tree the customer stopped.
          */
-        await withCompany(companyId, (db) =>
-          db.conversation.update({
-            where: { id: input.conversationId },
-            data: { unreadCount: { increment: 1 } },
+        await withCompany(companyId, (db, scoped) =>
+          flagNeedsHuman(db, scoped, input.conversationId, {
+            reason:
+              node.note ??
+              "A flow handed this conversation over and did not say why.",
+            at: input.occurredAt,
           }),
         );
       }
@@ -755,17 +768,26 @@ async function applyActions(
     }
 
     /*
-     * notify. Raises the thread in the inbox and records the note.
+     * notify. Flags the thread for a person and records the note.
      *
      * Deliberately not an email or a push - neither exists in this system, and
      * an action node that silently did nothing would be the worst kind of
      * automation: an author draws it, believes somebody was told, and finds out
      * from a customer.
+     *
+     * The same explicit flag the handoff sets, and for the same reason. This
+     * also used to fake an unread count, which meant an author could draw a
+     * notify step, somebody could glance at the thread, and the request would
+     * vanish with nothing recording that it had ever been made.
+     *
+     * Unlike a handoff this does NOT end the run: the flow carries on, and the
+     * thread is flagged beside it. An author who wants both draws a notify and
+     * then a handoff, which is two steps because they are two decisions.
      */
-    await withCompany(companyId, (db) =>
-      db.conversation.update({
-        where: { id: conversationId },
-        data: { unreadCount: { increment: 1 } },
+    await withCompany(companyId, (db, scoped) =>
+      flagNeedsHuman(db, scoped, conversationId, {
+        reason: action.note,
+        at: new Date(),
       }),
     );
     applied.push({ kind: "notify", note: action.note });
@@ -954,6 +976,14 @@ export async function handOff(
   companyId: string,
   runId: string,
   reason: string,
+  /**
+   * Whether this handoff is asking for a person, or recording that one has
+   * already arrived. See the flag below - the two callers mean opposite
+   * things, and defaulting to true is the safe direction: a thread flagged
+   * when it did not need to be is noise somebody clears, and one silently not
+   * flagged is a customer nobody comes back to.
+   */
+  flagIfUnattended = true,
 ): Promise<void> {
   const run = await withCompany(companyId, (db) =>
     db.flowRun.findFirst({
@@ -964,7 +994,7 @@ export async function handOff(
 
   if (!run || !LIVE.includes(run.status as (typeof LIVE)[number])) return;
 
-  await withCompany(companyId, async (db) => {
+  await withCompany(companyId, async (db, scoped) => {
     await db.flowRun.update({
       where: { id: runId },
       data: {
@@ -976,10 +1006,25 @@ export async function handOff(
       },
     });
 
-    await db.conversation.update({
-      where: { id: run.conversationId },
-      data: { unreadCount: { increment: 1 } },
-    });
+    /*
+     * Flagged only when nobody is already on it.
+     *
+     * This function has two callers and they mean opposite things. A flow that
+     * could not understand a typed reply wants somebody; an operator who has
+     * just replied IS somebody, and flagging that thread would put a request
+     * for a person into a queue in front of the person who had already taken
+     * it - and then bounce it back every time they answered again.
+     *
+     * `flagIfUnattended` is the caller's statement about which it is. The
+     * previous version incremented unread_count unconditionally, so replying
+     * to a customer raised the operator's own unread badge.
+     */
+    if (flagIfUnattended) {
+      await flagNeedsHuman(db, scoped, run.conversationId, {
+        reason,
+        at: new Date(),
+      });
+    }
   });
 
   await appendStep(companyId, runId, {

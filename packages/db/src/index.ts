@@ -31,6 +31,8 @@ export {
   applyStatusUpdate,
   readReceiptTarget,
   markConversationRead,
+  flagNeedsHuman,
+  clearNeedsHuman,
 } from "./conversations.ts";
 export type {
   Sendability,

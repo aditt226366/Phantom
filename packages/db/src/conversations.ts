@@ -575,3 +575,87 @@ export async function markConversationRead(
      and nothing remains to report. */
   return rows[0]?.unread_count ?? 0;
 }
+
+/* ------------------------------------------------------------------------- *
+ * "A person is needed here"
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Flag a thread for a person, with the reason they will read.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this is a state and not a derivation any more
+ * ---------------------------------------------------------------------------
+ *
+ * Phase 5 derived it - `assigned_user_id IS NULL AND unread_count > 0` - and
+ * that was right while a customer writing in was the only way a thread came to
+ * need somebody. A flow's handoff node is a proactive claim: the automation has
+ * decided it cannot finish, which is true whether or not anybody has read the
+ * thread and whether or not a reply is owed.
+ *
+ * The handoff originally faked those inputs by incrementing unread_count. That
+ * lies about what the column means, and markConversationRead undoes it - so
+ * opening the thread to find out why a person was wanted destroyed the only
+ * record that one was.
+ *
+ * ---------------------------------------------------------------------------
+ * The instant does not move once it is set
+ * ---------------------------------------------------------------------------
+ *
+ * `needs_human_at` is what the queue sorts on, oldest first, so re-flagging an
+ * already-flagged thread must not send it to the back. A customer who taps
+ * through three branches into a second handoff has been waiting since the
+ * first one, and that is the number the person picking work up needs.
+ *
+ * The reason is updated, because the newest one is the most useful sentence -
+ * but the clock keeps running from when the thread first needed somebody.
+ */
+export async function flagNeedsHuman(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+  input: { reason: string; at: Date },
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE conversations
+       SET needs_human_at = COALESCE(needs_human_at, ${input.at}),
+           needs_human_reason = ${input.reason},
+           updated_at = now()
+     WHERE id = ${conversationId}
+       AND company_id = ${companyId}
+  `;
+}
+
+/**
+ * Somebody has taken the thread.
+ *
+ * Both columns together, because the CHECK requires them to agree - a reason
+ * left behind on an unflagged thread is a sentence that would be shown the
+ * next time it IS flagged, for something that has nothing to do with why.
+ *
+ * Deliberately NOT called by anything that merely reads. Opening a thread is
+ * how somebody finds out whether they want it, and a flag that cleared on
+ * being looked at is the bug this column was added to fix.
+ */
+export async function clearNeedsHuman(
+  db: CompanyClient,
+  companyId: string,
+  conversationId: string,
+): Promise<void> {
+  /*
+   * The query builder, unlike its counterpart above.
+   *
+   * flagNeedsHuman needs raw SQL for one reason - COALESCE, so that re-flagging
+   * cannot move the instant a queue sorts on - and this has no such need. An
+   * unnecessary raw statement in a file the allowlist happens to permit is
+   * exactly the drift that rule exists to stop: the list is per file, and the
+   * justification is per statement.
+   *
+   * updateMany rather than update, because the extension merges companyId into
+   * `where` and update's where type accepts only a unique.
+   */
+  await db.conversation.updateMany({
+    where: { id: conversationId, companyId },
+    data: { needsHumanAt: null, needsHumanReason: null },
+  });
+}

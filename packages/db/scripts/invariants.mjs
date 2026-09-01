@@ -205,6 +205,11 @@ export const OUT_OF_BAND_DDL = new Set([
   "check:flow_runs.flow_runs_ended_when_finished",
   "check:flow_runs.flow_runs_step_count_non_negative",
   "check:flow_run_steps.flow_run_steps_seq_positive",
+  /* "A person is needed here" and why, together or not at all. A flagged thread
+     with no reason is a blank cell in the queue somebody is reading to decide
+     what to pick up; a reason with no flag is a sentence that would be shown
+     the next time it IS flagged, for something unrelated. */
+  "check:conversations.conversations_needs_human_has_a_reason",
   /* A thread a flow handled is still a thread. The card renders automated as a
      proportion of all conversations, so a count above the total draws a bar off
      the end of its track - which looks like a CSS bug and gets chased in the

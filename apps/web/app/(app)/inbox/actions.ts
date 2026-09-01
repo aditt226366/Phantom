@@ -209,10 +209,17 @@ async function handOffFlowRun(
 
   if (!run) return;
 
+  /*
+   * false: this handoff records that a person has ALREADY arrived, so the
+   * thread must not be flagged as needing one. See handOff - its two callers
+   * mean opposite things, and flagging here would put a request for a person
+   * into the queue in front of the person who just took the thread.
+   */
   await handOff(
     companyId,
     run.id,
     "Someone from the team replied, so the flow stopped here.",
+    false,
   );
 }
 

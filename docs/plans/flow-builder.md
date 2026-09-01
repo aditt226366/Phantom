@@ -324,6 +324,37 @@ arrived. That is the boundary; the first is feedback.
 
 ---
 
+## At the tag
+
+**The destructive policy audit.** RLS disabled on all 28 tenant tables, the
+isolation suite re-run: **58 failed, 5 passed**. The five survivors are exactly
+the five in the allowlist and nothing else — role attributes, fixture sanity,
+two catalog facts about the owner, and the TRUNCATE grant. Unchanged from
+Phase 2, so no sixth appeared.
+
+All six new flow isolation assertions are among the 58, including "cannot
+advance another company's run" — the write that matters most, because a run is
+a position in somebody's conversation and moving it sends that customer the
+next question in a tree they were never put into. They prove the boundary
+rather than the convention.
+
+Restored with `npm run db:nuke -- test`, never by hand: the migrations are the
+only copy of that DDL worth trusting.
+
+`packages/db/scripts/rls-audit.mjs` is the audit as a script now, rather than
+three statements pasted into psql. It only ever DISABLEs and re-ENABLEs, so
+there is no policy text to retype, and it refuses any database that is not
+`whatsapp_os_test` on loopback — the same guard `db-nuke` carries, for a
+sharper reason: this script's entire job is to take the boundary off.
+
+**`npm run db:verify`** — clean on dev and test, all four catalog invariants.
+
+**`prisma migrate diff`** — no drift.
+
+**The gate** — green.
+
+---
+
 ## Carried forward
 
 - **A list-presentation question cannot be built in the editor yet.** The

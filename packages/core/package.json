@@ -12,6 +12,7 @@
     "./dashboard": "./src/dashboard.ts",
     "./encryption": "./src/encryption.ts",
     "./env": "./src/env.ts",
+    "./flows": "./src/flows/index.ts",
     "./queues": "./src/queues.ts",
     "./integrations": "./src/integrations.ts",
     "./kyc": "./src/kyc/index.ts",

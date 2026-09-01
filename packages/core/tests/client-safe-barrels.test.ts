@@ -60,6 +60,30 @@ const BARRELS = [
     forbidden: "hash.ts",
     minFiles: 2,
   },
+  {
+    name: "flows",
+    entry: resolve(here, "..", "src", "flows", "index.ts"),
+    serverSubpath: "flows-server",
+    /*
+     * Nothing yet, and the entry is here anyway.
+     *
+     * The other two barrels each name a module they prove they do not reach,
+     * because each has a server-only sibling that would be a real hazard to
+     * import. The flow builder has none - the validator, the button codec and
+     * the payload builder are pure - so there is nothing true to name, and
+     * naming a file that does not exist would be a check that passes for the
+     * wrong reason.
+     *
+     * The generic assertions above are the whole guard here, and they are the
+     * ones that matter: the builder's node editors are client components that
+     * import this barrel to validate as somebody types, so the first module in
+     * this directory to reach for node:crypto fails them. The entry exists so
+     * that when a flows-server sibling is written there is a place for it to
+     * be named rather than a table nobody thought to add it to.
+     */
+    forbidden: null,
+    minFiles: 3,
+  },
 ] as const;
 
 /** Bare specifiers that are known browser-safe. Anything else is a finding. */
@@ -135,12 +159,15 @@ describe.each(BARRELS)("the client-safe $name barrel", (barrel) => {
     ).toEqual([]);
   });
 
-  it("does not reach the module that needs node:crypto", () => {
-    /* The concrete case the arrangement exists for. Named rather than left to
-       the generic assertions, so deleting it is a visible choice. */
-    const reached = graph.files.some((f) => f.endsWith(barrel.forbidden));
-    expect(reached, `${barrel.forbidden} belongs to ${barrel.serverSubpath}`).toBe(
-      false,
-    );
-  });
+  it.skipIf(barrel.forbidden === null)(
+    "does not reach the module that needs node:crypto",
+    () => {
+      /* The concrete case the arrangement exists for. Named rather than left to
+         the generic assertions, so deleting it is a visible choice. */
+      const reached = graph.files.some((f) => f.endsWith(barrel.forbidden!));
+      expect(reached, `${barrel.forbidden} belongs to ${barrel.serverSubpath}`).toBe(
+        false,
+      );
+    },
+  );
 });

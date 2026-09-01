@@ -1,0 +1,17 @@
+Screenshots are off for the flow builder's RUNTIME commits.
+
+Why: the runtime half of this phase renders nothing. It is the button-id
+codec, the node schemas and validator, four tables, the engine, and the
+webhook routing that turns a tap into an advance. No page changes, so every
+one of those commits would spend a full build and two viewports photographing
+identical pixels.
+
+Until when: the first commit of the builder UI, which is where this file is
+deleted. That commit adds /template-messaging's pages and three new baselines
+- the builder with a real multi-node flow, a run mid-conversation, and a
+paused run whose window closed - and it must run the full gate.
+
+The risk this accepts, stated plainly: a runtime commit that changed a
+rendered page would not be caught. That is why the split is at the runtime/UI
+line rather than at a convenient commit count - nothing below this line has a
+page in it, and `git status` shows this file until it does.

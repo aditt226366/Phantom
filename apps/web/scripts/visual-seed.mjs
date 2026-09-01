@@ -2058,6 +2058,479 @@ try {
       `${CLOSING_THREADS.length} threads closing within the hour, ` +
       `1 pending template, and an empty verified workspace.`,
   );
+/* ==========================================================================
+   The flow builder
+   ========================================================================== */
+
+const FLOW = {
+  id: "c000visualfixtureflow00001",
+  versionId: "c000visualfixtureflowver01",
+  /** Two contacts of their own, so the flow's threads are not the inbox's. */
+  activeContactId: "c000visualfixtureflowcont1",
+  pausedContactId: "c000visualfixtureflowcont2",
+  activeConversationId: "c000visualfixtureflowconv1",
+  pausedConversationId: "c000visualfixtureflowconv2",
+  activeRunId: "c000visualfixtureflowrun01",
+  pausedRunId: "c000visualfixtureflowrun02",
+  doneRunId: "c000visualfixtureflowrun03",
+  handedRunId: "c000visualfixtureflowrun04",
+};
+
+/**
+ * A real multi-node tree, not a two-node stub.
+ *
+ * The builder's whole claim is that a structured list expresses a tree, and a
+ * picture of two nodes proves nothing about that. This one has the entry, a
+ * three-button question, a branch on what was answered, an action that scores
+ * the lead, a handoff and an end - which is every node kind the phase ships
+ * except collect, and it is the shape a real enquiry flow actually takes.
+ */
+const FLOW_GRAPH = {
+  entryNodeId: "start",
+  nodes: [
+    {
+      id: "start",
+      kind: "entry",
+      templateId: FIXTURE.approvedTemplateId,
+      variables: [],
+      choices: [{ key: "yes", label: "Yes, tell me more", next: "n2" }],
+    },
+    {
+      id: "n2",
+      kind: "question",
+      body: "Lovely. What are you looking for today?",
+      variable: "want",
+      presentation: {
+        as: "buttons",
+        choices: [
+          { key: "spices", label: "Spices", next: "n3" },
+          { key: "jaggery", label: "Jaggery", next: "n3" },
+          { key: "someone", label: "Talk to someone", next: "n6" },
+        ],
+      },
+    },
+    {
+      id: "n3",
+      kind: "action",
+      actions: [{ kind: "set_score", score: "HOT" }],
+      next: "n4",
+    },
+    {
+      id: "n4",
+      kind: "question",
+      body: "How soon do you need it?",
+      variable: "when",
+      presentation: {
+        as: "buttons",
+        choices: [
+          { key: "week", label: "This week", next: "n6" },
+          { key: "month", label: "This month", next: "n5" },
+        ],
+      },
+    },
+    {
+      id: "n5",
+      kind: "end",
+      body: "Thanks. We will send the current price list closer to the time.",
+    },
+    {
+      id: "n6",
+      kind: "handoff",
+      body: "One of our team will pick this up shortly.",
+      note: "Ready to buy",
+    },
+  ],
+};
+
+/**
+ * The three pictures the phase is about, and one of them is the reason this
+ * fixture exists at all.
+ *
+ * A run mid-conversation and a completed one are the states anybody building
+ * the feature already has on their machine. A PAUSED run - the window shut
+ * while somebody was halfway down the tree - is the one a tenant asks about
+ * and the one least likely to be looked at, because it takes a day of silence
+ * to produce and nobody waits a day while building a page.
+ *
+ * -------------------------------------------------------------------------
+ * Which timestamps move and which are literal
+ * -------------------------------------------------------------------------
+ *
+ * The rule is decided by what RENDERS a column, not by the table it is in.
+ *
+ * started_at is printed absolutely on the flow page, so every one is a fixed
+ * instant. The ACTIVE run's conversation carries a window relative to now(),
+ * because the inbox renders it as an open/closed state and a run that is
+ * permanently mid-conversation has to still be inside its window tomorrow. The
+ * PAUSED run's window is a literal in the past, and that is safe for the
+ * opposite reason: closed stays closed however long the baseline sits there.
+ */
+const FLOW_RUNS = [
+  {
+    id: FLOW.activeRunId,
+    contactId: FLOW.activeContactId,
+    conversationId: FLOW.activeConversationId,
+    status: "ACTIVE",
+    currentNodeId: "n4",
+    variables: { want: "spices" },
+    stepCount: 6,
+    startedAt: "2026-08-14T08:40:00Z",
+    pausedAt: null,
+    endedAt: null,
+  },
+  {
+    id: FLOW.pausedRunId,
+    contactId: FLOW.pausedContactId,
+    conversationId: FLOW.pausedConversationId,
+    status: "PAUSED",
+    /* The position is kept. That is the entire difference from failing, and
+       the CHECK in 20260906090000 refuses a PAUSED row without one. */
+    currentNodeId: "n2",
+    variables: {},
+    stepCount: 3,
+    startedAt: "2026-08-11T11:05:00Z",
+    pausedAt: "2026-08-12T11:20:00Z",
+    endedAt: null,
+  },
+  {
+    id: FLOW.doneRunId,
+    contactId: CONTACTS[0].id,
+    conversationId: CONVERSATION.open,
+    status: "COMPLETED",
+    currentNodeId: null,
+    variables: { want: "jaggery", when: "month" },
+    stepCount: 9,
+    startedAt: "2026-08-10T06:15:00Z",
+    pausedAt: null,
+    endedAt: "2026-08-10T06:19:00Z",
+  },
+  {
+    id: FLOW.handedRunId,
+    contactId: CONTACTS[1].id,
+    conversationId: CONVERSATION.closed,
+    status: "HANDED_OFF",
+    currentNodeId: null,
+    variables: { want: "someone" },
+    stepCount: 4,
+    startedAt: "2026-08-09T09:02:00Z",
+    pausedAt: null,
+    endedAt: "2026-08-09T09:03:00Z",
+  },
+];
+
+
+await client.query(
+  `INSERT INTO contacts (id, company_id, wa_id, phone_e164, profile_name,
+                         display_name, lead_score, lead_score_at,
+                         lead_score_run_id, tags, created_at, updated_at)
+   VALUES ($1, $3, '919845012501', '+919845012501', 'Devika Rao', NULL,
+           'HOT'::lead_score, $4, $5, ARRAY['spices'], $6, $6),
+          ($2, $3, '919845012502', '+919845012502', 'Farhan Qureshi', NULL,
+           NULL, NULL, NULL, ARRAY[]::text[], $6, $6)`,
+  [
+    FLOW.activeContactId,
+    FLOW.pausedContactId,
+    COMPANY.active,
+    "2026-08-14T08:41:00Z",
+    FLOW.activeRunId,
+    "2026-08-09T05:30:00Z",
+  ],
+);
+
+/*
+ * The active thread's window moves with the clock; the paused one's does not.
+ * See the note above FLOW_RUNS - the two are opposite cases of the same rule.
+ */
+await client.query(
+  `INSERT INTO conversations (id, company_id, contact_id, whatsapp_number_id,
+                              source, last_inbound_at, last_message_at,
+                              last_message_preview, window_expires_at,
+                              unread_count, created_at, updated_at)
+   VALUES ($1, $3, $4, $6, 'INBOUND'::conversation_source, $7, $8, $9,
+           now() + interval '11 hours', 0, $7, $8),
+          ($2, $3, $5, $6, 'INBOUND'::conversation_source, $10, $11, $12,
+           $13, 0, $10, $11)`,
+  [
+    FLOW.activeConversationId,
+    FLOW.pausedConversationId,
+    COMPANY.active,
+    FLOW.activeContactId,
+    FLOW.pausedContactId,
+    NUMBERS[0].id,
+    "2026-08-14T08:40:00Z",
+    "2026-08-14T08:41:00Z",
+    "How soon do you need it?",
+    "2026-08-11T11:05:00Z",
+    "2026-08-11T11:06:00Z",
+    "Lovely. What are you looking for today?",
+    /* 24 hours after the last inbound, and comfortably past. The window shut
+       with the customer standing on n2, which is why the run is paused. */
+    "2026-08-12T11:05:00Z",
+  ],
+);
+
+await client.query(
+  `INSERT INTO flows (id, company_id, name, published_version_id, archived_at,
+                      created_by_user_id, created_at, updated_at)
+   VALUES ($1, $2, 'New enquiry', NULL, NULL, 'c000visualfixtureuser001',
+           $3, $3)`,
+  [FLOW.id, COMPANY.active, "2026-08-08T07:00:00Z"],
+);
+
+await client.query(
+  `INSERT INTO flow_versions (id, company_id, flow_id, version, graph,
+                              entry_template_id, published_at,
+                              published_by_user_id, created_by_user_id,
+                              created_at, updated_at)
+   VALUES ($1, $2, $3, 1, $4::jsonb, $5, $6, 'c000visualfixtureuser001',
+           'c000visualfixtureuser001', $6, $6)`,
+  [
+    FLOW.versionId,
+    COMPANY.active,
+    FLOW.id,
+    JSON.stringify(FLOW_GRAPH),
+    FIXTURE.approvedTemplateId,
+    "2026-08-08T07:20:00Z",
+  ],
+);
+
+/* The pointer, set after the version exists: flows.published_version_id has
+   a foreign key at it, and the two tables reference each other. */
+await client.query(`UPDATE flows SET published_version_id = $1 WHERE id = $2`, [
+  FLOW.versionId,
+  FLOW.id,
+]);
+
+for (const run of FLOW_RUNS) {
+  await client.query(
+    `INSERT INTO flow_runs (id, company_id, flow_id, flow_version_id,
+                            conversation_id, contact_id,
+                            active_conversation_id, status, current_node_id,
+                            variables, step_count, started_at, paused_at,
+                            ended_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::flow_run_status, $9, $10::jsonb,
+             $11, $12, $13, $14, $12, $12)`,
+    [
+      run.id,
+      COMPANY.active,
+      FLOW.id,
+      FLOW.versionId,
+      run.conversationId,
+      run.contactId,
+      /* Non-null exactly while the run is live - the CHECK that makes the
+         unique index mean "one live run per conversation". */
+      run.status === "ACTIVE" || run.status === "PAUSED" ? run.conversationId : null,
+      run.status,
+      run.currentNodeId,
+      JSON.stringify(run.variables),
+      run.stepCount,
+      run.startedAt,
+      run.pausedAt,
+      run.endedAt,
+    ],
+  );
+}
+
+/*
+ * The active run's thread, as real messages.
+ *
+ * A flow's messages are ordinary message rows - that is the phase's whole
+ * claim about not being a second send path - so the thread page renders them
+ * with no knowledge of flows at all. Seeding them any other way would
+ * photograph a fiction.
+ *
+ * The interactive payload carries ids naming this run and node, exactly as
+ * buildInteractivePayload writes them. A tap on the older question would
+ * resolve to n2, which the run has left, and be declined.
+ */
+const FLOW_MESSAGES = [
+  {
+    id: "c000visualfixtureflowmsg1",
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "button",
+    wamid: "wamid.FIXTUREFLOWIN1",
+    body: "Yes, tell me more",
+    interactive: null,
+    occurredAt: "2026-08-14T08:40:00Z",
+  },
+  {
+    id: "c000visualfixtureflowmsg2",
+    direction: "OUTBOUND",
+    status: "READ",
+    type: "interactive",
+    wamid: "wamid.FIXTUREFLOWOUT1",
+    body: "Lovely. What are you looking for today?\n\n- Spices\n- Jaggery\n- Talk to someone",
+    interactive: {
+      type: "button",
+      body: { text: "Lovely. What are you looking for today?" },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.activeRunId}.n2.spices`, title: "Spices" },
+          },
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.activeRunId}.n2.jaggery`, title: "Jaggery" },
+          },
+          {
+            type: "reply",
+            reply: {
+              id: `f1.r.${FLOW.activeRunId}.n2.someone`,
+              title: "Talk to someone",
+            },
+          },
+        ],
+      },
+    },
+    occurredAt: "2026-08-14T08:40:20Z",
+  },
+  {
+    id: "c000visualfixtureflowmsg3",
+    direction: "INBOUND",
+    status: "DELIVERED",
+    type: "interactive",
+    wamid: "wamid.FIXTUREFLOWIN2",
+    body: "Spices",
+    interactive: null,
+    occurredAt: "2026-08-14T08:40:50Z",
+  },
+  {
+    id: "c000visualfixtureflowmsg4",
+    direction: "OUTBOUND",
+    status: "DELIVERED",
+    type: "interactive",
+    wamid: "wamid.FIXTUREFLOWOUT2",
+    body: "How soon do you need it?\n\n- This week\n- This month",
+    interactive: {
+      type: "button",
+      body: { text: "How soon do you need it?" },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.activeRunId}.n4.week`, title: "This week" },
+          },
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.activeRunId}.n4.month`, title: "This month" },
+          },
+        ],
+      },
+    },
+    occurredAt: "2026-08-14T08:41:00Z",
+  },
+];
+
+for (const message of FLOW_MESSAGES) {
+  await client.query(
+    `INSERT INTO messages (id, company_id, conversation_id, direction, status,
+                           type, wamid, body, interactive_payload,
+                           send_attempt, occurred_at, delivered_at, read_at,
+                           created_at, updated_at)
+     VALUES ($1, $2, $3, $4::message_direction, $5::message_status, $6, $7,
+             $8, $9::jsonb, 0, $10, $10, $11, $10, $10)`,
+    [
+      message.id,
+      COMPANY.active,
+      FLOW.activeConversationId,
+      message.direction,
+      message.status,
+      message.type,
+      message.wamid,
+      message.body,
+      message.interactive ? JSON.stringify(message.interactive) : null,
+      message.occurredAt,
+      message.status === "READ" ? message.occurredAt : null,
+    ],
+  );
+}
+
+/*
+ * The paused thread's one exchange, so the picture shows a conversation that
+ * stopped rather than one that never started.
+ */
+await client.query(
+  `INSERT INTO messages (id, company_id, conversation_id, direction, status,
+                         type, wamid, body, interactive_payload, send_attempt,
+                         occurred_at, delivered_at, created_at, updated_at)
+   VALUES ($1, $2, $3, 'INBOUND'::message_direction,
+           'DELIVERED'::message_status, 'button', 'wamid.FIXTUREFLOWIN3',
+           'Yes, tell me more', NULL, 0, $4, $4, $4, $4),
+          ($5, $2, $3, 'OUTBOUND'::message_direction,
+           'DELIVERED'::message_status, 'interactive', 'wamid.FIXTUREFLOWOUT3',
+           $6, $7::jsonb, 0, $8, $8, $8, $8)`,
+  [
+    "c000visualfixtureflowmsg5",
+    COMPANY.active,
+    FLOW.pausedConversationId,
+    "2026-08-11T11:05:00Z",
+    "c000visualfixtureflowmsg6",
+    "Lovely. What are you looking for today?\n\n- Spices\n- Jaggery\n- Talk to someone",
+    JSON.stringify({
+      type: "button",
+      body: { text: "Lovely. What are you looking for today?" },
+      action: {
+        buttons: [
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.pausedRunId}.n2.spices`, title: "Spices" },
+          },
+          {
+            type: "reply",
+            reply: { id: `f1.r.${FLOW.pausedRunId}.n2.jaggery`, title: "Jaggery" },
+          },
+          {
+            type: "reply",
+            reply: {
+              id: `f1.r.${FLOW.pausedRunId}.n2.someone`,
+              title: "Talk to someone",
+            },
+          },
+        ],
+      },
+    }),
+    "2026-08-11T11:06:00Z",
+  ],
+);
+
+/*
+ * Steps for the two live runs. Append-only, and seeded through the same
+ * columns the executor writes - a fixture that invented a shape would be a
+ * picture of a table the product does not produce.
+ */
+const STEPS = [
+  [FLOW.activeRunId, 1, "STARTED", "start", "yes", null],
+  [FLOW.activeRunId, 2, "SENT", "n2", null, "c000visualfixtureflowmsg2"],
+  [FLOW.activeRunId, 3, "ADVANCED", "n2", "spices", "c000visualfixtureflowmsg3"],
+  [FLOW.activeRunId, 4, "ACTION", "n3", null, null],
+  [FLOW.activeRunId, 5, "SENT", "n4", null, "c000visualfixtureflowmsg4"],
+  [FLOW.pausedRunId, 1, "STARTED", "start", "yes", null],
+  [FLOW.pausedRunId, 2, "SENT", "n2", null, "c000visualfixtureflowmsg6"],
+  [FLOW.pausedRunId, 3, "PAUSED", null, null, null],
+];
+
+for (const [runId, seq, kind, nodeId, choice, messageId] of STEPS) {
+  await client.query(
+    `INSERT INTO flow_run_steps (id, company_id, flow_run_id, seq, kind,
+                                 node_id, choice, message_id, detail,
+                                 occurred_at)
+     VALUES ($1, $2, $3, $4, $5::flow_step_kind, $6, $7, $8, '{}'::jsonb, $9)`,
+    [
+      `c000visualfixturestep${runId.slice(-2)}${String(seq).padStart(2, "0")}`,
+      COMPANY.active,
+      runId,
+      seq,
+      kind,
+      nodeId,
+      choice,
+      messageId,
+      "2026-08-14T08:41:00Z",
+    ],
+  );
+}
+
   /*
    * The rollups, computed by the real refresh rather than written as literals.
    *

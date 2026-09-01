@@ -249,6 +249,8 @@ describe("the feature gate", () => {
         "configuration/templates/new/page.tsx",
         "configuration/templates/page.tsx",
         "template-messaging/page.tsx",
+        "template-messaging/new/page.tsx",
+        "template-messaging/[flowId]/page.tsx",
       ].sort(),
     );
   });

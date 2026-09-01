@@ -168,9 +168,19 @@ test.describe("coverage", () => {
      */
     const DYNAMIC_SEGMENTS = new Map<string, readonly string[]>([
       ["[id]", [FIXTURE.companyId]],
+      /* Four values: an open thread, a closed one, a thread with a flow run
+         standing in the middle of it, and one whose window shut mid-run. The
+         same page.tsx renders all four and only the last two carry interactive
+         messages - which is the picture that proves a flow's messages are
+         ordinary message rows. */
       [
         "[conversationId]",
-        [FIXTURE.conversationId, FIXTURE.closedConversationId],
+        [
+          FIXTURE.conversationId,
+          FIXTURE.closedConversationId,
+          FIXTURE.flowConversationId,
+          FIXTURE.pausedFlowConversationId,
+        ],
       ],
       ["[templateId]", [FIXTURE.rejectedTemplateId]],
       /* Two values: the same page.tsx renders a running broadcast and a
@@ -184,6 +194,7 @@ test.describe("coverage", () => {
          sheet. They are the same page.tsx and completely different pictures -
          only the second carries an error somebody has to act on. */
       ["[leadSourceId]", [FIXTURE.leadSourceId, FIXTURE.lostLeadSourceId]],
+      ["[flowId]", [FIXTURE.flowId]],
     ]);
 
     const found: string[] = [];

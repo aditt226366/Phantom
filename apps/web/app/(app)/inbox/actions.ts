@@ -10,7 +10,12 @@ import {
   fillVariables,
   templateVariables,
 } from "@whatsapp-os/core/whatsapp";
-import { advanceConversation, canSend, withCompany } from "@whatsapp-os/db";
+import {
+  advanceConversation,
+  canSend,
+  handOff,
+  withCompany,
+} from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
 import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
@@ -153,11 +158,62 @@ export async function sendMessageAction(
     },
   );
 
+  /*
+   * A person has taken over, so the flow stops.
+   *
+   * -------------------------------------------------------------------------
+   * Two writers on one conversation is the failure this prevents
+   * -------------------------------------------------------------------------
+   *
+   * A flow run standing in this thread is waiting for a tap. Without this, an
+   * operator answers the customer in their own words, the customer then taps
+   * the button that was still sitting above it, and the flow carries straight
+   * on - asking its next question over the top of a conversation a person is
+   * now having. Both sides are talking, neither knows about the other, and the
+   * customer is the only one who can see both.
+   *
+   * Handed off rather than failed or paused, because that is what has actually
+   * happened: the automation stopped because a human took the thread. It is
+   * also what the thread's own banner promises, and a promise the product does
+   * not keep would be worse than no banner at all.
+   *
+   * After the enqueue and deliberately outside the transaction above: the
+   * message going out is the point of the action, and a run that could not be
+   * handed off must not lose the operator's reply.
+   */
+  await handOffFlowRun(session.companyId, conversationId);
+
   /* The action stays on the page, so nothing re-renders without this. */
   revalidatePath(`/inbox/${conversationId}`);
   revalidatePath("/inbox");
 
   return {};
+}
+
+/**
+ * End whatever flow is standing in this conversation, if one is.
+ *
+ * Reads first so that the ordinary case - no flow, which is most threads - is
+ * one indexed lookup and no write at all.
+ */
+async function handOffFlowRun(
+  companyId: string,
+  conversationId: string,
+): Promise<void> {
+  const run = await withCompany(companyId, (db) =>
+    db.flowRun.findFirst({
+      where: { activeConversationId: conversationId },
+      select: { id: true },
+    }),
+  );
+
+  if (!run) return;
+
+  await handOff(
+    companyId,
+    run.id,
+    "Someone from the team replied, so the flow stopped here.",
+  );
 }
 
 /* ------------------------------------------------------------------------- *

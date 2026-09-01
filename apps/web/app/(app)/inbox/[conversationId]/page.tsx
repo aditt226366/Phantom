@@ -160,6 +160,37 @@ export default async function Page({
 
   const window = describeWindow(conversation.windowExpiresAt, now);
 
+  /*
+   * Whether a flow is standing in this conversation.
+   *
+   * -------------------------------------------------------------------------
+   * Why the thread has to say so, and especially when the run is paused
+   * -------------------------------------------------------------------------
+   *
+   * A flow's messages are ordinary message rows, which is the phase's whole
+   * claim and the reason this page needed no changes to render them. The cost
+   * of that is invisibility: an operator reading a thread sees questions their
+   * team did not write, with no indication that anything is still running.
+   *
+   * For a PAUSED run that is worse than untidy. The picture is a closed window,
+   * a disabled composer and a template picker - which reads as an ordinary
+   * lapsed conversation, when what is actually true is that a customer is
+   * halfway down a tree and sending the flow's opening template puts them back
+   * exactly where they stopped. Without this line the operator either does
+   * nothing, or sends a different template and quietly ends the run.
+   */
+  const flowRun = await withCompany(session.companyId, (db) =>
+    db.flowRun.findFirst({
+      where: { activeConversationId: conversationId },
+      select: {
+        id: true,
+        status: true,
+        flow: { select: { name: true } },
+        flowVersion: { select: { template: { select: { name: true } } } },
+      },
+    }),
+  );
+
   const closedReason =
     sendability && !sendability.decision.allowed
       ? refusalSentence(sendability.decision.reason)
@@ -187,6 +218,32 @@ export default async function Page({
         <p className="mt-xxs text-body-sm text-muted">
           On {conversation.whatsappNumber.displayNumber}
         </p>
+
+        {flowRun ? (
+          <p className="mt-sm rounded-lg border border-hairline bg-surface-card px-base py-sm text-body-sm text-body">
+            {flowRun.status === "PAUSED" ? (
+              <>
+                <span className="text-body-strong text-ink">
+                  {flowRun.flow.name}
+                </span>{" "}
+                is waiting to resume. The 24-hour window closed before this
+                customer answered, so the flow kept their place. Sending{" "}
+                <span className="text-body-strong text-ink">
+                  {flowRun.flowVersion.template.name}
+                </span>{" "}
+                picks them up where they stopped rather than starting again.
+              </>
+            ) : (
+              <>
+                <span className="text-body-strong text-ink">
+                  {flowRun.flow.name}
+                </span>{" "}
+                is running in this conversation. Replying yourself hands it to
+                you and stops the flow.
+              </>
+            )}
+          </p>
+        ) : null}
       </header>
 
       <ol className="flex flex-col gap-sm">

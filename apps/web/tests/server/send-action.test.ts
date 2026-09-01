@@ -47,6 +47,11 @@ const create = vi.fn();
 const update = vi.fn();
 const findFirst = vi.fn();
 const advanceConversation = vi.fn();
+/* No flow standing in this conversation, which is the ordinary case for a
+   thread somebody is typing into by hand. The handoff path has its own tests
+   against a real database in packages/db. */
+const findFirstFlowRun = vi.fn(async () => null);
+const handOff = vi.fn();
 
 vi.mock("@whatsapp-os/db", () => ({
   /* The real one opens a transaction and passes a scoped client; the shape
@@ -55,6 +60,7 @@ vi.mock("@whatsapp-os/db", () => ({
     fn(
       {
         message: { create, update, findFirst },
+        flowRun: { findFirst: findFirstFlowRun },
         /* Active, so the gate below refuses on documents or not at all. */
         company: { findFirst: async () => ({ deactivatedAt: null }) },
       },
@@ -76,6 +82,7 @@ vi.mock("@whatsapp-os/db", () => ({
   }),
   canSend: async () => sendability,
   advanceConversation,
+  handOff,
 }));
 
 const { retryMessageAction, sendMessageAction } = await import(

@@ -100,6 +100,26 @@ export const FIXTURE = {
   leadSourceId: "c000visualfixtureleadsrc1",
   lostLeadSourceId: "c000visualfixtureleadsrc2",
   /**
+   * A published flow with a real multi-node tree behind it.
+   *
+   * Six nodes rather than a stub, because the builder's whole claim is that a
+   * structured list expresses a tree and a picture of two nodes proves nothing
+   * about that. It carries every node kind the phase ships except collect.
+   */
+  flowId: "c000visualfixtureflow00001",
+  /**
+   * A conversation with a run standing in the middle of it, and one whose
+   * 24-hour window shut with the customer halfway down the tree.
+   *
+   * The paused one is the reason this pair exists. A mid-conversation run is
+   * the state anybody building the feature already has on their machine; a
+   * paused one takes a day of silence to produce, so nobody waits for it - and
+   * it is the state a tenant asks about, because from the outside it looks
+   * exactly like the flow having stopped working.
+   */
+  flowConversationId: "c000visualfixtureflowconv1",
+  pausedFlowConversationId: "c000visualfixtureflowconv2",
+  /**
    * A verified workspace with no traffic at all, and its owner.
    *
    * The third signed-in state, and the one that photographs what every tenant
@@ -185,6 +205,32 @@ export const ROUTES: readonly VisualRoute[] = [
     audience: "tenant",
   },
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
+  { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
+  {
+    name: "template-messaging-new",
+    path: "/template-messaging/new",
+    audience: "tenant",
+  },
+  /* The builder, with the published six-node tree loaded into it. */
+  {
+    name: "flow-builder",
+    path: `/template-messaging/${FIXTURE.flowId}`,
+    audience: "tenant",
+  },
+  /* A run mid-conversation, in the thread, rendered by a page that knows
+     nothing about flows - which is the point: a flow's messages are ordinary
+     message rows. */
+  {
+    name: "inbox-flow-thread",
+    path: `/inbox/${FIXTURE.flowConversationId}`,
+    audience: "tenant",
+  },
+  /* And the paused one, whose window closed mid-run. */
+  {
+    name: "inbox-flow-paused",
+    path: `/inbox/${FIXTURE.pausedFlowConversationId}`,
+    audience: "tenant",
+  },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },
   { name: "bulk-import", path: "/bulk-messaging/new", audience: "tenant" },
   {
@@ -215,12 +261,6 @@ export const ROUTES: readonly VisualRoute[] = [
        operator actually stares at. */
     name: "bulk-finished",
     path: `/bulk-messaging/${FIXTURE.finishedBroadcastId}`,
-    audience: "tenant",
-  },
-  {
-    /* The section A1 reserves for the flow builder. Not the Studio. */
-    name: "template-messaging",
-    path: "/template-messaging",
     audience: "tenant",
   },
   { name: "templates", path: "/configuration/templates", audience: "tenant" },

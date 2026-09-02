@@ -915,6 +915,18 @@ Things worth knowing before touching it:
   True until Configuration > Numbers printed the webhook URL, at which point an
   escape hatch for a busy port silently re-recorded a screenshot. It is a fixed
   literal now. Nothing navigates by `APP_URL` — Playwright uses `baseURL`.
+- **And a rendered value must not come from the developer's `.env`** — the same
+  rule, one step further out, and it has now happened twice. `/dev/rag` prints
+  which of the four `VERSE_KEY_VARS` are configured, so the suite read whatever
+  the machine had. It surfaced when a real `VERSE_V1_API_KEY` was added to
+  `.env` for an unrelated live check and two baselines went red on a commit
+  touching neither the page nor the fixture; a machine with all four set would
+  have produced a third rendering. All four are pinned **empty** in the
+  `webServer` env, which photographs the state a fresh clone has. Empty strings,
+  not omissions: `next.config.ts` loads the root `.env` through dotenv, which
+  fills a key that is ABSENT and leaves one that is present and empty.
+  **When a page starts rendering a variable, pin it in `playwright.config.ts`
+  the same day.**
 - **A run crossing midnight IST** between seed and screenshot sees the two
   windowed cards go to zero. Re-seed and re-run.
 - **The TRUNCATE is discovered, not listed**, for the reason `truncateAll` in

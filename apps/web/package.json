@@ -14,6 +14,7 @@
     "test:visual:update": "playwright test --update-snapshots",
     "visual:seed": "tsx scripts/visual-seed.mjs",
     "verse:metric": "tsx --conditions=react-server scripts/verse-metric.mjs",
+    "verse:probe": "tsx --conditions=react-server scripts/verse-probe.mjs",
     "seed:dev": "tsx --conditions=react-server scripts/seed-dev.mjs",
     "admin:hash": "tsx scripts/admin-hash.mjs",
     "admin:seed": "tsx --conditions=react-server scripts/admin-seed.mjs",

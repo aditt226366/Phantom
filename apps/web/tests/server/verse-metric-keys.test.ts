@@ -49,7 +49,7 @@ const tsx = join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 
 const FAKE = "not-a-real-key-for-a-refusal-test";
 
-function runMetric(env: Record<string, string | undefined>) {
+function runMetric(env: Record<string, string>) {
   const result = spawnSync(
     process.execPath,
     [tsx, script, "co_x", "kb_x"],
@@ -58,10 +58,26 @@ function runMetric(env: Record<string, string | undefined>) {
       encoding: "utf8",
       env: {
         ...process.env,
-        VERSE_V1_API_KEY: undefined,
-        VERSE_V2_API_KEY: undefined,
-        VERSE_V3_API_KEY: undefined,
-        VERSE_EMBEDDING_API_KEY: undefined,
+        /*
+         * Empty strings, NOT `undefined`, and this is the whole isolation.
+         *
+         * The script's first import is `_load-env.mjs`, which calls dotenv
+         * against the repo-root `.env` without `override`. dotenv skips a key
+         * that is already present in process.env - and `undefined` removes the
+         * key, so dotenv fills it from the developer's own `.env`. An empty
+         * string is present, so dotenv leaves it, and the metric's
+         * `!process.env[name]` reads it as missing.
+         *
+         * Found the moment a real VERSE_V1_API_KEY landed in `.env`: three of
+         * these tests kept passing and the fourth started failing, because the
+         * spawned script was reading the machine's actual credentials rather
+         * than the ones the test set. A test whose result depends on what the
+         * developer happens to have configured is not a test of this script.
+         */
+        VERSE_V1_API_KEY: "",
+        VERSE_V2_API_KEY: "",
+        VERSE_V3_API_KEY: "",
+        VERSE_EMBEDDING_API_KEY: "",
         ...env,
       } as NodeJS.ProcessEnv,
     },

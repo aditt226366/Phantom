@@ -293,6 +293,69 @@ Only where a failure would be silent:
 
 ---
 
+## Requirements, and the evidence for each
+
+One row per requirement from the brief, naming the commit and the specific
+assertion that satisfies it. **Writing this table is the check** — a row whose
+evidence column reads thinly is a requirement that is not really done, and
+nothing has to run for that to become visible.
+
+It earned itself twice on the first writing. Both are left in the table rather
+than quietly fixed, because what the exercise catches is the point of it.
+
+### The runtime
+
+| Requirement | Commit | Evidence |
+| --- | --- | --- |
+| Three tiers, model strings in one config constant | `7b409f0` | `verse-models.test.ts` walks the source, strips comments, asserts each literal appears in exactly one file. Broken once with a second literal. |
+| One `ModelRouter`, three adapters taking `FetchImpl`, in `packages/core` | `7b409f0` | `verse-router.test.ts` `describe.each` over all three: refusal is not an outage, empty output refused, HTTP failure, unparseable body, abort cancels. |
+| Keys platform-level in env, not the vault | `7b409f0` | `verseKeys` in `env.ts`; `env-example.test.ts` parses `.env.example` against both schemas. |
+| Upload `.pdf` and `.txt` | `b1f8865`, `6696b3e` | `extractPdf` / `extractText`; `uploadDocumentAction` checks `%PDF-` from the bytes rather than trusting `file.type`. |
+| Crawl same-domain, page cap, robots.txt respected | `b1f8865` | `verse-ingest.test.ts`: off-site never fetched, subdomain refused, `blockedByRobots` reported, cap asserted via `hitPageCap`. |
+| Chunk ~800 tokens with overlap | `7b409f0` | `verse-chunk.test.ts` asserts the ceiling from **both** sides, and that a sentence split at a boundary survives whole in one chunk. |
+| Embed and store in pgvector with an index | `9d1f798`, `b1f8865` | `verse-embedding-pin.test.ts` reads the HNSW index out of `pg_am`; `OUT_OF_BAND_DDL` carries it as an object that must exist. |
+| Per-document status with a real reason on failure | `b1f8865`, `6696b3e` | CHECK `kb_documents_failure_has_a_reason`; a scanned PDF fails by name, asserted in `verse-ingest.test.ts`. |
+| Embedding model pinned per index; changing it is a migration, never a config edit | `9d1f798` | `verse-embedding-pin.test.ts` reads `atttypmod` from the catalog. **Broken once**: 1536 to 768 fails the suite. |
+| Top-k with a minimum similarity floor | `67ab827` | `verse-retrieval.test.ts` asserts the threshold from **both** sides, and that `grounded` is never returned empty. |
+| Nothing clears the floor, so Verse says it does not know and hands off | `67ab827`, `3f77942` | `groundingFor` returns a tagged union; `verse-reply.test.ts` asserts the handoff happens with no model call at all. |
+| Never falls back on general knowledge | `67ab827` | **Broken once**: the floor no longer filtering fails. So does the distance/similarity sign flip, which is silent when wrong. |
+| No tools; produces text the existing send path delivers | `7b409f0`, `3f77942` | `verse-router.test.ts` asserts `body.tools` is undefined on the wire; the reply path calls `materialiseFlowMessage`. |
+| Prompt-injection boundary holds by construction | `7b409f0` | The interface returns text and cannot express an action. Argued in `router.ts`; the `tools` assertion is the mechanical half. |
+| A5: genuine refusal, honest about not being human | `67ab827` | `A5_OFF_TOPIC_RULE` and `A5_HONESTY_RULE` asserted verbatim. **Broken once**: softening the refusal into a disclaimer fails. |
+| Hand off on refunds, complaints, legal, medical | `67ab827` | `isRestrictedSubject` table-tested; escalation is ordered **before** grounding, so a knowledge base that contains the refund policy still cannot answer one. |
+| Hand off on pricing not in the knowledge base | `67ab827` | Covered by the floor rather than a keyword: an unlisted price does not clear, so it escalates as `no_grounding`. Question 21 of the metric set is exactly this. |
+| Hand off after three turns without progress | `67ab827` | `MAX_TURNS_WITHOUT_PROGRESS` asserted from **both** sides — two must not escalate, three must. |
+| Every outbound checks the window first | `3f77942` | `verse-reply.test.ts` asserts no model call **and no embedding call** when the window is closed. **Broken once**. |
+| Outside the window, only an approved template through `materialiseOutboundTemplate` | `3f77942`, `b808328` | The reply path refuses to send a template at all; re-opening belongs to the campaign. **Broken once**. |
+| Escalation calls `flagNeedsHuman` as the fourth caller | `3f77942` | Asserts the call, and that the flag precedes the release by invocation order. **Broken once**. |
+| Usage deduped on `messageId` | `3f77942` | Asserts `dedupeKey === "verse.reply:msg-out"` — our message id, not the job's. **Broken once**. |
+| **Lead scoring runs on the cheapest tier** | ~~`3f77942`~~ **`b12502d`** | **The table caught this.** At the runtime tag the only evidence was `expect(VERSE_TIERS).toContain(VERSE_SCORING_TIER)` — a constant asserted to be a member of a set, with nothing calling it. `verse-score.test.ts` now asserts only customer turns are sent, the output ceiling, and that a refusal yields NULL rather than COLD. |
+| One driver per conversation | `945ce8f` | `conversation-driver.test.ts`: a person displaces anything, an automation displaces nothing, both asserted. **Broken once**. |
+| `canUseFeatures` gates it | `6696b3e`, `3c415ce` | `feature-gate-coverage.test.ts` walks `app/(app)` and refused each new page until it was named. |
+
+### The campaign layer
+
+| Requirement | Commit | Evidence |
+| --- | --- | --- |
+| Name, goal verbatim, template, model, knowledge base | `3c415ce` | `createCampaignAction`; the goal is stored unmodified and rendered `whitespace-pre-wrap` on the campaign page. |
+| **Audience** | ~~absent~~ **`5ee1e5e`** | **The table caught this too.** Nothing wrote `verse_campaign_recipients` — the engine read an empty table, so starting a campaign would have gone RUNNING then COMPLETED within a minute having messaged nobody. `importAudienceAction` reuses bulk's `buildAudience`; starting with an empty audience is now refused with a sentence explaining why. |
+| Schedule: start time in the tenant's timezone | `b808328`, `3c415ce` | `localMinutes` resolves an IANA zone through `Intl`, asserted across a DST boundary in London where a stored offset would drift. |
+| Optional daily send window | `b808328` | `verse-schedule.test.ts` asserts the open and the close from **both** sides. **Broken once**. |
+| Per-day cap | `b808328` | Asserted from **both** sides (`>=`, not `>`) and against the tenant's calendar day, not the server's. **Broken once**. |
+| Pause, resume, duplicate, archive | `3c415ce` | `campaignControls` is one function both pages read; duplicate deliberately does not copy the audience. |
+| A template Meta pauses or rejects mid-flight stops the campaign, with a reason | `b808328` | Checked every tick rather than once at start; `verse-campaign.test.ts` covers all three revoked states. **Broken once**. |
+| The campaign owns re-opening | `b808328`, `3f77942` | The reply path refuses; the engine reopens on its own schedule and against its cap. **Broken once** from the reply side. |
+| `lead_sources.action` gains its third member | `b12502d` | `verseActionSchema` joins the discriminated union; the poller's third arm claims the driver inside `claimLeadRow`'s transaction. |
+| `/dev/rag`: chunks with scores, answer, latency, cost | `b12502d` | Renders below-floor chunks greyed rather than hidden; latency split into embedding and generation, because they are different problems. |
+| Floor provenance renders on the knowledge base too | `6696b3e` | `floorNotice()` renders "Provisional threshold — not yet measured" on the knowledge base page and on `/dev/rag`. |
+| Dashboard: replace the `aiHandling` card | `b12502d` | A second series counted from the conversation **driver**, not from recipients. CHECK `dashboard_rollups_verse_within_total`. |
+| Dashboard: re-read the cards not replaced | `b12502d` | `leadPyramid` and `orders` re-read and both still true — orders genuinely do not exist, and `leadPyramid` already named order tracking rather than the AI layer. |
+| 20/5 command, questions seeded as data, exits non-zero | `b12502d` | `verse-metric.mjs` verified exiting 1 and naming all four variables; the 25 questions are checked in. |
+| **The 20/5 metric itself** | — | **NOT RUN.** No credentials. See the top of this document. |
+| Screenshots | — | See "At the campaign code-complete" below. |
+
+---
+
 ## Carried forward
 
 - **The 20/5 metric has not been run**, and the campaign tag is held because of

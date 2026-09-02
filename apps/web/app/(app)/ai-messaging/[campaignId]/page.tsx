@@ -19,6 +19,7 @@ import {
 import { SectionHeader, SectionShell } from "../../_components/section";
 import {
   ArchiveButton,
+  AudienceForm,
   DuplicateButton,
   PauseButton,
   ResumeButton,
@@ -209,6 +210,10 @@ export default async function CampaignPage({
             </div>
           ))}
         </dl>
+        <div className="mt-md border-t border-hairline pt-md">
+          <AudienceForm campaignId={campaign.id} csrf={<CsrfField />} />
+        </div>
+
         <p className="mt-sm text-caption text-muted">
           Skipped includes people who opted out, and anyone already in a
           conversation your team or another automation was handling — a campaign

@@ -10,6 +10,7 @@ import {
   archiveCampaignAction,
   createCampaignAction,
   duplicateCampaignAction,
+  importAudienceAction,
   pauseCampaignAction,
   resumeCampaignAction,
   startCampaignAction,
@@ -293,5 +294,50 @@ export function ArchiveButton(props: { campaignId: string; csrf: ReactNode }) {
       pendingLabel="Archiving…"
       variant="ghost"
     />
+  );
+}
+
+/**
+ * Who this campaign will contact.
+ *
+ * One number per line, with optional comma-separated template variables -
+ * deliberately simpler than bulk's CSV upload and its column-mapping screen. A
+ * campaign's audience is typically one column somebody already has, and asking
+ * them to map columns for a single required field would be three screens to
+ * collect one.
+ *
+ * The parsing, the rejects and the positional ordering of variables all come
+ * from the same `buildAudience` bulk messaging uses. A second copy would be one
+ * edit from disagreeing about the order, which is where the order number ends
+ * up in place of the customer's name.
+ */
+export function AudienceForm({
+  campaignId,
+  csrf,
+}: {
+  campaignId: string;
+  csrf: ReactNode;
+}) {
+  const [state, action, pending] = useActionState<CampaignState, FormData>(
+    importAudienceAction,
+    {},
+  );
+
+  return (
+    <form action={action} className="flex flex-col gap-sm">
+      {csrf}
+      <input type="hidden" name="campaignId" value={campaignId} />
+      <Field
+        label="Add people to contact"
+        name="numbers"
+        required
+        placeholder="+919876543210, Asha"
+        description="One phone number per line. Add template variables after a comma, in the order the template uses them."
+      />
+      <FormStatus message={state.error} />
+      <Button type="submit" variant="outline" disabled={pending}>
+        {pending ? "Adding…" : "Add to audience"}
+      </Button>
+    </form>
   );
 }

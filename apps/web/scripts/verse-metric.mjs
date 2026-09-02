@@ -35,7 +35,7 @@ import "./_load-env.mjs";
 import { randomUUID } from "node:crypto";
 import {
   SIMILARITY_FLOOR,
-  VERSE_KEY_VARS,
+  VERSE_EMBEDDING,
   VERSE_MODELS,
   anthropicRouter,
   buildSystemPrompt,
@@ -49,10 +49,42 @@ import { retrieveChunks, withCompany } from "@whatsapp-os/db";
 import { QUESTIONS } from "./verse-questions.mjs";
 
 /* ------------------------------------------------------------------------- *
- * The refusal, first
+ * Which tier, and therefore which keys
  * ------------------------------------------------------------------------- */
 
-const missing = VERSE_KEY_VARS.filter((name) => !process.env[name]);
+/*
+ * Resolved BEFORE the refusal, because the refusal depends on it.
+ *
+ * This used to check VERSE_KEY_VARS - all four - and that was wrong. The metric
+ * measures retrieval and grounding: it embeds each question, retrieves against
+ * one knowledge base, and asks ONE model to answer. It never touches the other
+ * two tiers. Demanding their keys made the acceptance criterion for this phase
+ * unreachable without credentials for two providers it does not call, and the
+ * error named four variables when two would do - which reads as "this needs far
+ * more setup than it does" and is exactly how a check gets skipped instead of
+ * satisfied.
+ *
+ * VERSE_KEY_VARS is still right where it is used: /dev/rag reports which of the
+ * four are configured, and that is a status display about the whole layer.
+ */
+const TIER = process.env.VERSE_METRIC_TIER ?? "V1";
+const model = VERSE_MODELS[TIER];
+
+if (!model) {
+  console.error(
+    `\nUnknown tier ${TIER}. Set VERSE_METRIC_TIER to V1, V2 or V3.\n`,
+  );
+  process.exit(1);
+}
+
+/* ------------------------------------------------------------------------- *
+ * The refusal
+ * ------------------------------------------------------------------------- */
+
+/** Exactly what this run will call: one generation tier, plus embeddings. */
+const REQUIRED_KEY_VARS = [model.keyVar, VERSE_EMBEDDING.keyVar];
+
+const missing = REQUIRED_KEY_VARS.filter((name) => !process.env[name]);
 
 if (missing.length > 0) {
   console.error(
@@ -60,7 +92,8 @@ if (missing.length > 0) {
       "",
       "THE VERSE ACCEPTANCE METRIC CANNOT RUN.",
       "",
-      "It needs real embedding and real generation calls, and these are not set:",
+      `It measures retrieval and grounding on tier ${TIER}, so it needs that`,
+      "tier's key and the embedding key - and no others. These are not set:",
       "",
       ...missing.map((name) => `    ${name}`),
       "",
@@ -91,14 +124,6 @@ if (!companyId || !knowledgeBaseId) {
 /* ------------------------------------------------------------------------- *
  * The run
  * ------------------------------------------------------------------------- */
-
-const TIER = process.env.VERSE_METRIC_TIER ?? "V1";
-const model = VERSE_MODELS[TIER];
-
-if (!model) {
-  console.error(`\nUnknown tier ${TIER}. Use V1, V2 or V3.\n`);
-  process.exit(1);
-}
 
 const key =
   TIER === "V1"

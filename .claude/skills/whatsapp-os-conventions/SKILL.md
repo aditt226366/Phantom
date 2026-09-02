@@ -341,10 +341,16 @@ Two other presentations of the same thing, so they are not chased separately:
   — so the reset is the worker dying and taking its socket down, not the
   database closing it.
 - **`Could not read the test report at …report.json` (exit 127).** Vitest died
-  before writing the report. Every file had already reported ✓. **The
-  pre-commit hook matches this signature too**, as of Phase 3 — it knew only
-  `"Worker exited unexpectedly"` and refused a commit with 63 files reported and
-  no assertion failing, which is the false red the retry exists to absorb.
+  before writing the report. **The pre-commit hook matches this signature too**,
+  as of Phase 3 — it knew only `"Worker exited unexpectedly"` and refused a
+  commit with 63 files reported and no assertion failing, which is the false red
+  the retry exists to absorb.
+
+  This was recorded as happening only once every file had already reported ✓,
+  and that is not a property of it. Phase 9 saw the same exit 127 kill the
+  process **three files into web-server**, with nothing else run and no summary
+  printed. It is the whole process dying, and it can die at any point — see "The
+  machine before the config" below.
 
 **What to do about it:** free memory. On a 16 GB machine, browsers and the WSL
 VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
@@ -372,6 +378,8 @@ correct and must not be relaxed casually: it is what stops a real failure
 getting a second roll of the dice. Phase 7 hit it twice and re-ran by hand.
 Widening it belongs in its own diff, never in one that needed it to pass.
 
+
+**The full diagnosis, and the order to work in, is under "The machine before the config" at the end of this section.** `scripts/test-floor.mjs` and `vitest.config.mts` both point there.
 
 **`vi.fn` with a zero-argument implementation types its calls as `[]`.** So
 `mock.calls[0][2]` is an index into an empty tuple: it runs perfectly and fails
@@ -613,6 +621,58 @@ Run it again at the end of a phase, not only when the tests are written. The
 tests that drifted were all correct when committed; what changed underneath them
 was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
 ORM assertions into extension tests.
+
+
+### The machine before the config
+
+`scripts/test-floor.mjs` and `vitest.config.mts` both point here, because this
+file has now been rewritten twice by somebody reading a dying fork as a
+configuration problem. Work in this order.
+
+**The machine is oversubscribed before the gate starts.** Measured at rest, with
+nothing building: **18 GB of process commit and ~23 GB of total commit charge
+against 16 GB of physical RAM, with 2.4 GB available.** `vmmemWSL` is the single
+largest holder at 3.6 GB; the rest is a long tail of browser, editor, Steam and
+Defender processes, none individually alarming. `next build` and a forked worker
+per test file land on top of that. The earlier note recording 11.4 GB resident
+and 0.8 GB free was the same machine in a worse moment — the point of the newer
+figure is that the headroom is already gone *before* anything runs.
+
+**One shape, three faults' worth of symptoms.** These are not separate problems
+and must not be chased separately:
+
+| symptom | what died |
+| --- | --- |
+| `Worker exited unexpectedly`, report still written, a named file missing | one fork |
+| exit 127, **no report at all**, run stops mid-file | the whole vitest process |
+| Playwright at 3.4x its usual wall time, 48 screenshots failing on 44px layout shifts | nothing — it thrashed |
+
+The third had never been written down and looks nothing like the other two: page
+heights change because fonts and layout resolve differently under pressure, so
+it presents as a mass visual regression on a commit that touched no CSS. If a
+screenshot run is both very slow and very red, read the wall time first.
+
+The first two were folded together by the pre-commit retry for forty entries in
+`.git/gate-retries.log`, because it only asks "short, non-zero, nothing actually
+failing?" and both answer yes. Only the first leaves a named file behind — and
+blaming that file is exactly how the last investigation went wrong.
+
+**The cross-project-overlap theory is dead, and `vitest.config.mts` says so.**
+Twice running, the file that never reported was a `db` file while every `worker`
+file had finished, which put the crash at the project handover. The gate's test
+step was split into two sequential vitest processes to test that. Over five
+gates it failed twice — once as the whole `!db` process dying, and once as a
+worker dying **inside the `db` process running alone, with no other project in
+it**. Overlap was not reduced, it was absent. The split is kept because it costs
+nothing measurable (228-236s split, 226-243s single, same within noise) and a
+failure now names which half died — not because it fixed anything.
+
+**So: free memory first.** The page-cache drop
+(`wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"`,
+recorded earlier in this section) is non-destructive and has worked
+repeatedly. Nothing in `vitest.config.mts` is worth editing before that
+has been tried, and a fourth rewrite of its pool settings is very unlikely to be
+the answer.
 
 ## Next.js 16
 

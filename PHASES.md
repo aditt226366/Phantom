@@ -183,3 +183,41 @@ The correction worth remembering: "needs a person" was derived, gained a second
 writer, and the first fix faked the derivation's inputs by incrementing
 `unread_count` — so opening a thread to see why a person was wanted destroyed
 the record that one was. It is a state column now. See `docs/plans/phase-8.md`.
+
+---
+
+## Phase 9 — The Verse AI layer  *(runtime tagged; campaign layer held)*
+
+A tenant uploads what their business knows. A customer asks a question. The
+passages that actually answer it are retrieved and handed to a model, and what
+it writes goes back. **If nothing retrieved clears a similarity floor, Verse
+says it does not know and asks for a person** — it never falls back on the
+model's general knowledge.
+
+That refusal is the product. A retrieval system that answers from general
+knowledge when its index comes up empty is not a worse version of this one; it
+is a fluent, confident, invented answer about the tenant's own policies, sent
+to their customer over their own number.
+
+**Tagged `phase-9-runtime`. `phase-9` is deliberately NOT tagged.** The 20/5
+acceptance metric — 20 questions the knowledge base answers, 5 it does not —
+has never run, because there are no provider credentials. `npm run verse:metric`
+exits non-zero and names the four missing variables rather than skipping.
+
+The runtime can sit unmeasured because nothing points a customer at it. A
+campaign is the mechanism that aims the engine at real people on a schedule,
+and an unmeasured floor behind one either refuses answerable questions or
+invents policies, invisibly in both directions.
+
+**Gate:** 1,853 tests, 128 screenshots, `db:verify` clean on dev and test, a
+destructive policy audit with exactly five survivors, and fourteen break-onces.
+The acceptance metric: NOT RUN.
+
+Two instruments earned their place. The **requirements table** in
+`docs/plans/phase-9.md` — one row per requirement naming the commit and the
+specific assertion — found two gaps that fourteen commits and 1,800 passing
+tests had not: lead scoring whose only evidence was a constant asserted to be a
+member of a set, and a campaign audience nothing ever wrote, which would have
+let a campaign start and finish having messaged nobody. And the **screenshots**,
+reviewed as images, caught three fixture faults no assertion was in a position
+to see. See `docs/plans/phase-9.md`.

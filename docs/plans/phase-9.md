@@ -2,7 +2,8 @@
 
 Working plan, written as the phase ran. Status: **the runtime is tagged
 `phase-9-runtime`. The campaign half is code-complete and DELIBERATELY
-UNTAGGED** — see the acceptance metric below.
+UNTAGGED** — see the acceptance metric below, and "At the campaign
+code-complete" for what did run.
 
 Amendment A2, with A5 as a compliance constraint on it. A tenant uploads what
 their business knows; a customer asks a question; the passages that actually
@@ -352,7 +353,107 @@ than quietly fixed, because what the exercise catches is the point of it.
 | Dashboard: re-read the cards not replaced | `b12502d` | `leadPyramid` and `orders` re-read and both still true — orders genuinely do not exist, and `leadPyramid` already named order tracking rather than the AI layer. |
 | 20/5 command, questions seeded as data, exits non-zero | `b12502d` | `verse-metric.mjs` verified exiting 1 and naming all four variables; the 25 questions are checked in. |
 | **The 20/5 metric itself** | — | **NOT RUN.** No credentials. See the top of this document. |
-| Screenshots | — | See "At the campaign code-complete" below. |
+| Screenshots | `190edb9` | Ten baselines at two viewports, reviewed as images. Caught three fixture faults no assertion could: a campaign naming one template while its threads showed another, a hardcoded greeting rendering "Hi Meera" on Rahul's thread, and a handoff refused for the weaker of two reasons. Verified deterministic on a second run at `maxDiffPixelRatio: 0`. |
+
+---
+
+## At the campaign code-complete
+
+Run on 2 September 2026. **The campaign layer is deliberately NOT tagged** —
+see the acceptance metric at the top of this document.
+
+| Check | Result |
+| --- | --- |
+| `npm test` | **1,853 passed**, 2 skipped |
+| `npm run test:visual` | **128 passed**, at both viewports |
+| typecheck / lint / build | clean |
+| Migration drift | only the HNSW index, waived by name |
+| `npm run db:verify -- dev` | all four invariants hold |
+| `npm run db:verify -- test` | all four invariants hold |
+| Destructive policy audit | **exactly 5 survivors**, 63 failed |
+| Acceptance metric (20/5) | **NOT RUN — no credentials** |
+
+### Why the tag is held
+
+The runtime can sit unmeasured because nothing points a customer at it. A
+campaign is precisely the mechanism that aims the engine at real people on a
+schedule, and an unmeasured floor behind a campaign either refuses answerable
+questions or invents policies — invisibly in both directions.
+
+So `phase-9-runtime` is tagged and `phase-9` is not. The work is complete and
+the evidence for every requirement is in the table above; what is missing is
+the one measurement that says the floor is in the right place.
+
+**To finish the phase:** set the four keys, run
+`npm run verse:metric -- <companyId> <knowledgeBaseId>`, read the twenty
+answers rather than trusting the exit code, set `floor.ts` `status` to
+`"measured"` with the question set and the date, and tag `phase-9`.
+
+### The screenshots, and what only they caught
+
+Ten baselines at two viewports, reviewed as images rather than accepted as
+green. Three fixture faults came out of looking, and not one of them is
+something an assertion in this repository was in a position to notice:
+
+- the campaign page said *"Opens with: order_shipped"* while its own
+  conversations showed a Diwali message — two stories, and the screenshots are
+  the only place anybody sees those two pages side by side;
+- the opening greeting was hardcoded, so **Rahul Nair's thread opened with "Hi
+  Meera"**;
+- the handoff thread was refused for `no_grounding`, which was coherent but
+  weaker than a refusal by policy — it asks for a refund now, which holds
+  whatever the knowledge base happens to contain, and matches the campaign's
+  own stated goal.
+
+The handoff shot is the one that matters and the one least likely to be looked
+at: it is the only place the refusal — the entire product — appears as
+something a customer actually receives. It is seeded with the real
+`handoffMessage` and `handoffReason` copy, so a change to either moves the
+baseline.
+
+**Verified deterministic.** The suite was run a second time without
+`--update-snapshots` and passed at `maxDiffPixelRatio: 0`. That is the only
+evidence that nothing in these pictures drifts between runs — the property the
+inbox badge lacked for five phases.
+
+### The destructive policy audit
+
+RLS disabled on all 33 tenant tables, `rls-isolation.test.ts` re-run. Five
+survivors, exactly the five in `NOT_POLICY_TESTS`, none of which reads a
+tenant row:
+
+```
+is connected as a role that RLS applies to      role attributes
+seeded two distinct companies                   fixture sanity
+is not a superuser and does not bypass RLS      role attributes
+owns these tables                               catalog
+can still TRUNCATE, which is why app_runtime    a grant, and TRUNCATE
+  must not                                      ignores RLS by design
+```
+
+No sixth. Restored with `npm run db:nuke -- test` rather than by re-enabling by
+hand, because the migrations are the only copy of that DDL worth trusting.
+
+### Fourteen break-onces
+
+Only where a failure would be silent.
+
+| Break | Result |
+| --- | --- |
+| the similarity floor stops filtering | fails |
+| similarity/distance direction inverted | fails |
+| A5's off-topic refusal softened to a disclaimer | fails |
+| driver exclusivity widened to always-true | fails |
+| the embedding pin, 1536 → 768 | fails |
+| a second copy of a model-id literal | fails |
+| the window check removed | fails |
+| the escalation call skipped | fails |
+| usage deduped on the job's id instead of ours | fails |
+| the daily cap becomes exclusive | fails |
+| the send window stops closing | fails |
+| the mid-flight template revocation is never noticed | fails |
+| the reply path re-opens lapsed windows itself | fails |
+| a `node:fs` import reaches the client-safe verse barrel | fails |
 
 ---
 

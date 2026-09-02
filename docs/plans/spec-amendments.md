@@ -159,7 +159,15 @@ what three reply buttons per question produces. See `phase-8.md`.
 
 ## A2. AI Messaging is unchanged
 
-**Changes: nothing. In progress as Phase 9** (`phase-9.md`).
+**Changes: nothing. Phase 9 — runtime tagged, campaign layer code-complete and
+deliberately untagged** (`phase-9.md`).
+
+The tag is held on one thing: the 20/5 acceptance metric has never run, because
+there are no provider credentials. The runtime can sit unmeasured because
+nothing points a customer at it; a campaign is the mechanism that aims the
+engine at real people on a schedule, and an unmeasured similarity floor behind
+one either refuses answerable questions or invents policies — invisibly in both
+directions.
 
 Recorded so that "the flow builder replaced it" is not inferred from A1. The AI
 layer ships as originally specified, after the flow builder, and A5 below is a

@@ -17,7 +17,9 @@ import {
   handoffReason,
   openaiEmbeddingRouter,
   openaiRouter,
+  scoreConversation,
   turnsFrom,
+  VERSE_SCORING_TIER,
   type ModelRouter,
   type VerseTier,
 } from "@whatsapp-os/core/verse";
@@ -282,6 +284,16 @@ export async function handleVerseReply(job: VerseReplyJob): Promise<void> {
     { ...SEND_JOB_OPTIONS, jobId: sendJobId(sent.messageId, sent.sendAttempt) },
   );
 
+  /*
+   * Score the lead, on the cheapest tier and never the campaign's.
+   *
+   * After the answer and outside its transaction, deliberately: a scoring call
+   * that fails must not lose a reply the customer is waiting for. It is the
+   * least valuable call in the phase and the most frequent, so it is also the
+   * one that must never be on the critical path.
+   */
+  await scoreLead(companyId, context, turnsFrom(context.history), sent.messageId, now);
+
   log.info("verse.reply: answered", {
     conversationId,
     messageId: sent.messageId,
@@ -397,4 +409,52 @@ export function countVerseTurnsSinceCustomerProgress(
   }
 
   return count;
+}
+
+/**
+ * Classify how close this customer is to buying, and record it.
+ *
+ * Failures are swallowed on purpose. A score is a nice-to-have that runs on
+ * every inbound message of every campaign; an answer is the product. Letting a
+ * classifier failure fail the job would retry the whole reply - which has
+ * already been sent - five times.
+ *
+ * NULL is not COLD. A score that could not be produced is absent, because a
+ * report counting unscored contacts as cold would tell a business its entire
+ * contact book was uninterested.
+ */
+async function scoreLead(
+  companyId: string,
+  context: { contactId: string },
+  turns: ReturnType<typeof turnsFrom>,
+  messageId: string,
+  now: Date,
+): Promise<void> {
+  try {
+    const router = routerFor(VERSE_SCORING_TIER);
+    if (!router) return;
+
+    const score = await scoreConversation(router, turns);
+    if (!score) return;
+
+    await withCompany(companyId, async (db, scoped) => {
+      await db.contact.updateMany({
+        where: { id: context.contactId, companyId: scoped },
+        data: { leadScore: score, leadScoreAt: now },
+      });
+
+      await recordUsage(db, scoped, {
+        kind: "verse.lead_score",
+        /* Our message id, for the reason the reply's usage uses it: the job
+           retries and a job-id key would charge twice for one classification. */
+        dedupeKey: usageDedupeKey("verse.lead_score", messageId),
+        occurredAt: now,
+      });
+    });
+  } catch (error) {
+    log.warn("verse.reply: scoring failed", {
+      messageId,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

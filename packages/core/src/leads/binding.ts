@@ -77,23 +77,47 @@ export const flowActionSchema = z.object({
 });
 
 /**
+ * Enrol the row in a Verse campaign.
+ *
+ * The third member, and structurally the simplest. A cold lead has never
+ * written to us, so the 24-hour window is shut and the only thing that may go
+ * out is an approved template - which is what a TEMPLATE binding already
+ * sends. What differs is afterwards: the conversation is claimed for Verse, so
+ * the reply is answered from the campaign's knowledge base rather than landing
+ * in the inbox unattended.
+ *
+ * It names a CAMPAIGN rather than a knowledge base and a model separately,
+ * because a campaign is already the thing that bundles those with a template,
+ * a schedule and a cap - and a binding that could set them independently would
+ * be a second place for a campaign's configuration to live.
+ */
+export const verseActionSchema = z.object({
+  kind: z.literal("VERSE"),
+  verseCampaignId: z.string().min(1),
+  mapping: columnMappingSchema,
+});
+
+/**
  * Every action a binding can carry.
  *
  * A discriminatedUnion rather than a plain union: with one member the two are
  * identical, and with two the discriminated form reports "unknown kind"
- * instead of listing every field of every member as a possible error.
+ * instead of listing every field of every member as a possible error. With
+ * three that property is doing real work.
  */
 export const leadSourceActionSchema = z.discriminatedUnion("kind", [
   templateActionSchema,
   flowActionSchema,
+  verseActionSchema,
 ]);
 
 export type TemplateAction = z.infer<typeof templateActionSchema>;
 export type FlowAction = z.infer<typeof flowActionSchema>;
+export type VerseAction = z.infer<typeof verseActionSchema>;
 export type LeadSourceAction = z.infer<typeof leadSourceActionSchema>;
 
 /** The kinds, for the enum column and for exhaustiveness. */
-export const LEAD_SOURCE_ACTIONS = ["TEMPLATE", "FLOW"] as const;
+export const LEAD_SOURCE_ACTIONS = ["TEMPLATE", "FLOW", "VERSE"] as const;
 export type LeadSourceActionKind = (typeof LEAD_SOURCE_ACTIONS)[number];
 
 /**

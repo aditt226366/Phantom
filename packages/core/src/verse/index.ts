@@ -87,3 +87,6 @@ export {
   templateStopsCampaign,
 } from "./schedule.ts";
 export type { Schedule, SendVerdict } from "./schedule.ts";
+
+export { parseLeadScore, scoreConversation } from "./score.ts";
+export type { LeadScore } from "./score.ts";

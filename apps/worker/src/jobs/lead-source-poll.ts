@@ -176,11 +176,35 @@ export async function handleLeadSourcePoll(
               binding.flowVersion.id,
               binding.flowVersion.graph,
             ),
+            /* Nothing to claim: a flow run is created by the tap, not here. */
+            verseCampaignId: null,
           }
         : null
-      : binding.template
-        ? { template: binding.template, payloads: [] }
-        : null;
+      : action?.kind === "VERSE"
+        ? /*
+           * The third member, and the smallest arm of the three.
+           *
+           * A cold lead has never written to us, so the window is shut and the
+           * only thing that may go out is an approved template - which is
+           * exactly what a TEMPLATE binding sends. So enrolling a row in a
+           * campaign contacts it identically; what differs is that the
+           * conversation is then claimed for Verse, so the reply is answered
+           * rather than landing in the inbox unattended.
+           *
+           * A campaign that is not RUNNING is treated as misconfigured rather
+           * than skipped silently: a binding pointing at a paused campaign
+           * would otherwise poll for ever, contact nobody, and report success.
+           */
+          binding.verseCampaign && binding.verseCampaign.status === "RUNNING"
+          ? {
+              template: binding.verseCampaign.template,
+              payloads: [],
+              verseCampaignId: binding.verseCampaign.id,
+            }
+          : null
+        : binding.template
+          ? { template: binding.template, payloads: [], verseCampaignId: null }
+          : null;
 
   if (!action || !target || (action.kind === "FLOW" && target.payloads.length === 0)) {
     /*
@@ -305,6 +329,7 @@ export async function handleLeadSourcePoll(
        */
       claim = await withCompany(companyId, (db, scoped) =>
         claimLeadRow(db, scoped, {
+          verseCampaignId: target.verseCampaignId,
           leadSourceId,
           spreadsheetId: binding.spreadsheetId,
           tab: binding.tab,

@@ -194,6 +194,11 @@ export const OUT_OF_BAND_DDL = new Set([
      A CHECK rather than NOT NULL because a DRAFT is built field by field in
      the wizard and NOT NULL would refuse the insert that creates it. */
   "check:verse_campaigns.verse_campaigns_running_has_a_number",
+  /* A thread Verse handled is still a thread. The same partition assertion the
+     flow count carries: a FILTER that overlaps or misses makes the chart
+     quietly not add up, and one statement computing both is the only thing
+     that would notice. */
+  "check:dashboard_rollups.dashboard_rollups_verse_within_total",
   /* The HNSW index behind retrieval.
      schema.prisma cannot express an hnsw index, and it cannot index an
      `Unsupported` column at all - so `prisma migrate diff` wants to DROP this

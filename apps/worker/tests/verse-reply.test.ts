@@ -102,6 +102,20 @@ vi.mock("../src/env.ts", () => ({
 }));
 
 const completions: Array<Record<string, unknown>> = [];
+
+/**
+ * The ANSWER completions, separated from the scoring ones.
+ *
+ * A successful reply makes two model calls: the answer, and a lead score on
+ * the cheapest tier. Counting both together would make "no model was called"
+ * assertions pass for a run that skipped the answer and scored anyway - so the
+ * two are told apart by their output ceiling, which is 512 for an answer and 8
+ * for a one-word classification.
+ */
+const answers = () =>
+  completions.filter(
+    (request) => Number(request.maxOutputTokens ?? 0) > 16,
+  );
 const embedCalls: string[][] = [];
 
 /*
@@ -187,7 +201,7 @@ describe("the window is checked before the model", () => {
   it("answers when the window is open", async () => {
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(1);
+    expect(answers()).toHaveLength(1);
     expect(materialiseFlowMessage).toHaveBeenCalledTimes(1);
     expect(queueAdd).toHaveBeenCalledTimes(1);
   });
@@ -203,7 +217,7 @@ describe("the window is checked before the model", () => {
 
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(0);
+    expect(answers()).toHaveLength(0);
     expect(embedCalls).toHaveLength(0);
     expect(materialiseFlowMessage).not.toHaveBeenCalled();
     expect(queueAdd).not.toHaveBeenCalled();
@@ -240,7 +254,7 @@ describe("escalation", () => {
 
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(0);
+    expect(answers()).toHaveLength(0);
     expect(flagNeedsHuman).toHaveBeenCalledTimes(1);
 
     const [, , , input] = flagNeedsHuman.mock.calls[0]!;
@@ -257,7 +271,7 @@ describe("escalation", () => {
 
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(0);
+    expect(answers()).toHaveLength(0);
     expect(flagNeedsHuman).toHaveBeenCalledTimes(1);
     expect(flagNeedsHuman.mock.calls[0]![3].reason).toContain("refund");
   });
@@ -270,7 +284,7 @@ describe("escalation", () => {
 
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(0);
+    expect(answers()).toHaveLength(0);
   });
 
   it("tells the customer, and releases the driver", async () => {
@@ -353,7 +367,7 @@ describe("the driver is re-read at answer time", () => {
 
     await handleVerseReply(JOB);
 
-    expect(completions).toHaveLength(0);
+    expect(answers()).toHaveLength(0);
     expect(materialiseFlowMessage).not.toHaveBeenCalled();
     expect(flagNeedsHuman).not.toHaveBeenCalled();
   });

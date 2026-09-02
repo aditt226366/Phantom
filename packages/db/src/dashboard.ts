@@ -172,6 +172,29 @@ export async function refreshDashboardRollup(
       SELECT count(DISTINCT conversation_id)::int AS n FROM flow_runs
     ),
     /*
+     * Threads a Verse campaign stood in.
+     *
+     * From the conversation's DRIVER rather than from campaign recipients,
+     * and the difference matters. A recipient row says a campaign MESSAGED
+     * somebody; the driver says Verse was actually the one speaking for the
+     * business in that thread. A campaign that opened a thousand conversations
+     * and then handed every one of them to a person automated nothing, and
+     * counting recipients would report the opposite.
+     *
+     * Driver OR driver_ref: a thread Verse has since released - because it
+     * handed over - still had Verse in it, and a count that dropped those
+     * would fall every time the assistant did the right thing.
+     */
+    verse AS (
+      SELECT count(DISTINCT c.id)::int AS n
+        FROM conversations c
+       WHERE c.driver = 'VERSE'
+          OR EXISTS (
+               SELECT 1 FROM verse_campaign_recipients r
+                WHERE r.conversation_id = c.id AND r.status = 'SENT'
+             )
+    ),
+    /*
      * Spend since the first of the month, per currency, as text.
      *
      * to_jsonb over the sum would write a JSON number, and cost_micros is a
@@ -206,6 +229,7 @@ export async function refreshDashboardRollup(
       conversations_messaged, conversations_replied, conversations_by_source,
       contacts_total, contacts_new_today, contacts_by_score,
       conversations_automated,
+      conversations_verse,
       cost_by_currency, cost_unpriced_count
     )
     SELECT
@@ -218,8 +242,9 @@ export async function refreshDashboardRollup(
       threads.messaged, threads.replied, conv_source.by_source,
       contact.total, contact.new_today, score.by_score,
       automated.n,
+      verse.n,
       cost.by_currency, unpriced.n
-    FROM msg, fail, threads, conv, conv_source, contact, score, automated,
+    FROM msg, fail, threads, conv, conv_source, contact, score, automated, verse,
          cost, unpriced
     ON CONFLICT (company_id) DO UPDATE SET
       computed_at             = EXCLUDED.computed_at,
@@ -245,6 +270,7 @@ export async function refreshDashboardRollup(
       contacts_new_today      = EXCLUDED.contacts_new_today,
       contacts_by_score       = EXCLUDED.contacts_by_score,
       conversations_automated = EXCLUDED.conversations_automated,
+      conversations_verse = EXCLUDED.conversations_verse,
       cost_by_currency        = EXCLUDED.cost_by_currency,
       cost_unpriced_count     = EXCLUDED.cost_unpriced_count
   `;

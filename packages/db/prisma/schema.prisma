@@ -2348,6 +2348,17 @@ model DashboardRollup {
   /// that proxy for the AI card because it counts every untouched thread as an
   /// automation success; the same objection applies here and the same answer.
   conversationsAutomated Int @default(0) @map("conversations_automated")
+  /// Threads a Verse campaign stood in.
+  ///
+  /// Its own column rather than a wider reading of the one above, because the
+  /// two are different capabilities with different remedies: a flow taking no
+  /// work needs its tree looked at, a campaign taking none needs its knowledge
+  /// base looked at. Collapsed, a tenant whose flow does nothing and whose
+  /// campaigns do everything reads one healthy number and learns nothing.
+  ///
+  /// They may overlap - a thread a flow handed over and a campaign later
+  /// picked up is counted by both - which is why no CHECK asserts their sum.
+  conversationsVerse Int @default(0) @map("conversations_verse")
 
   /// Spend since monthStart, per currency, in micros held as strings. A map
   /// rather than a total because there is no exchange rate in this system;

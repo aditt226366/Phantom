@@ -232,6 +232,7 @@ describe("the feature gate", () => {
         "ai-messaging/new/page.tsx",
         "ai-messaging/[campaignId]/page.tsx",
         "ai-messaging/knowledge/page.tsx",
+        "ai-messaging/rag/page.tsx",
         "billing/page.tsx",
         "bulk-messaging/page.tsx",
         "bulk-messaging/new/page.tsx",

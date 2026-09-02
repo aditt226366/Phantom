@@ -246,6 +246,16 @@ every compose command. Single quotes are literal for both Compose and dotenv.
 
 ## Tests
 
+**An observational entry says how many times it was observed.** "Always after
+every file reported" is a claim; "observed twice, both after every file
+reported" is data, and the next person can see at a glance whether their third
+observation should change it. The first form is how a sample of two became a
+property of the system twice in this file — "always the db project" and "always
+auth-schema" were both written from two runs and both turned out to be wrong,
+and the second cost an investigation that rewrote `vitest.config.mts`. Write the
+count. Where the denominator is unknown, say that too: 41 retries with no record
+of how many gates ran is 41 observations, not a rate.
+
 **Every `DATABASE_URL*` must be redirected.** `assertTestDatabaseOnly()` runs in
 both setup files and enforces it. Three variables have each caused this once:
 the code under test reads a *different database* than the assertions, nothing
@@ -279,6 +289,13 @@ test of a module that uses it. Scripts that import such a module run with
 `Error: [vitest-pool]: Worker forks emitted error / Caused by: Error: Worker
 exited unexpectedly`, in a full `vitest run`, with **zero tests failing** and a
 non-zero exit.
+
+Observed 41 times between 2026-08-15 and 2026-09-02, across 32 distinct
+commits — that is the length of `.git/gate-retries.log`, which the pre-commit
+hook appends to whenever it retries. **It is a count of retries, not a rate:**
+nothing records how many gates ran in total, so the log cannot say whether this
+is one run in three or one in thirty. It also merges two distinct failures until
+Phase 9 separated them — see "The machine before the config".
 
 It was investigated across two phases as a race, and it is not one. The machine
 runs out of physical memory and the OS refuses or kills a fork. Four
@@ -328,11 +345,13 @@ Treat a recurrence as pressure, not as a race.
 
 **Diagnosing one:** match on the signature — a file that never reports, zero
 tests failing, a non-zero exit — and find it by diffing reported names against
-the files on disk **per project**. Do not go by filename: it has been
-`auth-schema.test.ts`, `conversation-send.test.ts`,
-`company-deactivation.test.ts`, `webhook-throttle.test.ts` and
-`read-receipts.test.ts` at different times, and two older notes claiming "always
-the db project" and "always auth-schema" were both simply wrong.
+the files on disk **per project**. Do not go by filename: **seven distinct files across seven
+observations** — `auth-schema.test.ts`, `conversation-send.test.ts`,
+`company-deactivation.test.ts`, `webhook-throttle.test.ts`,
+`read-receipts.test.ts`, `dashboard-ordering.test.ts` and
+`number-refresh.test.ts` — no file twice. Two older notes claiming "always the
+db project" and "always auth-schema" were each written from two observations and
+were both wrong.
 
 Two other presentations of the same thing, so they are not chased separately:
 
@@ -364,8 +383,11 @@ already capped at 4 GB, `vmmemWSL` still held 2.8 GB of it as cache:
 wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
 ```
 
-That took it to 1117 MB, and the very next gate run passed — on two separate
-occasions in Phase 7, after five and two consecutive crashed runs respectively.
+That took it to 1117 MB, and the very next gate run passed — **observed three
+times**: twice in Phase 7 (after five and after two consecutive crashed runs)
+and once in Phase 9, where the hook ran it automatically on its retry path and
+the retry passed. No occasion is recorded where it was tried and did not help,
+which is weaker than it sounds: nobody was recording the failures.
 Clean cache only: no restart, no container bounce, nothing lost, and Postgres
 simply re-reads from disk. It is a great deal cheaper than editing `.wslconfig`,
 which needs `wsl --shutdown` and takes the database and Redis down with it.
@@ -623,14 +645,69 @@ was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
 ORM assertions into extension tests.
 
 
+### Every limited read needs a total ordering
+
+**`ORDER BY` on a column that is not unique is not an order.** Postgres returns
+tied rows in whatever order the plan yields and may yield a different one
+tomorrow for the same rows. The fix is always the same: make the last sort key
+a unique column, which in this schema means `{ id: "asc" }`.
+
+**With a `take`, the tie decides which rows are in the answer at all.** Six of
+eight tied rows come back and no two runs need agree on which six. Nothing looks
+wrong — the list is full, any count beside it is computed separately and stays
+right, and the two rows that vanished are unseen precisely because they are not
+on the page. Without a `take` it is milder: the page reorders itself between two
+loads, which a screenshot suite at `maxDiffPixelRatio: 0` will find and a person
+usually will not.
+
+**Under keyset pagination it is worse again.** `cursor` + `skip: 1` means
+"everything after the cursor row in this ordering", so if the ordering does not
+place that row uniquely, rows tied with it can land on both pages or neither. An
+operator paging a list would simply never see a row.
+
+**`created_at` ties are the normal case here, not the exotic one.** Measured, in
+this system: Meta's refresh writes an account's numbers in one pass; a broadcast
+advances every recipient's conversation to one `occurredAt`; a campaign audience
+is a single INSERT; a Sheets poll writes a page of rows in one transaction; an
+integration check runs against every integration at once. `name` is not unique
+either — one template approved in two languages is two rows sharing it.
+
+**`packages/core/tests/total-ordering.test.ts` enforces it**, by reading the
+`orderBy` of every `findMany` that carries a `take` and failing when the last
+key is not `id`. `ORDER_INDEPENDENT` is the escape hatch and takes a reason. Two
+things it deliberately does not cover, both of which cost a draft to learn:
+
+- **It matches `take[:,]`, not `take:`.** A helper taking its own limit as a
+  parameter passes the shorthand `take,` — three do, including
+  `nextCampaignRecipients` on the campaign send path. The first draft matched
+  only `take:`, skipped all three in silence and was green.
+- **It cannot see a tie resolved in JavaScript.** `broadcastProgress` sorts
+  failure reasons by count with `Array.prototype.sort`, which is stable, so
+  equal counts keep the order an unordered `groupBy` returned. A second sort key
+  is the fix and no source-level check will find the next one.
+
+**A `groupBy` is fine when its result is consumed as a lookup** — a `Map`, an
+`Object.fromEntries`, a `.find()` — and is a latent instance the moment it is
+rendered in sequence. The flow builder's run-state chips were exactly that, and
+their order is now declared in `flow-display.ts` rather than asked of the
+database, because a lifecycle is not something a column knows: `ORDER BY status`
+spells it alphabetically and reads as nothing.
+
+**Two of these fixes have no test that fails without them**, and both say so at
+the top of their own file rather than looking like evidence
+(`admin-pagination.test.ts`, and the failure-report case in
+`tie-consequences.test.ts`). Both need the plan to change between two queries,
+and a six-row fixture gives Postgres one plan. The source-level check is the
+guard for the first; the second has none.
+
 ### The machine before the config
 
 `scripts/test-floor.mjs` and `vitest.config.mts` both point here, because this
 file has now been rewritten twice by somebody reading a dying fork as a
 configuration problem. Work in this order.
 
-**The machine is oversubscribed before the gate starts.** Measured at rest, with
-nothing building: **18 GB of process commit and ~23 GB of total commit charge
+**The machine is oversubscribed before the gate starts.** One measurement, at
+rest, with nothing building: **18 GB of process commit and ~23 GB of total commit charge
 against 16 GB of physical RAM, with 2.4 GB available.** `vmmemWSL` is the single
 largest holder at 3.6 GB; the rest is a long tail of browser, editor, Steam and
 Defender processes, none individually alarming. `next build` and a forked worker
@@ -641,11 +718,11 @@ figure is that the headroom is already gone *before* anything runs.
 **One shape, three faults' worth of symptoms.** These are not separate problems
 and must not be chased separately:
 
-| symptom | what died |
-| --- | --- |
-| `Worker exited unexpectedly`, report still written, a named file missing | one fork |
-| exit 127, **no report at all**, run stops mid-file | the whole vitest process |
-| Playwright at 3.4x its usual wall time, 48 screenshots failing on 44px layout shifts | nothing — it thrashed |
+| symptom | what died | times seen |
+| --- | --- | --- |
+| `Worker exited unexpectedly`, report still written, a named file missing | one fork | 7 with the file named; 41 retries logged in total, which merges this row with the next |
+| exit 127, **no report at all**, run stops mid-file | the whole vitest process | 2 |
+| Playwright at 3.4x its usual wall time, 48 screenshots failing on 44px layout shifts | nothing — it thrashed | 1 |
 
 The third had never been written down and looks nothing like the other two: page
 heights change because fonts and layout resolve differently under pressure, so
@@ -663,7 +740,9 @@ file had finished, which put the crash at the project handover. The gate's test
 step was split into two sequential vitest processes to test that. Over five
 gates it failed twice — once as the whole `!db` process dying, and once as a
 worker dying **inside the `db` process running alone, with no other project in
-it**. Overlap was not reduced, it was absent. The split is kept because it costs
+it**. Overlap was not reduced, it was absent. One observation is enough to
+falsify "remove either and it stops"; it is not enough to put a rate on
+anything, and two failures in five is a sample of five. The split is kept because it costs
 nothing measurable (228-236s split, 226-243s single, same within noise) and a
 failure now names which half died — not because it fixed anything.
 

@@ -57,6 +57,9 @@ export async function templateEditQuota(
     now.getTime() - TEMPLATE_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   );
 
+  /* Order-independent despite the tie: only `rows.length` and `rows[0]` are
+     used, and two edits sharing a created_at give the same oldestAt either
+     way - it is the value that is read, not the row. */
   const rows = await db.whatsAppTemplateEdit.findMany({
     where: { companyId, templateId, createdAt: { gte: since } },
     orderBy: { createdAt: "asc" },

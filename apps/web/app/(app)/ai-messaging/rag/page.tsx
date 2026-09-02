@@ -40,7 +40,8 @@ export default async function RagPage() {
   const bases = await withCompany(session.companyId, (db, companyId) =>
     db.knowledgeBase.findMany({
       where: { companyId, archivedAt: null },
-      orderBy: { createdAt: "desc" },
+      /* Tie-broken on id, as the knowledge list is. */
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: {
         id: true,
         name: true,

@@ -294,7 +294,17 @@ export async function listCompanies(
   /* One more than asked for, so "is there a next page" needs no count query. */
   const rows = await adminPrisma.company.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    /*
+     * Then id, and here a tie does more than reorder a page.
+     *
+     * This is keyset pagination: the next page starts AFTER the cursor row in
+     * this ordering. If the ordering does not place the cursor row uniquely -
+     * and created_at does not, since a seeded or imported batch of companies
+     * shares one - then rows tied with it can fall on either side of the
+     * boundary, so a company is skipped entirely or shown on two pages. An
+     * operator paging a company list would simply never see it.
+     */
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: filter.limit + 1,
     ...(filter.cursor ? { cursor: { id: filter.cursor }, skip: 1 } : {}),
     select: {
@@ -304,7 +314,9 @@ export async function listCompanies(
       deactivatedAt: true,
       users: {
         where: { role: "OWNER" },
-        orderBy: { createdAt: "asc" },
+        /* Then id: `take: 1` over a tie picks an arbitrary owner, and this is
+           the name the admin list shows for the company. */
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: 1,
         select: { username: true, lastLoginAt: true },
       },
@@ -367,7 +379,9 @@ export async function getCompanyDetail(
       _count: { select: { users: true } },
       users: {
         where: { role: "OWNER" },
-        orderBy: { createdAt: "asc" },
+        /* Then id: `take: 1` over a tie picks an arbitrary owner, and this is
+           the name the admin list shows for the company. */
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: 1,
         select: { username: true, lastLoginAt: true },
       },
@@ -534,6 +548,8 @@ export async function getPlatformOverview(
 
   const weekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
+  /* Every groupBy here is order-independent: each is reduced to a number or a
+     lookup below, and none is rendered in sequence. */
   const [companies, users, callsToday, spend, plans, unroutable] =
     await Promise.all([
     adminPrisma.company.groupBy({
@@ -939,6 +955,9 @@ export interface SealedSecretRow2 {
  * succeeded.
  */
 export async function listAllSealedSecrets(): Promise<SealedSecretRow2[]> {
+  /* (companyId, key) is not unique across integrations, and that is fine here:
+     rotation re-seals every row it is given, so the order is not observable.
+     Ordered at all only to make a long run's log readable. */
   const rows = await adminPrisma.integrationSecret.findMany({
     orderBy: [{ companyId: "asc" }, { key: "asc" }],
     select: {
@@ -982,6 +1001,8 @@ export async function listCompanyIdsWithSecrets(): Promise<
  * panel showing figures from the day of the suspension with nothing to say so.
  */
 export async function listAllCompanyIds(): Promise<string[]> {
+  /* Unordered and order-independent: every id is processed by the backfill, so
+     the sequence is not observable anywhere. */
   const rows = await adminPrisma.company.findMany({
     select: { id: true },
     orderBy: { id: "asc" },
@@ -1088,7 +1109,13 @@ export async function listVerifications(
 
   const rows = await adminPrisma.integrationVerification.findMany({
     where: { companyId },
-    orderBy: { createdAt: "desc" },
+    /*
+     * Then id - the same keyset-pagination hazard as listCompanies, and more
+     * reachable here. These rows are written by a check that runs against every
+     * integration in one pass, so a whole page of them can share a created_at
+     * and the page boundary lands inside the tie almost by construction.
+     */
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
     ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
     select: {

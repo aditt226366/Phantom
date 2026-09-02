@@ -115,6 +115,17 @@ export async function replaceChunks(
  * base, and answering from a base the tenant did not choose would be the same
  * class of error as answering from another tenant's - less severe and equally
  * invisible.
+ *
+ * Ordered by distance and then by id, which is not the paranoia it looks like.
+ * Two chunks with the SAME text have the same embedding and therefore exactly
+ * equal distance - not nearly equal, equal - and identical text is ordinary in
+ * a knowledge base: a boilerplate paragraph repeated across documents, the
+ * same page crawled under two URLs, a PDF and its web version both uploaded.
+ * Under `LIMIT k` a tie at the boundary decides which chunk is retrieved at
+ * all, so the same question could be answered from one document today and its
+ * duplicate tomorrow - and the ANSWER cites a document title. Grounding that
+ * names a different source run to run is the one thing this file exists to
+ * prevent.
  */
 export async function retrieveChunks(
   db: CompanyClient,
@@ -145,7 +156,8 @@ export async function retrieveChunks(
       JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = ${companyId}
        AND c.knowledge_base_id = ${input.knowledgeBaseId}
-     ORDER BY c.embedding <=> ${toVectorLiteral(input.embedding)}::vector
+     ORDER BY c.embedding <=> ${toVectorLiteral(input.embedding)}::vector,
+              c.id
      LIMIT ${input.limit ?? RETRIEVAL_TOP_K}
   `;
 
@@ -412,7 +424,21 @@ export async function nextCampaignRecipients(
 > {
   return db.verseCampaignRecipient.findMany({
     where: { companyId, campaignId, status: "PENDING" },
-    orderBy: { createdAt: "asc" },
+    /*
+     * Then id, because an audience is written in ONE transaction and every
+     * recipient carries the same created_at to the microsecond - so ordering
+     * on it alone is not an order at all.
+     *
+     * Under a LIMIT that decides who is in the batch, not merely what sequence
+     * it comes back in. It does not double-send: a recipient leaves PENDING
+     * once handled, so the filter advances either way. What it decides is WHO
+     * IS REACHED TODAY, because a campaign has a per-day cap and a daily send
+     * window - and with a tied key the database picks the day's fifty out of
+     * an arbitrary slice of the audience. Enrolment order is the one the
+     * operator can reason about, and it is what pendingRecipients already does
+     * for broadcasts, for the same reason.
+     */
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take,
     select: { id: true, phoneE164: true, variables: true, contactId: true },
   });

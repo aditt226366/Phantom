@@ -36,17 +36,21 @@ export default async function NewCampaignPage() {
       const [templates, bases, numbers] = await Promise.all([
         db.whatsAppTemplate.findMany({
           where: { companyId, status: "APPROVED" },
-          orderBy: { name: "asc" },
+          /* Then id: one template approved in two languages is two rows
+             sharing a name, so name alone is not an order. */
+          orderBy: [{ name: "asc" }, { id: "asc" }],
           select: { id: true, name: true, language: true },
         }),
         db.knowledgeBase.findMany({
           where: { companyId, archivedAt: null },
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           select: { id: true, name: true },
         }),
         db.whatsAppNumber.findMany({
           where: { companyId },
-          orderBy: { createdAt: "asc" },
+          /* Then id. Meta's refresh writes an account's numbers in one pass,
+             so they tie - this is the dashboard's own bug, same table. */
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: { id: true, displayNumber: true },
         }),
       ]);

@@ -56,7 +56,9 @@ export default async function KnowledgePage() {
   const bases = await withCompany(session.companyId, (db, companyId) =>
     db.knowledgeBase.findMany({
       where: { companyId, archivedAt: null },
-      orderBy: { createdAt: "desc" },
+      /* Tie-broken on id: bases created together would otherwise swap places
+         between two loads of the page. */
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: {
         id: true,
         name: true,

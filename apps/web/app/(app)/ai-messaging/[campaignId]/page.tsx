@@ -79,6 +79,8 @@ export default async function CampaignPage({
      * counts would let a tick land between them and produce a breakdown that
      * does not add up.
      */
+    /* Unordered, and order-independent: read below by `.find` on status, never
+       rendered in sequence. Nothing here depends on which row comes first. */
     const byStatus = await db.verseCampaignRecipient.groupBy({
       by: ["status"],
       where: { campaignId: row.id },

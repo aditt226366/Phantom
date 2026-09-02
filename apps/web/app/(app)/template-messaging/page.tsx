@@ -38,7 +38,9 @@ export default async function TemplateMessagingPage() {
   const flows = await withCompany(session.companyId, (db, companyId) =>
     db.flow.findMany({
       where: { companyId },
-      orderBy: { createdAt: "desc" },
+      /* Tie-broken on id: a duplicated flow is created in the same instant as
+         the one it came from, and a LIMIT then picks between them. */
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: LIST_LIMIT,
       select: {
         id: true,

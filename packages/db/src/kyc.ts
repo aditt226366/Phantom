@@ -138,7 +138,18 @@ export async function currentKycDocuments(
 ): Promise<CurrentKycDocuments> {
   const rows = await db.kycDocument.findMany({
     where: { companyId },
-    orderBy: { createdAt: "desc" },
+    /*
+     * Then id, because "newest of each kind" has to mean ONE row.
+     *
+     * newestByKind takes the first row it sees per kind, so a tie on
+     * created_at makes the winner whichever the plan happened to return - and
+     * these three functions feed canUseFeatures. Two documents of one kind
+     * sharing an instant, one APPROVED and one REJECTED, would open or shut
+     * the entire product at the query planner's discretion. The tie is hard to
+     * reach through the upload form and trivial to reach through any path that
+     * writes documents in a loop, which is what a seed or a bulk import is.
+     */
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: STAT_COLUMNS,
   });
 
@@ -187,7 +198,9 @@ export async function currentKycStatuses(
 ): Promise<KycStatuses> {
   const rows = await db.kycDocument.findMany({
     where: { companyId },
-    orderBy: { createdAt: "desc" },
+    /* Then id, for the reason currentKycDocuments gives: this is the gate's
+       own input, and a tie would decide it. */
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { kind: true, status: true },
   });
 
@@ -201,7 +214,9 @@ export async function listKycDocuments(
 ): Promise<KycDocumentStat[]> {
   const rows = await db.kycDocument.findMany({
     where: { companyId },
-    orderBy: { createdAt: "desc" },
+    /* Then id: a rendered list, and re-uploads land close enough together to
+       tie. The same order every time the admin opens the tab. */
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: STAT_COLUMNS,
   });
 

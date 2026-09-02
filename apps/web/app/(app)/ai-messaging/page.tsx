@@ -43,7 +43,9 @@ export default async function AiMessagingPage() {
   const campaigns = await withCompany(session.companyId, (db, companyId) =>
     db.verseCampaign.findMany({
       where: { companyId },
-      orderBy: { createdAt: "desc" },
+      /* Tie-broken on id: campaigns duplicated from one another are written
+         together, and under a LIMIT a tie decides which are on the page. */
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: LIST_LIMIT,
       select: {
         id: true,

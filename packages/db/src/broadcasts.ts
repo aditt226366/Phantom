@@ -253,6 +253,9 @@ export async function broadcastProgress(
   companyId: string,
   broadcastId: string,
 ): Promise<BroadcastProgress> {
+  /* The first two are order-independent - both are turned into a lookup below,
+     by Map and by Object.fromEntries. `failures` is NOT: it is rendered as a
+     list, and its ordering is applied in JavaScript where the counts tie. */
   const [recipientStates, messageStates, failures] = await Promise.all([
     db.broadcastRecipient.groupBy({
       by: ["state"],
@@ -289,7 +292,14 @@ export async function broadcastProgress(
         title: row.errorTitle ?? "No reason recorded",
         count: row._count._all,
       }))
-      .sort((a, b) => b.count - a.count),
+      /*
+       * Then by title, and this one is a JavaScript tie rather than a SQL one.
+       * Array.prototype.sort is stable, so two failure kinds with equal counts
+       * keep the order they arrived in - which is the order an unordered
+       * groupBy handed back, ie. whatever the aggregate hashed to. The report
+       * would list the same two reasons in a different order on a reload.
+       */
+      .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title)),
   };
 }
 

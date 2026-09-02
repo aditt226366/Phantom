@@ -54,6 +54,61 @@ export function flowStateVariant(state: FlowState): StatusVariant {
   }
 }
 
+/**
+ * The order the run states are read in, declared rather than inherited.
+ *
+ * The chips on a flow's page came out of a `groupBy` with no `orderBy`, so
+ * their order was whatever the aggregate happened to hash to - and it changed
+ * between two runs of the screenshot suite with nothing edited, putting
+ * "Handed to a person" first on a page that had read "In progress" first for
+ * two phases.
+ *
+ * The fix is not to sort by the enum. KYC_KINDS makes the argument this
+ * inherits: the ordering is a product decision, not a schema one, and enum
+ * member order in schema.prisma must never quietly become a rendering rule -
+ * somebody adding a state alphabetically would silently reorder a page.
+ *
+ * So it is stated here, next to the label and the colour, which are the other
+ * two presentation decisions about the same value. It is a lifecycle: what is
+ * happening now, what is waiting, what finished, what left, what broke.
+ */
+const RUN_STATUS_RANK: Record<FlowRunStatus, number> = {
+  ACTIVE: 0,
+  PAUSED: 1,
+  COMPLETED: 2,
+  HANDED_OFF: 3,
+  FAILED: 4,
+};
+
+/**
+ * A Record rather than an array, and that is the whole safety argument.
+ *
+ * `Record<FlowRunStatus, number>` will not compile until every member of the
+ * enum has a place. An array of the same five strings would accept four, and
+ * a state added later would be missing from it - where `indexOf` returns -1
+ * and sorts it silently to the FRONT of the page. The failure of an ordering
+ * is that it still produces an order.
+ */
+export const RUN_STATUS_ORDER = (
+  Object.keys(RUN_STATUS_RANK) as FlowRunStatus[]
+).sort((a, b) => RUN_STATUS_RANK[a] - RUN_STATUS_RANK[b]);
+
+/**
+ * Rows carrying a run status, in that order.
+ *
+ * Sorted here rather than in the query because the database has no opinion
+ * about it: the order is a sentence about a lifecycle, and `ORDER BY status`
+ * would spell it alphabetically - Active, Completed, Failed, Handed off,
+ * Paused - which reads as nothing at all.
+ */
+export function inRunStatusOrder<T extends { status: FlowRunStatus }>(
+  rows: readonly T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) => RUN_STATUS_RANK[a.status] - RUN_STATUS_RANK[b.status],
+  );
+}
+
 export function runStatusLabel(status: FlowRunStatus): string {
   switch (status) {
     case "ACTIVE":

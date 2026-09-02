@@ -378,11 +378,36 @@ Widening it belongs in its own diff, never in one that needed it to pass.
 to typecheck. Type the mock to the real signature —
 `vi.fn(async (_db: unknown, _id: string, _input: unknown) => "x")`.
 
-Worth knowing where it surfaces: **`npm run typecheck` did not catch the first
-occurrence and `next build` did.** The web workspace's own `tsc` pass during the
-build covers files the root typecheck does not, so a test file can be green in
-one and red in the other. Run the build, not only the typecheck, before assuming
-a test file is clean.
+**This entry used to claim the root typecheck could not see it. That is not
+true, and was worth an hour to disprove.**
+
+It said `npm run typecheck` missed the first occurrence and `next build` caught
+it, because "the web workspace's own tsc pass covers files the root typecheck
+does not". Measured in Phase 9, that is wrong in both halves:
+
+- **The root pass covers every workspace's tests.** `typecheck --workspaces
+  --if-present` runs all four, and all four tsconfigs include `tests/**`
+  (`apps/web` includes `**/*.ts` and `**/*.tsx`, which is broader still).
+  Break-once confirms it twice: the exact `vi.fn` indexing error in an
+  `apps/web` test, and a loose-typed property read in a `packages/db` test,
+  each make the ROOT command fail.
+- **`next build` catches nothing extra today.** `apps/web/tsconfig.json`
+  includes `.next/types/**/*.ts`, which is empty until a build - so there IS a
+  file set the root pass cannot see on a fresh clone. It buys nothing: the
+  generated `validator.ts` types page props as `{ params: Promise<…> } & any`,
+  and `& any` collapses to `any`. A page whose `params` is not a Promise
+  typechecks AND builds clean, verified both ways.
+
+So the rule is simply **run `npm run typecheck`**, and there is no second
+command that sees more. If a workspace is ever added without a `typecheck`
+script, `--if-present` will skip it in silence - that is the failure mode this
+entry should have described, and it is the one to check first if a type error
+ever reaches a gate again.
+
+What actually happened both times somebody believed this entry: the typecheck
+was **not run** before committing, and the gate caught it. A missing step is
+easy to mistake for a blind tool, and the mistake is expensive because it sends
+the next person looking for a hole in the setup.
 
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own

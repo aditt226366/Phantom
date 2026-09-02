@@ -30,9 +30,7 @@ import {
 function chunk(similarity: number, id = `c${similarity}`): RetrievedChunk {
   return {
     chunkId: id,
-    documentId: "doc",
-    documentTitle: "Refund policy",
-    seq: 0,
+    sources: [{ documentId: "doc", documentTitle: "Refund policy", seq: 0 }],
     content: "Refunds are available within 14 days of delivery.",
     similarity,
   };

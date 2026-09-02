@@ -3,6 +3,8 @@ import {
   similarityFromCosineDistance,
   type RetrievedChunk,
 } from "@whatsapp-os/core/verse";
+import { createHash } from "node:crypto";
+
 import type { CompanyClient } from "./with-company.ts";
 
 /**
@@ -52,17 +54,62 @@ export interface ChunkToStore {
 }
 
 /**
- * Replace a document's passages with a fresh set.
+ * The deduplication key: SHA-256 of the passage's exact bytes, hex.
  *
- * Delete-then-insert rather than upsert, because a re-ingested document is not
- * the same document with edits - it has a different number of chunks at
- * different boundaries, and matching them up by `seq` would leave the tail of a
- * shortened document behind as passages that are still retrievable and no
- * longer true.
+ * Must agree with the migration, which backfilled the same value as
+ * `encode(sha256(convert_to(content, 'UTF8')), 'hex')`. A mismatch between the
+ * two would be invisible - both sides stay internally consistent, nothing
+ * errors, and deduplication silently stops for every row written afterwards.
+ * verse-dedupe.test.ts asserts they agree by computing one in Postgres and one
+ * here.
  *
- * The caller runs this inside withCompany, so both statements share one
- * transaction and a crash between them cannot leave a document with no
- * passages while its status says INDEXED.
+ * Exact bytes, never normalised. Trimming or case-folding would merge passages
+ * that are not the same text, which is a claim about meaning a hash has no
+ * business making - and it is unrecoverable, because the variant that lost is
+ * gone. Two passages differing by one space stay two chunks. That is the safe
+ * direction to be wrong in.
+ */
+export function chunkContentHash(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/**
+ * Replace a document's passages with a fresh set, deduplicating by content.
+ *
+ * ---------------------------------------------------------------------------
+ * What "replace" means once chunks are shared
+ * ---------------------------------------------------------------------------
+ *
+ * It used to mean delete-then-insert on kb_chunks, because a chunk belonged to
+ * exactly one document. Now what belongs to this document is its SOURCE ROWS,
+ * so those are what gets replaced. The passages themselves are shared: writing
+ * a chunk another document already contributed is a second source row and no
+ * new vector.
+ *
+ * Delete-then-insert on the sources, and for the reason the old comment gave:
+ * a re-ingested document is not the same document with edits - it has a
+ * different number of chunks at different boundaries, and matching them up by
+ * `seq` would leave the tail of a shortened document behind as passages that
+ * are still retrievable and no longer true.
+ *
+ * What it must NOT do is delete the chunks. A passage this document shares with
+ * another survives its own document being re-ingested, and orphans are
+ * collected at the end rather than assumed away.
+ *
+ * ---------------------------------------------------------------------------
+ * Reusing an existing vector is safe because of the embedding pin
+ * ---------------------------------------------------------------------------
+ *
+ * On conflict this does not re-embed: it takes the chunk already there. That is
+ * only correct because a knowledge base holds exactly one embedding model -
+ * which is a pin enforced by a versioned re-embedding migration and asserted by
+ * verse-embedding-pin.test.ts, not a hope. If a base could hold two, the reused
+ * vector could come from the wrong one and every score against it would be
+ * meaningless while staying perfectly in range.
+ *
+ * The caller runs this inside withCompany, so every statement shares one
+ * transaction and a crash between them cannot leave a document with no passages
+ * while its status says INDEXED.
  */
 export async function replaceChunks(
   db: CompanyClient,
@@ -76,25 +123,141 @@ export async function replaceChunks(
   },
 ): Promise<number> {
   await db.$executeRaw`
-    DELETE FROM kb_chunks
+    DELETE FROM kb_chunk_sources
      WHERE document_id = ${input.documentId}
        AND company_id = ${companyId}
   `;
 
   for (const chunk of input.chunks) {
-    await db.$executeRaw`
+    const hash = chunkContentHash(chunk.content);
+
+    /*
+     * DO NOTHING and then read, rather than DO UPDATE ... RETURNING.
+     *
+     * The upsert-returning trick needs a no-op UPDATE to produce a row on
+     * conflict, which writes a new tuple for every duplicate passage - and the
+     * duplicate case is the common one this whole change exists for. Two
+     * statements on the conflict path, one on the fresh path, and no write that
+     * exists only to make a RETURNING clause fire.
+     */
+    const inserted = await db.$queryRaw<Array<{ id: string }>>`
       INSERT INTO kb_chunks
-        (id, company_id, knowledge_base_id, document_id, seq, content,
+        (id, company_id, knowledge_base_id, content_hash, content,
          token_count, embedding, embedding_model, embedding_version)
       VALUES
         (gen_random_uuid()::text, ${companyId}, ${input.knowledgeBaseId},
-         ${input.documentId}, ${chunk.seq}, ${chunk.content},
-         ${chunk.tokenCount}, ${toVectorLiteral(chunk.embedding)}::vector,
+         ${hash}, ${chunk.content}, ${chunk.tokenCount},
+         ${toVectorLiteral(chunk.embedding)}::vector,
          ${input.embeddingModel}, ${input.embeddingVersion})
+      ON CONFLICT (company_id, knowledge_base_id, content_hash) DO NOTHING
+      RETURNING id
+    `;
+
+    const existing =
+      inserted[0]?.id === undefined
+        ? await db.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM kb_chunks
+             WHERE company_id = ${companyId}
+               AND knowledge_base_id = ${input.knowledgeBaseId}
+               AND content_hash = ${hash}
+          `
+        : [];
+
+    const chunkId = inserted[0]?.id ?? existing[0]?.id;
+
+    if (chunkId === undefined) {
+      /*
+       * Unreachable: the INSERT either wrote the row or conflicted with one
+       * that exists, and both statements are in the caller's transaction so
+       * nothing can remove it in between. Thrown rather than skipped, because
+       * the alternative is a document silently missing a passage - which is
+       * exactly the class of fault this file keeps finding.
+       */
+      throw new Error(
+        `kb_chunks: no row for content hash ${hash} after insert-or-conflict`,
+      );
+    }
+
+    await db.$executeRaw`
+      INSERT INTO kb_chunk_sources
+        (id, company_id, chunk_id, document_id, seq)
+      VALUES
+        (gen_random_uuid()::text, ${companyId}, ${chunkId},
+         ${input.documentId}, ${chunk.seq})
     `;
   }
 
+  await deleteOrphanedChunks(db, companyId, input.knowledgeBaseId);
+
   return input.chunks.length;
+}
+
+/**
+ * Delete chunks in this base that no document points at any more.
+ *
+ * The half a foreign key cannot express. ON DELETE CASCADE removes a chunk's
+ * SOURCES when a document goes; nothing in SQL says "and remove the parent when
+ * its last child does".
+ *
+ * Getting this wrong is not a leak, it is a disclosure: a passage with no
+ * sources is still in the index and still retrievable, so the assistant would
+ * go on answering customers out of a document the tenant deleted - and the
+ * citation would name a document that no longer exists. The deletion UI
+ * promises the opposite in as many words.
+ *
+ * Scoped to one base because both callers know theirs, and a sweep of every
+ * base would make one document's deletion cost proportional to the tenant's
+ * whole corpus rather than to what they deleted.
+ */
+export async function deleteOrphanedChunks(
+  db: CompanyClient,
+  companyId: string,
+  knowledgeBaseId: string,
+): Promise<number> {
+  return db.$executeRaw`
+    DELETE FROM kb_chunks c
+     WHERE c.company_id = ${companyId}
+       AND c.knowledge_base_id = ${knowledgeBaseId}
+       AND NOT EXISTS (
+             SELECT 1 FROM kb_chunk_sources s
+              WHERE s.chunk_id = c.id
+                AND s.company_id = ${companyId}
+           )
+  `;
+}
+
+/**
+ * Remove a document, and any passage that was only in it.
+ *
+ * One function rather than a delete in the action followed by a sweep, because
+ * the two must share a transaction: between them the index holds passages whose
+ * document is gone, and a retrieval in that window answers from a deleted
+ * source.
+ *
+ * Returns both numbers, because they are different facts - a caller that wants
+ * to say "3 passages removed, 2 still used elsewhere" cannot derive that from a
+ * boolean.
+ */
+export async function deleteDocumentAndOrphanedChunks(
+  db: CompanyClient,
+  companyId: string,
+  input: { documentId: string; knowledgeBaseId: string },
+): Promise<{ documentDeleted: boolean; chunksDeleted: number }> {
+  const deleted = await db.kbDocument.deleteMany({
+    where: { id: input.documentId, companyId },
+  });
+
+  if (deleted.count === 0) {
+    return { documentDeleted: false, chunksDeleted: 0 };
+  }
+
+  const chunksDeleted = await deleteOrphanedChunks(
+    db,
+    companyId,
+    input.knowledgeBaseId,
+  );
+
+  return { documentDeleted: true, chunksDeleted };
 }
 
 /**
@@ -116,16 +279,31 @@ export async function replaceChunks(
  * class of error as answering from another tenant's - less severe and equally
  * invisible.
  *
- * Ordered by distance and then by id, which is not the paranoia it looks like.
- * Two chunks with the SAME text have the same embedding and therefore exactly
- * equal distance - not nearly equal, equal - and identical text is ordinary in
- * a knowledge base: a boilerplate paragraph repeated across documents, the
- * same page crawled under two URLs, a PDF and its web version both uploaded.
- * Under `LIMIT k` a tie at the boundary decides which chunk is retrieved at
- * all, so the same question could be answered from one document today and its
- * duplicate tomorrow - and the ANSWER cites a document title. Grounding that
- * names a different source run to run is the one thing this file exists to
- * prevent.
+ * Ordered by distance and then by id, and the reason has changed rather than
+ * gone away.
+ *
+ * It used to be that identical text was several chunks with exactly equal
+ * distance - not nearly equal, equal - so a tie at the k boundary decided which
+ * copy was retrieved and the answer cited whichever document won. Deduplication
+ * removes that: identical text is now one chunk citing every document it
+ * appears in, so the tie cannot happen for that reason.
+ *
+ * The tiebreak stays because equal distances are still reachable without
+ * identical text - two passages equidistant from a query, or the degenerate
+ * case of an all-zero query vector - and because `k` of anything under a LIMIT
+ * needs a total order or the answer is up to the plan. It is one clause and it
+ * removes a whole class of question.
+ *
+ * ---------------------------------------------------------------------------
+ * Why `k` now means what it says
+ * ---------------------------------------------------------------------------
+ *
+ * Before deduplication a top-5 could be five copies of one paragraph, so the
+ * model saw ONE passage while this function, `groundingFor`, the /dev/rag
+ * harness and the operator all counted five. Grounding was thinner than every
+ * layer above it believed and nothing reported it. That is also why the
+ * acceptance metric had to wait for this: a 20/5 measured against duplicated
+ * chunks tunes the floor for a retrieval system nobody intends to ship.
  */
 export async function retrieveChunks(
   db: CompanyClient,
@@ -139,21 +317,46 @@ export async function retrieveChunks(
   const rows = await db.$queryRaw<
     Array<{
       chunk_id: string;
-      document_id: string;
-      document_title: string;
-      seq: number;
       content: string;
       distance: number;
+      sources: Array<{ documentId: string; documentTitle: string; seq: number }>;
     }>
   >`
-    SELECT c.id            AS chunk_id,
-           c.document_id   AS document_id,
-           d.title         AS document_title,
-           c.seq           AS seq,
-           c.content       AS content,
-           c.embedding <=> ${toVectorLiteral(input.embedding)}::vector AS distance
+    SELECT c.id      AS chunk_id,
+           c.content AS content,
+           c.embedding <=> ${toVectorLiteral(input.embedding)}::vector AS distance,
+
+           /*
+            * Every place this passage appears, as one JSON value.
+            *
+            * A correlated subquery rather than a join, because a join would
+            * multiply the rows BEFORE the LIMIT: a chunk in three documents
+            * would occupy three of the k slots with the same text, which is a
+            * more elaborate version of the fault this whole change removes.
+            * The limit has to apply to passages, so the sources are gathered
+            * per surviving passage.
+            *
+            * Ordered, and totally - title, then position, then the document id
+            * that cannot tie. A citation list that reshuffles between two
+            * answers to the same question reads as two different answers.
+            */
+           COALESCE(
+             (SELECT json_agg(
+                       json_build_object(
+                         'documentId',    s.document_id,
+                         'documentTitle', d.title,
+                         'seq',           s.seq
+                       )
+                       ORDER BY d.title, s.seq, s.document_id
+                     )
+                FROM kb_chunk_sources s
+                JOIN kb_documents d ON d.id = s.document_id
+               WHERE s.chunk_id = c.id
+                 AND s.company_id = ${companyId}),
+             '[]'::json
+           ) AS sources
+
       FROM kb_chunks c
-      JOIN kb_documents d ON d.id = c.document_id
      WHERE c.company_id = ${companyId}
        AND c.knowledge_base_id = ${input.knowledgeBaseId}
      ORDER BY c.embedding <=> ${toVectorLiteral(input.embedding)}::vector,
@@ -163,9 +366,7 @@ export async function retrieveChunks(
 
   return rows.map((row) => ({
     chunkId: row.chunk_id,
-    documentId: row.document_id,
-    documentTitle: row.document_title,
-    seq: row.seq,
+    sources: row.sources,
     content: row.content,
     /*
      * `<=>` is a DISTANCE. Converted through the named helper rather than

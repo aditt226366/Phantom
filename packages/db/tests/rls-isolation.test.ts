@@ -1269,15 +1269,26 @@ describe("a tenant's knowledge and the campaigns that read it", () => {
       const vector = `[${new Array(1536).fill(0.01).join(",")}]`;
       await db.$executeRawUnsafe(
         `INSERT INTO kb_chunks
-           (id, company_id, knowledge_base_id, document_id, seq, content,
+           (id, company_id, knowledge_base_id, content_hash, content,
             token_count, embedding, embedding_model, embedding_version)
-         VALUES ($1, $2, $3, $4, 0, $5, 12, $6::vector, 'text-embedding-3-small', 1)`,
+         VALUES ($1, $2, $3, encode(sha256(convert_to($4, 'UTF8')), 'hex'), $4,
+                 12, $5::vector, 'text-embedding-3-small', 1)`,
         `${label}-chunk`,
         companyId,
         base.id,
-        document.id,
         `${label} refunds are available within 14 days.`,
         vector,
+      );
+
+      /* Where the passage came from, now a row of its own. Written here too so
+         the isolation fixture matches the shape retrieval actually reads. */
+      await db.$executeRawUnsafe(
+        `INSERT INTO kb_chunk_sources (id, company_id, chunk_id, document_id, seq)
+         VALUES ($1, $2, $3, $4, 0)`,
+        `${label}-source`,
+        companyId,
+        `${label}-chunk`,
+        document.id,
       );
 
       return { baseId: base.id, documentId: document.id };
@@ -1387,13 +1398,13 @@ describe("a tenant's knowledge and the campaigns that read it", () => {
       withCompany(alpha.id, (db) =>
         db.$executeRawUnsafe(
           `INSERT INTO kb_chunks
-             (id, company_id, knowledge_base_id, document_id, seq, content,
+             (id, company_id, knowledge_base_id, content_hash, content,
               token_count, embedding, embedding_model, embedding_version)
-           VALUES ('smuggled', $1, $2, $3, 99, 'injected', 3, $4::vector,
-                   'text-embedding-3-small', 1)`,
+           VALUES ('smuggled', $1, $2,
+                   encode(sha256(convert_to('injected', 'UTF8')), 'hex'),
+                   'injected', 3, $3::vector, 'text-embedding-3-small', 1)`,
           beta.id,
           baseId,
-          documentId,
           vector,
         ),
       ),

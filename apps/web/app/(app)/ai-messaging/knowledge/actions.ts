@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { JOB_NAMES } from "@whatsapp-os/core/queues";
 import { VERSE_EMBEDDING } from "@whatsapp-os/core/verse";
-import { withCompany } from "@whatsapp-os/db";
+import { deleteDocumentAndOrphanedChunks, withCompany } from "@whatsapp-os/db";
 import { assertCsrf } from "@/lib/auth/csrf";
 import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
@@ -249,11 +249,18 @@ export async function reindexDocumentAction(
 }
 
 /**
- * Remove a document and its passages.
+ * Remove a document, and every passage that was only in it.
  *
- * The chunks go with it by cascade, which is what makes this safe to offer: a
- * document removed from the list but still retrievable would be a passage
- * answering customers from a source the tenant believes they deleted.
+ * A cascade alone is no longer enough, and that is the whole point of the
+ * change that made chunks shared. ON DELETE CASCADE removes this document's
+ * SOURCE rows; a passage it shared with another document survives, correctly,
+ * and a passage that was only here is left behind with no sources at all -
+ * still in the index, still retrievable, still answering customers out of a
+ * document the tenant just deleted, and now citing a document that no longer
+ * exists.
+ *
+ * deleteDocumentAndOrphanedChunks does both in one transaction. One statement
+ * then another in this action would leave a window where exactly that is true.
  */
 export async function deleteDocumentAction(
   _state: KnowledgeState,
@@ -265,9 +272,25 @@ export async function deleteDocumentAction(
 
   const documentId = String(formData.get("documentId") ?? "");
 
-  await withCompany(session.companyId, (db, companyId) =>
-    db.kbDocument.deleteMany({ where: { id: documentId, companyId } }),
-  );
+  await withCompany(session.companyId, async (db, companyId) => {
+    /*
+     * Read the base first: orphan collection is scoped to one knowledge base,
+     * and after the delete there is nothing left to ask which one. Scoped
+     * rather than global so a deletion costs what the tenant deleted rather
+     * than a sweep of their whole corpus.
+     */
+    const document = await db.kbDocument.findFirst({
+      where: { id: documentId, companyId },
+      select: { knowledgeBaseId: true },
+    });
+
+    if (!document) return;
+
+    await deleteDocumentAndOrphanedChunks(db, companyId, {
+      documentId,
+      knowledgeBaseId: document.knowledgeBaseId,
+    });
+  });
 
   revalidatePath("/ai-messaging/knowledge");
   return {};

@@ -236,6 +236,9 @@ export {
 } from "./generated/prisma/enums.ts";
 export {
   campaignSentSince,
+  chunkContentHash,
+  deleteDocumentAndOrphanedChunks,
+  deleteOrphanedChunks,
   embeddingModelsInBase,
   nextCampaignRecipients,
   readDocumentBytes,

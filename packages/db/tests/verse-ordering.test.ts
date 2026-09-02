@@ -169,16 +169,22 @@ describe("who the campaign reaches next", () => {
 
 describe("which chunks ground the answer", () => {
   /**
-   * `count` chunks whose embeddings are IDENTICAL, so distances tie exactly.
+   * `count` chunks with DIFFERENT text, all exactly equidistant from the query.
    *
-   * Not nearly equal - equal. Two chunks holding the same text embed to the
-   * same vector, and `<=>` against a query vector then returns the same float
-   * for both. That is the case this exists for, and it is the ordinary one.
+   * This used to seed identical text, because identical text embeds to an
+   * identical vector and ties exactly. Deduplication made that impossible: the
+   * unique index on (company, base, content_hash) refuses the second row, and
+   * the fixture stopped being constructible - which is the correct outcome and
+   * left the tiebreak untested.
+   *
+   * So the tie is built from geometry instead. Each chunk gets a distinct
+   * one-hot vector on its own axis; the query is a different axis again, so
+   * every chunk is orthogonal to it and `<=>` returns exactly 1 for all of
+   * them. Different passages, identical distance, which is the case that
+   * survives deduplication and still needs an answer.
    */
-  async function seedDuplicateChunks(count: number): Promise<string[]> {
+  async function seedEquidistantChunks(count: number): Promise<string[]> {
     const ids = tiedIds("chunk", count);
-    const embedding = Array.from({ length: 1536 }, (_, i) => (i % 7) / 7);
-    const literal = `[${embedding.join(",")}]`;
 
     await withCompany(company.id, async (db, companyId) => {
       const base = await db.knowledgeBase.create({
@@ -206,23 +212,40 @@ describe("which chunks ground the answer", () => {
       });
 
       for (const [i, id] of ids.entries()) {
+        /* Its own axis, so every chunk is orthogonal to the query on axis 0
+           and every distance is exactly 1. */
+        const vector = Array.from({ length: 1536 }, (_, j) =>
+          j === i + 1 ? 1 : 0,
+        );
+
         /* Raw, because `embedding` is Unsupported("vector(1536)") and is
            omitted from every generated type - see CLAUDE.md rule 3. */
         await db.$executeRawUnsafe(
           `INSERT INTO kb_chunks
-             (id, company_id, knowledge_base_id, document_id, seq, content,
+             (id, company_id, knowledge_base_id, content_hash, content,
               token_count, embedding, embedding_model, embedding_version,
               created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9, 1, $10)`,
+           VALUES ($1, $2, $3, encode(sha256(convert_to($4, 'UTF8')), 'hex'),
+                   $4, $5, $6::vector, $7, 1, $8)`,
           id,
           companyId,
           base.id,
+          `Distinct passage number ${i}.`,
+          9,
+          `[${vector.join(",")}]`,
+          "text-embedding-3-small",
+          TIED,
+        );
+
+        await db.$executeRawUnsafe(
+          `INSERT INTO kb_chunk_sources
+             (id, company_id, chunk_id, document_id, seq, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          `${id}-source`,
+          companyId,
+          id,
           document.id,
           i,
-          "The same paragraph, repeated verbatim.",
-          9,
-          literal,
-          "text-embedding-3-small",
           TIED,
         );
       }
@@ -232,8 +255,9 @@ describe("which chunks ground the answer", () => {
   }
 
   it("retrieves the same top-k every time when distances tie exactly", async () => {
-    const ids = await seedDuplicateChunks(8);
-    const embedding = Array.from({ length: 1536 }, (_, i) => (i % 7) / 7);
+    const ids = await seedEquidistantChunks(8);
+    /* Axis 0, which no chunk occupies - so all eight are orthogonal to it. */
+    const embedding = Array.from({ length: 1536 }, (_, i) => (i === 0 ? 1 : 0));
 
     const chunks = await withCompany(company.id, (db, companyId) =>
       retrieveChunks(db, companyId, {

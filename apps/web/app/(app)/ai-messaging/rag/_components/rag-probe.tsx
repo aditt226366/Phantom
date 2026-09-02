@@ -143,8 +143,11 @@ export function RagProbe({
                     className="border-t border-hairline pt-sm"
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-sm">
+                      {/* Every source, so a passage shared across documents
+                          reads as one passage with four names rather than as
+                          four results that happen to agree. */}
                       <p className="text-caption font-medium">
-                        {chunk.documentTitle}
+                        {chunk.documentTitles.join(", ")}
                       </p>
                       <Badge variant={chunk.cleared ? "success" : "outline"}>
                         {chunk.similarity.toFixed(3)}

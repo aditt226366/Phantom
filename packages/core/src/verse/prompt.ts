@@ -124,10 +124,25 @@ const HANDOFF_RULES = [
  */
 export function buildSystemPrompt(input: PromptInput): string {
   const passages = input.chunks
-    .map(
-      (chunk, index) =>
-        `[${index + 1}] From "${chunk.documentTitle}":\n${chunk.content}`,
-    )
+    .map((chunk, index) => {
+      /*
+       * Every source, not the first one.
+       *
+       * A deduplicated passage belongs to each document that contains it, and
+       * picking one would be picking arbitrarily - the exact tie this layer
+       * spent a phase removing. Quoted titles joined with a comma, in the order
+       * retrieval returned them, which is itself total.
+       *
+       * The empty case cannot happen - a chunk with no sources is deleted with
+       * its last one - and is written rather than assumed, because the
+       * alternative renders `From "":` into the system prompt and asks the
+       * model to cite nothing.
+       */
+      const titles = chunk.sources.map((source) => `"${source.documentTitle}"`);
+      const from = titles.length > 0 ? ` From ${titles.join(", ")}:` : "";
+
+      return `[${index + 1}]${from}\n${chunk.content}`;
+    })
     .join("\n\n");
 
   return [

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { VERSE_EMBEDDING, SIMILARITY_FLOOR } from "@whatsapp-os/core/verse";
+import {
+  VERSE_EMBEDDING,
+  SIMILARITY_FLOOR,
+  type RetrievedChunk,
+} from "@whatsapp-os/core/verse";
 
 /**
  * The reply job's shape, which is where its money and its safety live.
@@ -27,7 +31,16 @@ interface Decision {
 
 let sendability: { decision: Decision } | null = { decision: { allowed: true } };
 let context: Record<string, unknown> | null = null;
-let chunks: Array<Record<string, unknown>> = [];
+/*
+ * Typed as the real thing, not Record<string, unknown>.
+ *
+ * It was the loose type, and that is why a shape change to RetrievedChunk
+ * reached the suite as a runtime TypeError inside buildSystemPrompt instead of
+ * a typecheck failure naming this line. The conventions record the same trap
+ * for `vi.fn` with a zero-argument implementation: a mock is only as strict as
+ * what it is declared to return.
+ */
+let chunks: RetrievedChunk[] = [];
 
 const canSend = vi.fn(
   async (
@@ -164,13 +177,11 @@ const JOB = {
   messageId: "msg-in",
 };
 
-function grounded(similarity = 0.8) {
+function grounded(similarity = 0.8): RetrievedChunk[] {
   return [
     {
       chunkId: "c1",
-      documentId: "d1",
-      documentTitle: "Delivery",
-      seq: 0,
+      sources: [{ documentId: "d1", documentTitle: "Delivery", seq: 0 }],
       content: "We deliver across Maharashtra in 3-5 working days.",
       similarity,
     },

@@ -146,7 +146,11 @@ describe("storing and retrieving passages", () => {
       retrieveChunks(db, companyId, { knowledgeBaseId: baseId, embedding: axis(0) }),
     );
 
-    expect(found[0]!.documentTitle).toBe("Delivery and returns");
+    /* One source, because this fixture writes the passage once. The
+       many-source case is verse-dedupe.test.ts. */
+    expect(found[0]!.sources.map((source) => source.documentTitle)).toEqual([
+      "Delivery and returns",
+    ]);
   });
 
   it("feeds groundingFor, which refuses an orthogonal match", async () => {

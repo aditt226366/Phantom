@@ -29,9 +29,7 @@ import type { RetrievedChunk } from "../src/verse/retrieval.ts";
 function chunk(content: string, title = "Delivery"): RetrievedChunk {
   return {
     chunkId: "c1",
-    documentId: "d1",
-    documentTitle: title,
-    seq: 0,
+    sources: [{ documentId: "d1", documentTitle: title, seq: 0 }],
     content,
     similarity: 0.8,
   };

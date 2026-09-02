@@ -131,6 +131,7 @@ model Company {
   knowledgeBases         KnowledgeBase[]
   kbDocuments            KbDocument[]
   kbChunks               KbChunk[]
+  kbChunkSources         KbChunkSource[]
   verseCampaigns         VerseCampaign[]
   verseCampaignRecipients VerseCampaignRecipient[]
   dashboardRollup        DashboardRollup?
@@ -2677,21 +2678,45 @@ model KbDocument {
 
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
-  chunks        KbChunk[]
+  chunkSources  KbChunkSource[]
 
   @@index([companyId, knowledgeBaseId, createdAt(sort: Desc)])
   @@index([companyId, status])
   @@map("kb_documents")
 }
 
-/// One retrievable passage, and its vector.
+/// One retrievable passage, and its vector. Deduplicated by content.
+///
+/// ---------------------------------------------------------------------------
+/// One passage, many sources
+/// ---------------------------------------------------------------------------
+///
+/// Identical text is one chunk that several documents point at, not several
+/// chunks. That is not tidiness: retrieval is `LIMIT k`, so k duplicates of one
+/// paragraph is a top-k holding ONE passage while the code, the /dev/rag
+/// harness and the operator all believe it holds k. Grounding is thinner than
+/// it looks and nothing says so.
+///
+/// Identical text is ordinary in a knowledge base - a boilerplate paragraph
+/// repeated across documents, the same page crawled under two URLs, a PDF and
+/// its web version both uploaded, a terms section quoted in a FAQ.
+///
+/// So `document_id` and `seq` live on KbChunkSource, one row per place the text
+/// appears, and this table is keyed by content within a base.
 model KbChunk {
   id              String @id @default(cuid())
   companyId       String @map("company_id")
   knowledgeBaseId String @map("knowledge_base_id")
-  documentId      String @map("document_id")
 
-  seq        Int
+  /// SHA-256 of `content`, hex, and the deduplication key.
+  ///
+  /// Exact bytes, never normalised. Collapsing on whitespace or case would
+  /// merge passages that are not the same text, which is a claim about meaning
+  /// this column has no business making - and it is unrecoverable, because the
+  /// discarded variant is gone. Two passages differing by one space stay two
+  /// chunks; that is the safe direction to be wrong in.
+  contentHash String @map("content_hash")
+
   content    String
   tokenCount Int @map("token_count")
 
@@ -2729,11 +2754,54 @@ model KbChunk {
 
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
-  document      KbDocument    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sources       KbChunkSource[]
 
-  @@unique([companyId, documentId, seq])
+  /// The deduplication key, and it is per knowledge base rather than per
+  /// company on purpose: two bases are two indexes, and one may be re-embedded
+  /// while the other is not. Sharing a row across them would make a vector
+  /// belong to two pins at once.
+  @@unique([companyId, knowledgeBaseId, contentHash])
   @@index([companyId, knowledgeBaseId])
   @@map("kb_chunks")
+}
+
+/// Where a chunk's text appears: one row per (document, position).
+///
+/// The many half of the many-to-one. A chunk with two sources is one passage
+/// that two documents contain, and BOTH are cited - which is the reason this is
+/// a relation rather than a discarded duplicate. An answer that says "From
+/// Terms" when the sentence is also in the FAQ has not lied, but it has told
+/// the operator less than we knew.
+///
+/// Deleting a document cascades these away and leaves the chunk behind if
+/// another document still points at it. A chunk whose last source is gone is
+/// deleted explicitly - see deleteDocumentAndOrphanedChunks. Nothing about a
+/// foreign key can express "delete the parent when its last child goes", and
+/// getting that wrong leaves a passage answering customers from a document the
+/// tenant believes they deleted.
+model KbChunkSource {
+  id         String @id @default(cuid())
+  companyId  String @map("company_id")
+  chunkId    String @map("chunk_id")
+  documentId String @map("document_id")
+
+  /// Position in THIS document, so a retrieved passage can be shown in context
+  /// and two adjacent hits can be recognised as adjacent. It moves here from
+  /// kb_chunks because one passage can sit at position 3 of one document and
+  /// position 40 of another.
+  seq Int
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company  Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  chunk    KbChunk    @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  document KbDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /// One passage per position in a document - the same key kb_chunks used to
+  /// carry, moved to the table where it is now true.
+  @@unique([companyId, documentId, seq])
+  @@index([companyId, chunkId])
+  @@map("kb_chunk_sources")
 }
 
 /// One AI campaign: what it is for, what opens it, and when it may speak.

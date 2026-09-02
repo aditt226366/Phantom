@@ -83,11 +83,30 @@ export const SIMILARITY_FLOOR = FLOOR.value;
  */
 export const RETRIEVAL_TOP_K = 6;
 
-export interface RetrievedChunk {
-  chunkId: string;
+/** One place a passage appears: a document, and where in it. */
+export interface ChunkSource {
   documentId: string;
   documentTitle: string;
+  /** Position within THIS document. The same passage sits elsewhere in others. */
   seq: number;
+}
+
+export interface RetrievedChunk {
+  chunkId: string;
+  /**
+   * Every document this passage appears in, never just one.
+   *
+   * Chunks are deduplicated by content within a knowledge base, so identical
+   * text is one passage that several documents point at. All of them are cited:
+   * an answer that names only "Terms" when the sentence is also in the FAQ has
+   * not lied, but it has told the operator less than we knew - and which single
+   * document it would have named was decided by a tie.
+   *
+   * Never empty in practice. A chunk whose last source is deleted is deleted
+   * with it, in the same transaction, because a passage nothing can attribute
+   * is one that answers customers out of a document the tenant removed.
+   */
+  sources: readonly ChunkSource[];
   content: string;
   /** Cosine similarity in [-1, 1]. Higher is closer. Never a distance. */
   similarity: number;

@@ -60,6 +60,18 @@ separating exactly those two populations is the floor's entire job, and where
 it belongs depends on the embedding model, the chunk size and the kind of
 documents a tenant actually uploads.
 
+**Do not run the metric against duplicated chunks.** Until
+`20260909090000_kb_chunk_dedupe`, identical text was one `kb_chunks` row per
+document that contained it. Duplicates embed identically, so they score
+identically and arrive together: a top-5 over a paragraph appearing in five
+documents was ONE passage filling five slots, while `retrieveChunks`,
+`groundingFor`, /dev/rag and the operator all counted five. A 20/5 measured on
+that would tune the floor for a retrieval system nobody intends to ship - and it
+would tune it in the dangerous direction, because thin grounding that scores
+well is exactly what a floor is supposed to reject. Chunks are now deduplicated
+by content hash within a knowledge base, with `kb_chunk_sources` recording every
+document a passage appears in, so `k` means k distinct passages.
+
 It is the one number in this phase where being wrong is invisible in **both**
 directions:
 

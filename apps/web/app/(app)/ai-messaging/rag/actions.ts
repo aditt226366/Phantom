@@ -39,7 +39,10 @@ export interface RagResult {
   question?: string;
   /** Every chunk considered, including the ones that did not clear. */
   chunks?: Array<{
-    documentTitle: string;
+    /* Every document the passage appears in. The harness shows all of them,
+       because a passage shared by four documents is a fact about the base an
+       operator tuning the floor needs to see. */
+    documentTitles: string[];
     content: string;
     similarity: number;
     cleared: boolean;
@@ -128,7 +131,7 @@ export async function probeAction(
    * floor untunable.
    */
   const rendered = chunks.map((chunk) => ({
-    documentTitle: chunk.documentTitle,
+    documentTitles: chunk.sources.map((source) => source.documentTitle),
     content: chunk.content,
     similarity: chunk.similarity,
     cleared: chunk.similarity >= SIMILARITY_FLOOR,

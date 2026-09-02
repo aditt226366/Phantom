@@ -700,6 +700,53 @@ the top of their own file rather than looking like evidence
 and a six-row fixture gives Postgres one plan. The source-level check is the
 guard for the first; the second has none.
 
+### A cascade cannot delete a parent when its last child goes
+
+`kb_chunks` is deduplicated by content hash within a knowledge base, and
+`kb_chunk_sources` holds one row per document the passage appears in. That shape
+has a hazard worth stating in general, because anything many-to-one acquires it.
+
+**`ON DELETE CASCADE` runs the wrong direction for this.** Deleting a document
+removes its SOURCE rows. A passage shared with another document survives, which
+is correct; a passage that was only in the deleted document is left with no
+sources at all — still in the index, still scoring, still answering customers
+out of a document the tenant just deleted, and citing a document that no longer
+exists. Nothing in SQL expresses "delete the parent when its last child goes".
+
+So the sweep is explicit (`deleteOrphanedChunks`) and lives in the same
+transaction as the delete (`deleteDocumentAndOrphanedChunks`). Two statements in
+the calling action would leave a window where retrieval reads exactly that state.
+Both halves have a test, because getting either wrong looks identical from
+outside: keep-the-shared-one and delete-the-orphan fail separately.
+
+**Deduplication changes what a `LIMIT` means, which is the reason it exists.**
+Identical text embeds identically, so duplicates score *exactly* the same and
+arrive together — a top-5 over a paragraph in five documents was one passage
+filling five slots while every layer above counted five. Grounding thinner than
+the code believes, with nothing reporting it. Any `LIMIT k` over a corpus that
+can contain the same row twice has this shape, not only vectors.
+
+**A content hash must not normalise.** Trimming or case-folding merges passages
+that are not the same text — a claim about meaning a hash has no business
+making, and unrecoverable, because the variant that lost is gone. Two passages
+differing by one space stay two chunks.
+
+**The hash has two implementations and they must be asserted against each
+other.** The migration backfilled `encode(sha256(convert_to(content,'UTF8')),'hex')`;
+every row since comes from Node's `createHash`. A divergence deduplicates
+nothing and is invisible — both sides stay internally consistent and nothing
+errors — so `verse-dedupe.test.ts` computes one in Postgres and one in Node and
+compares them, rather than asserting either against a literal.
+
+**Deduplication invalidated a test's premise, and that is a normal outcome.**
+`verse-ordering.test.ts` built its tie from eight chunks of identical text.
+Identical text is now one chunk, so the fixture stopped being constructible —
+correct, and it would have left the distance tiebreak untested. Rebuilt from
+geometry instead: distinct passages on distinct one-hot axes, all orthogonal to
+the query, so every distance is exactly 1. When a change makes a fixture
+impossible, the assertion usually still matters; find another way to reach the
+state.
+
 ### The machine before the config
 
 `scripts/test-floor.mjs` and `vitest.config.mts` both point here, because this

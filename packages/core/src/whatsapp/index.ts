@@ -93,3 +93,7 @@ export type {
   TemplateListOutcome,
   TemplateRefused,
 } from "./template-graph.ts";
+export {
+  readInteractivePayload,
+  readTemplatePayload,
+} from "./stored-payload.ts";

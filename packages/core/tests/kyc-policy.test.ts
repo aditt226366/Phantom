@@ -164,3 +164,93 @@ describe("the predicate form", () => {
     expect(featuresBlocked(facts())).toBe(true);
   });
 });
+
+describe("the exemption that must never exist", () => {
+  /*
+   * `npm run seed:dev` exists because of this suite's own subject.
+   *
+   * A4 shuts every feature section until three documents are approved, which
+   * makes a freshly signed-up developer account useless - every page is the
+   * gate. The obvious fix is a bypass: a `NODE_ENV !== "production"` arm here,
+   * a SKIP_KYC variable, a second parameter carrying "allow anyway". The seed
+   * script writes real approved rows instead, so a seeded company and a
+   * company an operator approved by hand are indistinguishable, because there
+   * is nothing to distinguish.
+   *
+   * This is what stops the bypass being added later, when the seed script is
+   * two years old and somebody in a hurry wants a faster way through. The
+   * repository has met that shape twice and written the rule down both times:
+   * a guard that refuses its own only legitimate use gets DELETED rather than
+   * fixed, six months later, by somebody who does not know what it was for.
+   *
+   * Asserted behaviourally rather than by reading the source. A grep for
+   * "NODE_ENV" fails the day a comment explains why there is no NODE_ENV
+   * check - which is the exact fault this repository has now hit four times,
+   * most recently a comment stripper that ate a tsconfig glob. Running the
+   * function under the environment a bypass would read cannot be fooled by
+   * prose.
+   *
+   * And it is not redundant with the rest of this file, which was the first
+   * thing checked. Adding `NODE_ENV === "development"` to canUseFeatures was
+   * measured against the suite: every other test here passes, because vitest
+   * runs with NODE_ENV=test and a bypass keyed on "development" is therefore
+   * invisible to all of them. This one test failed alone.
+   */
+
+  const BYPASS_SHAPED = [
+    "NODE_ENV",
+    "SKIP_KYC",
+    "KYC_BYPASS",
+    "DISABLE_KYC",
+    "ALLOW_UNVERIFIED",
+    "SEED",
+    "CI",
+    "VITEST",
+  ];
+
+  it("stays shut in development, in test, and under every bypass-shaped name", () => {
+    const saved = new Map(BYPASS_SHAPED.map((key) => [key, process.env[key]]));
+
+    try {
+      for (const key of BYPASS_SHAPED) process.env[key] = "1";
+      /* The two that would be read for their VALUE rather than their presence. */
+      process.env.NODE_ENV = "development";
+
+      /* Nothing filed - the state a developer's own account is actually in. */
+      expect(canUseFeatures(facts())).toEqual({
+        allowed: false,
+        reason: "documents_missing",
+      });
+
+      /* And a rejection stays a rejection, which is the case a "just let me in
+         locally" arm would most want to wave through. */
+      expect(
+        canUseFeatures(facts({ documents: documents("APPROVED", "REJECTED", "APPROVED") })),
+      ).toEqual({ allowed: false, reason: "documents_rejected" });
+
+      /* A suspended workspace is not a local convenience either. */
+      expect(
+        canUseFeatures(facts({ companyDeactivated: true, documents: ALL_APPROVED })),
+      ).toEqual({ allowed: false, reason: "company_deactivated" });
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("takes the facts and nothing else", () => {
+    /*
+     * One parameter, structurally - so there is no second `options` argument
+     * for a caller to pass `{ allowUnverified: true }` into.
+     *
+     * The environment check above catches a bypass the gate reads for itself;
+     * this catches the other shape, where the gate stays pure and a caller is
+     * given a way to ask for a different answer. Facts in, verdict out: a
+     * caller that wants a different verdict has to change the facts, which
+     * means writing the rows.
+     */
+    expect(canUseFeatures.length).toBe(1);
+  });
+});

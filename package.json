@@ -37,6 +37,7 @@
     "db:verify": "node scripts/db-verify.mjs",
     "db:explain:dashboard": "npm run explain:dashboard --workspace=@whatsapp-os/db",
     "verse:metric": "npm run verse:metric --workspace=web --",
+    "seed:dev": "npm run seed:dev --workspace=web",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",
     "db:studio": "npm run studio --workspace=@whatsapp-os/db",

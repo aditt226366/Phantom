@@ -593,6 +593,8 @@ model WhatsAppNumber {
   /// per company keeps the uniqueness a tenant fact rather than a global one -
   /// two companies must never collide, and neither must learn of the other by
   /// failing to insert.
+  verseCampaigns VerseCampaign[]
+
   @@unique([companyId, phoneNumberId])
   @@index([companyId, createdAt(sort: Desc)])
   @@map("whatsapp_numbers")
@@ -2746,6 +2748,18 @@ model VerseCampaign {
   modelTier       String @map("model_tier")
   knowledgeBaseId String @map("knowledge_base_id")
 
+  /// Which number this campaign sends from.
+  ///
+  /// Not derived from the template: a template belongs to an integration and
+  /// an integration can hold several numbers, so "the template's number" would
+  /// be a silent pick among them - and a business running one number for
+  /// support and another for marketing would find a campaign going out from
+  /// whichever sorted first.
+  ///
+  /// Nullable because a DRAFT is built field by field in the wizard. A CHECK,
+  /// not NOT NULL, is what stops a RUNNING campaign without one.
+  whatsappNumberId String? @map("whatsapp_number_id")
+
   status        VerseCampaignStatus @default(DRAFT)
   /// Why we stopped it. Tied to STOPPED by a CHECK.
   stoppedReason String?             @map("stopped_reason")
@@ -2777,11 +2791,15 @@ model VerseCampaign {
   /// campaign leaves it retrieving from nothing and answering from the model's
   /// general knowledge - the exact failure this phase exists to prevent.
   knowledgeBase KnowledgeBase            @relation(fields: [knowledgeBaseId], references: [id], onDelete: Restrict)
+  /// Restrict: a campaign whose number was deleted must not silently become
+  /// one that sends from nowhere. The delete is refused instead.
+  whatsappNumber WhatsAppNumber?         @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
   recipients    VerseCampaignRecipient[]
   leadSources   LeadSource[]
 
   @@index([companyId, createdAt(sort: Desc)])
   @@index([companyId, status])
+  @@index([companyId, whatsappNumberId])
   @@map("verse_campaigns")
 }
 

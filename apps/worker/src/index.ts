@@ -24,6 +24,7 @@ import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
 import { handleVerseIngest } from "./jobs/verse-ingest.ts";
 import { handleVerseReply } from "./jobs/verse-reply.ts";
+import { handleVerseCampaignTick } from "./jobs/verse-campaign.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -152,6 +153,17 @@ async function processJob(job: Job): Promise<unknown> {
        */
       return handleVerseReply(
         parseJobPayload(JOB_NAMES.VERSE_REPLY, job.data),
+      );
+
+    case JOB_NAMES.VERSE_CAMPAIGN_TICK:
+      /*
+       * Delivered by a per-campaign scheduler, for the reason the lead-source
+       * poll and the dashboard rollup are: this process cannot enumerate
+       * companies, so a sweeping scheduler would select zero rows, succeed,
+       * and contact nobody.
+       */
+      return handleVerseCampaignTick(
+        parseJobPayload(JOB_NAMES.VERSE_CAMPAIGN_TICK, job.data),
       );
 
     default:

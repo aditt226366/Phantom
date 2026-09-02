@@ -110,7 +110,32 @@ const ALLOWED_BARE = new Set(["zod"]);
 /** `import ... from "x"`, `export ... from "x"`, and bare `import "x"`. */
 const SPECIFIER = /(?:^|\n)\s*(?:import|export)[\s\S]*?from\s*["']([^"']+)["']|(?:^|\n)\s*import\s*["']([^"']+)["']/g;
 
-function specifiersOf(source: string): string[] {
+/**
+ * Comments removed before matching, because this check greps.
+ *
+ * -----------------------------------------------------------------------
+ * The third time this repository has been caught by exactly this
+ * -----------------------------------------------------------------------
+ *
+ * `no-raw-prisma.test.ts` says so in its own header about import specifiers.
+ * The admin-db narrowness check hit it when a comment explained why a Prisma
+ * argument type is NOT used. And this one fired on a comment in schedule.ts
+ * reading `... is a different message from "you have used today's allowance"` -
+ * the word `from` immediately before a quoted string, which is indisitinguishable
+ * from an import to a regex that spans lines.
+ *
+ * The rule the conventions state is "parse, don't grep", and the affordable
+ * half of it is this: strip what is not code first. A comment that MENTIONS a
+ * package is documentation; only a specifier in code is an import.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+function specifiersOf(rawSource: string): string[] {
+  const source = stripComments(rawSource);
   const found: string[] = [];
   for (const match of source.matchAll(SPECIFIER)) {
     const value = match[1] ?? match[2];

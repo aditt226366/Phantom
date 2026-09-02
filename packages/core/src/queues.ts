@@ -42,6 +42,7 @@ export const JOB_NAMES = {
   DASHBOARD_ROLLUP: "dashboard.rollup",
   VERSE_INGEST: "verse.ingest",
   VERSE_REPLY: "verse.reply",
+  VERSE_CAMPAIGN_TICK: "verse.campaign.tick",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -402,6 +403,47 @@ export function verseReplyJobId(messageId: string): string {
 }
 
 /**
+ * One tick of a running campaign.
+ *
+ * ---------------------------------------------------------------------------
+ * A repeatable job per campaign, for the fourth time
+ * ---------------------------------------------------------------------------
+ *
+ * The same constraint that shaped integration.verify, lead-source.poll and
+ * dashboard.rollup: this process connects as app_runtime with NO company
+ * context, so `SELECT id FROM verse_campaigns WHERE status = 'RUNNING'` returns
+ * zero rows, succeeds, and looks exactly like "nothing to send". A sweeping
+ * scheduler would run for ever and contact nobody.
+ *
+ * So the fan-out lives where a company id can be established - a server action
+ * after requireSession() registers a scheduler when a campaign starts.
+ *
+ * Pausing does NOT unregister it. The handler returns early on any status but
+ * RUNNING, so resuming is one UPDATE rather than a re-registration that could
+ * fail and leave a campaign saying RUNNING while nothing ticks it.
+ */
+export const verseCampaignTickJobSchema = z.object({
+  companyId: z.string().min(1),
+  campaignId: z.string().min(1),
+});
+
+export type VerseCampaignTickJob = z.infer<typeof verseCampaignTickJobSchema>;
+
+/**
+ * The scheduler id for one campaign's tick.
+ *
+ * Derived from the campaign id, because upsertJobScheduler is an upsert on this
+ * key: editing a campaign re-registers under the same id and replaces the
+ * schedule rather than adding a second one. A random or timestamped id would
+ * leave the old schedule running and the campaign would send at twice its
+ * intended pace - against a daily cap that each scheduler would read
+ * independently.
+ */
+export function verseCampaignSchedulerId(campaignId: string): string {
+  return `verse-campaign:${campaignId}`;
+}
+
+/**
  * The send job runs ONCE. Everything else keeps the default five attempts.
  *
  * Meta's /messages endpoint has no idempotency key and no "did this land"
@@ -447,6 +489,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.DASHBOARD_ROLLUP]: dashboardRollupJobSchema,
   [JOB_NAMES.VERSE_INGEST]: verseIngestJobSchema,
   [JOB_NAMES.VERSE_REPLY]: verseReplyJobSchema,
+  [JOB_NAMES.VERSE_CAMPAIGN_TICK]: verseCampaignTickJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

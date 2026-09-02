@@ -325,3 +325,95 @@ export async function verseContextFor(
       })),
   };
 }
+
+/* ------------------------------------------------------------------------- *
+ * Campaigns
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How many of this campaign's messages went out on the tenant's today.
+ *
+ * The tenant's day, not the server's, and the caller computes the boundary
+ * with `localDay` - a cap of 200 that resets at UTC midnight resets at 05:30
+ * for an Indian tenant, in the middle of their morning, and they would report
+ * it as the cap not working.
+ *
+ * Counted from the recipients rather than from `messages`, because that is
+ * what the cap is about: people contacted by THIS campaign. A message row can
+ * also be an answer or a handoff, and counting those would spend a tenant's
+ * daily allowance on replies to people it had already reached.
+ */
+export async function campaignSentSince(
+  db: CompanyClient,
+  companyId: string,
+  campaignId: string,
+  since: Date,
+): Promise<number> {
+  return db.verseCampaignRecipient.count({
+    where: {
+      companyId,
+      campaignId,
+      status: "SENT",
+      updatedAt: { gte: since },
+    },
+  });
+}
+
+/**
+ * Stop a campaign because its template can no longer be sent.
+ *
+ * ---------------------------------------------------------------------------
+ * STOPPED and not PAUSED, and the difference is not cosmetic
+ * ---------------------------------------------------------------------------
+ *
+ * PAUSED means a person chose it and Resume will undo it. This is neither:
+ * Meta revoked the approval, nobody here decided anything, and Resume would
+ * put the campaign straight back into refusing one message at a time.
+ *
+ * A CHECK ties `stopped_reason` to the status, so a stopped campaign cannot
+ * exist without the sentence an operator reads.
+ *
+ * Conditional on the current status so a campaign a person paused a moment ago
+ * is not overwritten - the person's PAUSED is a decision and this is a fact,
+ * and the fact does not need to erase the decision to be true.
+ */
+export async function stopCampaignForTemplate(
+  db: CompanyClient,
+  companyId: string,
+  campaignId: string,
+  reason: string,
+): Promise<boolean> {
+  const { count } = await db.verseCampaign.updateMany({
+    where: {
+      id: campaignId,
+      companyId,
+      status: { in: ["RUNNING", "SCHEDULED"] },
+    },
+    data: { status: "STOPPED", stoppedReason: reason },
+  });
+
+  return count > 0;
+}
+
+/**
+ * The next recipients this campaign should contact.
+ *
+ * `take` is the caller's remaining allowance for the day, so the cap is applied
+ * as a LIMIT rather than by fetching everybody and stopping - which at ten
+ * thousand recipients is ten thousand rows read to send fifty.
+ */
+export async function nextCampaignRecipients(
+  db: CompanyClient,
+  companyId: string,
+  campaignId: string,
+  take: number,
+): Promise<
+  Array<{ id: string; phoneE164: string; variables: unknown; contactId: string | null }>
+> {
+  return db.verseCampaignRecipient.findMany({
+    where: { companyId, campaignId, status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    take,
+    select: { id: true, phoneE164: true, variables: true, contactId: true },
+  });
+}

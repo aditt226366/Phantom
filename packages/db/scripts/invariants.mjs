@@ -190,6 +190,10 @@ export const OUT_OF_BAND_DDL = new Set([
   "check:verse_campaigns.verse_campaigns_window_is_within_one_day",
   /* A cap of zero is a campaign that never sends and reads as a bug. */
   "check:verse_campaigns.verse_campaigns_daily_cap_is_positive",
+  /* A campaign that is actually going out must name the number it sends from.
+     A CHECK rather than NOT NULL because a DRAFT is built field by field in
+     the wizard and NOT NULL would refuse the insert that creates it. */
+  "check:verse_campaigns.verse_campaigns_running_has_a_number",
   /* The HNSW index behind retrieval.
      schema.prisma cannot express an hnsw index, and it cannot index an
      `Unsupported` column at all - so `prisma migrate diff` wants to DROP this

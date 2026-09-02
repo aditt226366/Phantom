@@ -235,10 +235,13 @@ export {
   LeadScore,
 } from "./generated/prisma/enums.ts";
 export {
+  campaignSentSince,
   embeddingModelsInBase,
+  nextCampaignRecipients,
   readDocumentBytes,
   replaceChunks,
   retrieveChunks,
+  stopCampaignForTemplate,
   verseContextFor,
 } from "./verse.ts";
 export type { ChunkToStore, VerseContext } from "./verse.ts";

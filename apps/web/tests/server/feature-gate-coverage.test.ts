@@ -229,6 +229,7 @@ describe("the feature gate", () => {
     expect(gated.sort()).toEqual(
       [
         "ai-messaging/page.tsx",
+        "ai-messaging/knowledge/page.tsx",
         "billing/page.tsx",
         "bulk-messaging/page.tsx",
         "bulk-messaging/new/page.tsx",

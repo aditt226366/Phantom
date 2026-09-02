@@ -334,7 +334,7 @@ export async function closingWindows(
     where: {
       windowExpiresAt: { gt: bounds.now, lte: bounds.closingHorizon },
     },
-    orderBy: { windowExpiresAt: "asc" },
+    orderBy: [{ windowExpiresAt: "asc" }, { id: "asc" }],
     take: limit,
     select: {
       id: true,
@@ -434,6 +434,7 @@ export async function waitingForAHuman(
     orderBy: [
       { needsHumanAt: { sort: "asc", nulls: "last" } },
       { lastMessageAt: "asc" },
+      { id: "asc" },
     ],
     take: limit,
     select: {
@@ -494,7 +495,7 @@ export async function recentThreads(
 ): Promise<RecentThread[]> {
   const rows = await db.conversation.findMany({
     where: { lastMessageAt: { not: null } },
-    orderBy: { lastMessageAt: "desc" },
+    orderBy: [{ lastMessageAt: "desc" }, { id: "asc" }],
     take: limit,
     select: {
       id: true,
@@ -536,14 +537,25 @@ export interface NumberHealth {
  * recoverable by apologising to a support queue.
  *
  * Ordered by creation so the list does not reorder under the reader when a
- * rating changes. `metadataRefreshedAt` comes back with it because every value
- * here is a cache of Meta's, and a cache with no age is a claim nobody can
- * check - the numbers page already makes that argument and this card inherits
- * it rather than restating it as a fresher-looking number.
+ * rating changes - and then by id, which is what actually makes that true.
+ *
+ * `created_at` alone is not a total order. Meta's refresh job inserts several
+ * numbers in one pass and they tie to the microsecond, and with a tied sort
+ * key Postgres may return them in any order it likes - so the card this
+ * comment promised would hold still reshuffled between two refreshes with
+ * nothing changed. The screenshot suite is what said so: the same three
+ * fixture numbers, identical `created_at`, came back reversed on a later run
+ * with no edit to the query. Adding the primary key as the last key makes the
+ * order total by construction, for this and every other list here.
+ *
+ * `metadataRefreshedAt` comes back with it because every value here is a cache
+ * of Meta's, and a cache with no age is a claim nobody can check - the numbers
+ * page already makes that argument and this card inherits it rather than
+ * restating it as a fresher-looking number.
  */
 export async function numberHealth(db: CompanyClient): Promise<NumberHealth[]> {
   return db.whatsAppNumber.findMany({
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       displayNumber: true,
@@ -583,7 +595,7 @@ export async function pendingTemplates(
 ): Promise<PendingTemplate[]> {
   const rows = await db.whatsAppTemplate.findMany({
     where: { status: "PENDING" },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: limit,
     select: {
       id: true,

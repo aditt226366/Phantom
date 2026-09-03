@@ -210,3 +210,117 @@ describe("totalling", () => {
     expect(Number(totals?.unpriced ?? 0)).toBe(1);
   });
 });
+
+describe("token counts", () => {
+  /**
+   * The columns Phase 11 will reprice from, and the reason they are nullable.
+   *
+   * Per-call pricing can be recomputed from rows we already have. Per-token
+   * cannot, and per-token is how every model provider bills - so a row written
+   * without its counts is one no later work can price, because the provider's
+   * response is gone the moment the job ends.
+   *
+   * Nullable rather than zero-defaulted, for the reason cost_micros is: zero
+   * claims a call consumed nothing and sums as though it were measured. A Graph
+   * call has no tokens at all and must stay null.
+   */
+
+  async function readTokens(dedupeKey: string) {
+    return withCompany(company.id, (db, companyId) =>
+      db.usageEvent.findFirstOrThrow({
+        where: { companyId, dedupeKey },
+        select: { inputTokens: true, outputTokens: true },
+      }),
+    );
+  }
+
+  it("stores what the adapter reported", async () => {
+    await withCompany(company.id, (db, companyId) =>
+      recordUsage(db, companyId, {
+        kind: "verse.reply",
+        dedupeKey: "tokens-present",
+        usage: { inputTokens: 414, outputTokens: 49 },
+      }),
+    );
+
+    /* The numbers from the live probe, so the fixture is a real observation
+       rather than a round one somebody chose. */
+    expect(await readTokens("tokens-present")).toEqual({
+      inputTokens: 414,
+      outputTokens: 49,
+    });
+  });
+
+  it("leaves both null when the caller has none, rather than writing zero", async () => {
+    /*
+     * THE assertion. whatsapp.message.sent is a Graph call - there are no
+     * tokens to report and there never will be. A zero here would be
+     * indistinguishable from a model call that genuinely consumed none, and it
+     * would sum into a per-token total as though it had been measured.
+     */
+    await withCompany(company.id, (db, companyId) =>
+      recordUsage(db, companyId, {
+        kind: "whatsapp.message.sent",
+        dedupeKey: "tokens-absent",
+      }),
+    );
+
+    expect(await readTokens("tokens-absent")).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+    });
+  });
+
+  it("keeps 'which rows have counts' answerable", async () => {
+    /*
+     * The question a repricing has to ask first, and the one a zero default
+     * would make unanswerable. Two rows, one measured: SUM sees only the
+     * measured one and the count says how much of the table it covers.
+     */
+    await withCompany(company.id, async (db, companyId) => {
+      await recordUsage(db, companyId, {
+        kind: "verse.reply",
+        dedupeKey: "measured",
+        usage: { inputTokens: 414, outputTokens: 49 },
+      });
+      await recordUsage(db, companyId, {
+        kind: "whatsapp.message.sent",
+        dedupeKey: "unmeasured",
+      });
+    });
+
+    const [totals] = await withCompany(
+      company.id,
+      (db) => db.$queryRaw<Array<{ total: bigint | null; without: bigint }>>`
+        SELECT SUM(input_tokens) AS total,
+               count(*) FILTER (WHERE input_tokens IS NULL) AS without
+          FROM usage_events
+      `,
+    );
+
+    expect(Number(totals?.total ?? 0)).toBe(414);
+    expect(Number(totals?.without ?? 0)).toBe(1);
+  });
+
+  it("refuses a negative count at the database", async () => {
+    /*
+     * The only thing worth asserting about a value the provider supplies. No
+     * upper bound and no "input implies output": a guess about what a provider
+     * MAY return is how a correct response gets rejected. Negative is not a
+     * number any provider means.
+     */
+    await expect(
+      withCompany(company.id, (db, companyId) =>
+        db.usageEvent.create({
+          data: {
+            companyId,
+            kind: "verse.reply",
+            dedupeKey: "negative",
+            priceVersion: 1,
+            inputTokens: -1,
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+});

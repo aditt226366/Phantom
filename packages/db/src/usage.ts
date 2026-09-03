@@ -39,6 +39,19 @@ export interface RecordUsageInput {
   quantity?: number;
   /** Defaults to now. A retry should pass the original moment, not its own. */
   occurredAt?: Date;
+  /**
+   * What the provider said this call consumed, when it says anything.
+   *
+   * Omitted rather than zeroed by every caller that has no tokens - a Graph
+   * call has none, and writing 0 would claim it consumed nothing. Passed
+   * straight through from the adapter's own `VerseUsage` so nothing here can
+   * disagree with what the provider returned.
+   *
+   * See the column comments in schema.prisma for why these are recorded at all
+   * before anything prices them, and for the cache split that will eventually
+   * make `inputTokens` less than the billable input.
+   */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface RecordedUsage {
@@ -74,6 +87,18 @@ export async function recordUsage(
         quantity,
         dedupeKey: input.dedupeKey,
         ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
+        /*
+         * Spread only when present, so a caller with no tokens leaves both
+         * columns NULL rather than writing a zero it did not measure. The same
+         * shape `occurredAt` uses above and for the same reason: absent is a
+         * different fact from a default.
+         */
+        ...(input.usage
+          ? {
+              inputTokens: input.usage.inputTokens,
+              outputTokens: input.usage.outputTokens,
+            }
+          : {}),
         ...priced,
       },
     ],

@@ -194,6 +194,14 @@ export const OUT_OF_BAND_DDL = new Set([
      A CHECK rather than NOT NULL because a DRAFT is built field by field in
      the wizard and NOT NULL would refuse the insert that creates it. */
   "check:verse_campaigns.verse_campaigns_running_has_a_number",
+  /* Token counts hold what the provider said, so the only thing worth
+     asserting is that it is not negative - which is not a number any provider
+     means. Deliberately no upper bound and no "input implies output": a guess
+     about what a provider MAY return is how a correct response gets rejected,
+     and this column exists so Phase 11 can reprice from what actually
+     happened. NULL is permitted throughout, because a Graph call has no tokens
+     and every row written before this migration genuinely has none. */
+  "check:usage_events.usage_events_token_counts_are_not_negative",
   /* A thread Verse handled is still a thread. The same partition assertion the
      flow count carries: a FILTER that overlaps or misses makes the chart
      quietly not add up, and one statement computing both is the only thing

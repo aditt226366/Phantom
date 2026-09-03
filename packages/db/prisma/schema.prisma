@@ -2246,6 +2246,45 @@ model UsageEvent {
   /// Why this row has no cost. Null when it does.
   unpricedReason String? @map("unpriced_reason")
 
+  /// What the provider said this call consumed. Null when it did not say.
+  ///
+  /// -----------------------------------------------------------------------
+  /// Recorded now because a later phase cannot reconstruct them
+  /// -----------------------------------------------------------------------
+  ///
+  /// Every row carries a `price_version` so it can be repriced in arrears, and
+  /// per-CALL pricing can indeed be recomputed from the rows we already have.
+  /// Per-TOKEN pricing cannot, and per-token is how every model provider bills.
+  /// The provider's response is gone the moment the job ends; if these are not
+  /// written at the call, no work in Phase 11 or afterwards can recover them.
+  ///
+  /// Nullable, never backfilled to zero. A Graph call has no tokens at all -
+  /// whatsapp.message.sent, integration.verify and whatsapp.numbers.refresh
+  /// will always be null here - and every row written before the column
+  /// existed genuinely has none. Zero is the same lie `cost_micros` refuses:
+  /// it claims a call consumed nothing, sums as though it were measured, and
+  /// is indistinguishable from a measured zero. Null keeps "which rows do we
+  /// have counts for" an answerable question, which is the first thing a
+  /// repricing has to ask.
+  ///
+  /// -----------------------------------------------------------------------
+  /// input_tokens will stop being the whole input bill
+  /// -----------------------------------------------------------------------
+  ///
+  /// Anthropic returns `cache_creation_input_tokens` and
+  /// `cache_read_input_tokens` beside `input_tokens`, and they are NOT included
+  /// in it - they are a separate split of the billable input, priced above and
+  /// far below the base rate respectively. Measured live in Phase 9; the shape
+  /// is in 20260909100000's header and in verse-probe.mjs, which printed it.
+  ///
+  /// Both are zero today because nothing enables prompt caching, so these two
+  /// columns are complete. The moment anything turns it on - and a system
+  /// prompt carrying a knowledge base is what caching is for - this column set
+  /// needs two more, with the same rule about zero. Written down rather than
+  /// built, because a column nothing writes is a column nothing writes.
+  inputTokens  Int? @map("input_tokens")
+  outputTokens Int? @map("output_tokens")
+
   /// Idempotency, because DEFAULT_JOB_OPTIONS sets attempts: 5.
   ///
   /// A job that emits its usage event and then fails emits again on every

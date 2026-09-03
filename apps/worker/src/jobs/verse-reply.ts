@@ -266,6 +266,10 @@ export async function handleVerseReply(job: VerseReplyJob): Promise<void> {
       kind: "verse.reply",
       dedupeKey: usageDedupeKey("verse.reply", message.messageId),
       occurredAt: now,
+      /* Straight from the adapter, so nothing here can disagree with what the
+         provider returned. Nothing prices these yet; recording them is the
+         only chance to - the response is gone when this job ends. */
+      usage: outcome.usage,
     });
 
     return message;
@@ -434,13 +438,13 @@ async function scoreLead(
     const router = routerFor(VERSE_SCORING_TIER);
     if (!router) return;
 
-    const score = await scoreConversation(router, turns);
-    if (!score) return;
+    const scored = await scoreConversation(router, turns);
+    if (!scored) return;
 
     await withCompany(companyId, async (db, scoped) => {
       await db.contact.updateMany({
         where: { id: context.contactId, companyId: scoped },
-        data: { leadScore: score, leadScoreAt: now },
+        data: { leadScore: scored.score, leadScoreAt: now },
       });
 
       await recordUsage(db, scoped, {
@@ -449,6 +453,11 @@ async function scoreLead(
            retries and a job-id key would charge twice for one classification. */
         dedupeKey: usageDedupeKey("verse.lead_score", messageId),
         occurredAt: now,
+        /* The scoring call's own tokens, not the reply's. This runs on the
+           cheapest tier and on every inbound message of every campaign, so it
+           is the highest-VOLUME model call in the phase - which is exactly the
+           row a per-token reprice needs to be able to tell apart. */
+        usage: scored.usage,
       });
     });
   } catch (error) {

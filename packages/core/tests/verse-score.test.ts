@@ -52,9 +52,42 @@ describe("parseLeadScore", () => {
 
 describe("scoreConversation", () => {
   it("scores from the customer's words", async () => {
-    expect(await scoreConversation(router("HOT"), [
-      { role: "customer", text: "do you have the blue one in stock, I want it today" },
-    ])).toBe("HOT");
+    expect(
+      await scoreConversation(router("HOT"), [
+        { role: "customer", text: "do you have the blue one in stock, I want it today" },
+      ]),
+    ).toEqual({ score: "HOT", usage: { inputTokens: 20, outputTokens: 1 } });
+  });
+
+  it("returns the tokens the scoring call itself consumed", async () => {
+    /*
+     * Not the reply's tokens - this is a separate call on the cheapest tier,
+     * and the caller writes its own usage_events row from these.
+     *
+     * Returned at all because discarding them made that row unpriceable: the
+     * provider's response is gone by the time the caller has a score, and
+     * per-token pricing cannot be reconstructed from anywhere else. Phase 11
+     * reprices from what was recorded, or not at all.
+     */
+    const scored = await scoreConversation(router("WARM"), [
+      { role: "customer", text: "how much" },
+    ]);
+
+    expect(scored?.usage).toEqual({ inputTokens: 20, outputTokens: 1 });
+  });
+
+  it("returns null, and no usage, when the answer does not parse", async () => {
+    /*
+     * The call happened and was billed, and this still records nothing. The
+     * caller's dedupe key is per message, so a usage row here would make "leads
+     * scored" and "scoring calls paid for" the same number when they are not -
+     * and there is no kind for a wasted classification yet.
+     */
+    expect(
+      await scoreConversation(router("possibly quite warm"), [
+        { role: "customer", text: "how much" },
+      ]),
+    ).toBeNull();
   });
 
   it("sends only the customer's turns", async () => {

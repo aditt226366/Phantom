@@ -72,10 +72,27 @@ export function parseLeadScore(text: string): LeadScore | null {
  * for every message of every campaign - which is the cost that matters here
  * more than anywhere else in the phase.
  */
+/**
+ * The score, and what the call to produce it cost.
+ *
+ * Returned together rather than the score alone, because the caller writes a
+ * usage_events row for this classification and per-token repricing needs the
+ * counts the provider gave. Discarding them here is what made that row
+ * unpriceable: the response is gone by the time the caller sees the score.
+ *
+ * Both null when there is nothing to score or the model did not answer - the
+ * caller records neither a score nor a charge in that case, because no call was
+ * made or none succeeded.
+ */
+export interface ScoredLead {
+  score: LeadScore;
+  usage: { inputTokens: number; outputTokens: number };
+}
+
 export async function scoreConversation(
   router: ModelRouter,
   turns: readonly VerseTurn[],
-): Promise<LeadScore | null> {
+): Promise<ScoredLead | null> {
   const customer = turns.filter((turn) => turn.role === "customer");
 
   if (customer.length === 0) return null;
@@ -93,5 +110,19 @@ export async function scoreConversation(
 
   if (outcome.kind !== "answered") return null;
 
-  return parseLeadScore(outcome.text);
+  const score = parseLeadScore(outcome.text);
+
+  /*
+   * An unparseable answer is null, and the usage goes with it.
+   *
+   * The call happened and was billed, so there is an argument for recording the
+   * tokens anyway. It is not taken: the caller's dedupe key is per message and
+   * writing a usage row for a classification that produced nothing would make
+   * "how many leads did we score" and "how many scoring calls did we pay for"
+   * the same number when they are not. A wasted call is worth counting, but not
+   * by pretending it scored something - and there is no kind for it yet.
+   */
+  if (score === null) return null;
+
+  return { score, usage: outcome.usage };
 }

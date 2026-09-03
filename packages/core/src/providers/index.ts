@@ -26,9 +26,38 @@ export type {
 } from "./google-sheets.ts";
 export {
   decodeGraphFailure,
+  graphGetJson,
+  graphGetQuery,
+  graphPost,
   verifyMetaAds,
   verifyWhatsAppCloud,
 } from "./meta.ts";
+export type { GraphResult } from "./meta.ts";
+export {
+  campaignInsights,
+  createPausedCampaign,
+  listAdAccounts,
+  listPages,
+  minorUnitsFromMicros,
+  pageWhatsAppLink,
+  setCampaignStatus,
+  spendToMicros,
+} from "./meta-ads.ts";
+export type {
+  CreateCampaignInput,
+  DailyCampaignSpend,
+  MetaAdAccountSummary,
+  MetaCampaignObjectiveName,
+  MetaPageSummary,
+  PageWhatsAppLink,
+} from "./meta-ads.ts";
+export {
+  TOKEN_EXPIRY_WARNING_DAYS,
+  debugToken,
+  expiryDemotesStatus,
+  tokenExpiryState,
+} from "./token.ts";
+export type { TokenExpiryState } from "./token.ts";
 
 export type ProviderVerifier = (
   secrets: Readonly<Record<string, string>>,

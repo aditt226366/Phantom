@@ -211,12 +211,30 @@ export type IntegrationStatusName = "CONNECTED" | "NOT_CONNECTED";
  * It also needs no third enum member, so IntegrationStatus keeps its "two
  * states, not three" property.
  */
+/*
+ * A third input as of Phase 10: an expired credential.
+ *
+ * It belongs here rather than in a check beside the badge, because it is the
+ * same question the other two answer - "is this integration going to work" -
+ * and the answer is no for exactly the same reason a missing required key is
+ * no. A token Meta will refuse is not a connection.
+ *
+ * It is `auth`-class, in the vocabulary of providers/types.ts, so it demotes.
+ * An EXPIRING token does not: see expiryDemotesStatus, which is where that
+ * line is drawn and why.
+ *
+ * Optional so that the two providers with no expiring credential - and every
+ * existing caller - are unchanged. Passing nothing means "no expiry recorded",
+ * which is the honest state for a Google private key.
+ */
 export function effectiveIntegrationStatus(
   provider: IntegrationProviderName,
   storedKeys: readonly string[],
   storedStatus: IntegrationStatusName,
+  credentialsExpired = false,
 ): IntegrationStatusName {
   if (missingRequiredKeys(provider, storedKeys).length > 0) return "NOT_CONNECTED";
+  if (credentialsExpired) return "NOT_CONNECTED";
   return storedStatus;
 }
 

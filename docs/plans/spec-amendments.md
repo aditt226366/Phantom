@@ -8,7 +8,7 @@ Written down before the affected phases start, so that the code which depends on
 them — schema shapes, sequencing, what blocks what — is not re-derived from a
 conversation nobody can find.
 
-Status: **A4, A1 and the renumbering are done; A2 is in progress.** Phase 3
+Status: **A4, A1, A2, A3 and the renumbering are done.** Phase 3
 shipped and is tagged (`phase-3.md`); the flow builder is **Phase 8**
 (`phase-8.md`), tagged `phase-8-runtime` and `phase-8`. A6 is in force and has
 been run against dev and test at every tag since. A3 and A5 have not started —
@@ -189,7 +189,30 @@ Three things it inherits, none of which it may rebuild:
 
 ## A3. Meta Ads runs on the tenant's own Meta account
 
-**Changes: Meta Ads.**
+**Changes: Meta Ads. Shipped, tagged `phase-10`** (`phase-10.md`).
+
+Both of the obligations below were met. Two things are worth pulling back here
+because they change what a later phase has to do:
+
+- **Only an EXPIRED token demotes the badge**, never an expiring one. An
+  expiring token serves traffic perfectly well, and the documented operator
+  response to NOT_CONNECTED is to re-enter credentials - so demoting early buys
+  a week of people retyping a working secret. The banner is the instrument for
+  "act soon".
+- **`EXPIRY_TRACKED_KEYS` holds one key, and WHATSAPP_ACCESS_TOKEN is
+  deliberately absent.** It can be a user token that expires in sixty days;
+  nothing records that and nothing warns. Closing that gap is adding a key to
+  the set and inheriting the badge, the banner and the reconnect - it is not
+  this amendment's to close, but the failure it leaves is the same silent one
+  this amendment exists to prevent.
+
+And one thing A3 did not anticipate, recorded because Phase 11 inherits it:
+**ad spend is a different debt from platform usage and must not be summed with
+it.** `meta.ad.spend` carries a null cost on purpose - the money is Meta's,
+already charged, in the ad account's own currency - so the dashboard's unpriced
+count excludes the kind by name and ad spend has its own card. A phase that
+prices conversations against Meta's billing API is the one that makes the two
+into a single bill.
 
 Each client connects **their own** Meta account, and their credentials are stored
 per-tenant in the admin integrations section — exactly the model already in
@@ -396,7 +419,7 @@ is its position in ship order, and nothing else.**
 | 7 | the tenant dashboard | `phase-7` *(was `phase-9`)* | `phase-7.md` |
 | 8 | the rule-based flow builder | `phase-8-runtime`, `phase-8` *(were named)* | `phase-8.md` |
 | 9 | **the Verse AI layer** | `phase-9-runtime`, `phase-9` | `phase-9.md` |
-| 10 | Meta Ads | — | — |
+| 10 | Meta Ads | `phase-10` | `phase-10.md` |
 | 11 | conversation pricing and billing | — | — |
 | 12 | launch readiness | — | — |
 

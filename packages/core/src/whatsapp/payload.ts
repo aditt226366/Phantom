@@ -154,7 +154,89 @@ export interface InboundMessage {
    * not include.
    */
   replyId: string | null;
+
+  /**
+   * The click-to-WhatsApp ad this conversation started from, when it did.
+   *
+   * -------------------------------------------------------------------------
+   * It arrives once and never again
+   * -------------------------------------------------------------------------
+   *
+   * Meta attaches the referral block to the FIRST inbound message of a
+   * conversation that began with a click on an ad, and to no later message in
+   * it. A reader that drops it has lost the only join between money spent and
+   * a person who replied - permanently, and with nothing anywhere to
+   * reconstruct it from: the Insights API reports spend per ad and has no idea
+   * which WhatsApp thread any of it produced.
+   *
+   * Parsed here rather than in the ingest, so that every stored payload can be
+   * re-read by a backfill through the same function the live path uses. That
+   * property is what made the conversation-charge history recoverable when
+   * nothing had been recording it for five phases.
+   *
+   * Null for every message that is not one - which is almost all of them.
+   */
+  referral: InboundReferral | null;
+
   occurredAt: Date;
+}
+
+/** Meta's referral block, kept verbatim. */
+export interface InboundReferral {
+  /**
+   * Meta's click id. Their attribution reporting is keyed on it, and it is the
+   * value to quote when asking them why a number disagrees.
+   */
+  ctwaClid: string | null;
+  /** The ad or post id. This is what joins a conversation to spend. */
+  sourceId: string | null;
+  /**
+   * "ad" or "post", verbatim and never normalised.
+   *
+   * An organic post referral is not an ad click. Folding the two together
+   * would put conversations nobody paid for into a cost-per-lead denominator,
+   * which makes the figure look better than it is - the direction nobody
+   * checks.
+   */
+  sourceType: string | null;
+  sourceUrl: string | null;
+  /**
+   * The ad's own copy. What makes a referral legible six weeks later, when the
+   * ad has been edited or deleted and Meta will no longer say what it said.
+   */
+  headline: string | null;
+  body: string | null;
+}
+
+function readReferral(raw: Record<string, unknown>): InboundReferral | null {
+  const referral = raw["referral"] as Record<string, unknown> | undefined;
+  if (!referral || typeof referral !== "object") return null;
+
+  const text = (key: string): string | null => {
+    const value = referral[key];
+    return typeof value === "string" && value !== "" ? value : null;
+  };
+
+  const parsed: InboundReferral = {
+    ctwaClid: text("ctwa_clid"),
+    sourceId: text("source_id"),
+    sourceType: text("source_type"),
+    sourceUrl: text("source_url"),
+    headline: text("headline"),
+    body: text("body"),
+  };
+
+  /*
+   * A block with nothing identifying in it is not a referral.
+   *
+   * Meta has sent an empty object here, and storing a row for it would put a
+   * conversation in the ads-attributed count with no ad to attribute it to -
+   * a lead that inflates the numerator of every cost-per-lead figure and
+   * belongs in none of them.
+   */
+  if (!parsed.ctwaClid && !parsed.sourceId) return null;
+
+  return parsed;
 }
 
 export interface StatusUpdate {
@@ -466,6 +548,7 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
               ? ((raw["text"] as { body?: string } | undefined)?.body ?? null)
               : reply.title,
           replyId: reply.id,
+          referral: readReferral(raw),
           ...readMedia(raw, message.type),
           occurredAt: toDate(message.timestamp),
         });

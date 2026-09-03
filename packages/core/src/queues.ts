@@ -43,6 +43,7 @@ export const JOB_NAMES = {
   VERSE_INGEST: "verse.ingest",
   VERSE_REPLY: "verse.reply",
   VERSE_CAMPAIGN_TICK: "verse.campaign.tick",
+  META_INSIGHTS_SYNC: "meta.insights.sync",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -299,6 +300,45 @@ export function leadSourceSchedulerId(leadSourceId: string): string {
 }
 
 /**
+ * One ad account's spend sync.
+ *
+ * Per ad account rather than per company, for the reason the lead-source poll
+ * is per binding: the worker cannot enumerate companies, so a schedule has to
+ * carry the company id it will open a scope with. It also means an account
+ * whose token has lapsed stops syncing on its own without taking the tenant's
+ * other account down with it.
+ */
+export const metaInsightsSyncJobSchema = z.object({
+  companyId: z.string().min(1),
+  adAccountId: z.string().min(1),
+  /**
+   * How many days back to re-read, on the runs that are not the first.
+   *
+   * Not a cursor. Meta RESTATES recent days as attribution windows close, so a
+   * sync that only read forward from where it stopped would keep the first
+   * figure it ever saw for every day - and those first figures are the ones
+   * most likely to be revised. The window is re-read and the day is
+   * overwritten, which the unique index makes safe.
+   */
+  lookbackDays: z.number().int().min(1).max(90).default(28),
+});
+
+export type MetaInsightsSyncJob = z.infer<typeof metaInsightsSyncJobSchema>;
+
+/**
+ * The scheduler id for one ad account's sync.
+ *
+ * Derived from the account row id, because upsertJobScheduler is an upsert on
+ * this key. A random id would leave the old schedule running beside the new
+ * one, and the account would sync twice as often - which is a rate limit
+ * against Meta shared with every other tenant before it is a visible problem
+ * for this one.
+ */
+export function metaInsightsSchedulerId(adAccountId: string): string {
+  return `meta-insights:${adAccountId}`;
+}
+
+/**
  * Recompute one company's dashboard rollup.
  *
  * ---------------------------------------------------------------------------
@@ -490,6 +530,7 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.VERSE_INGEST]: verseIngestJobSchema,
   [JOB_NAMES.VERSE_REPLY]: verseReplyJobSchema,
   [JOB_NAMES.VERSE_CAMPAIGN_TICK]: verseCampaignTickJobSchema,
+  [JOB_NAMES.META_INSIGHTS_SYNC]: metaInsightsSyncJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

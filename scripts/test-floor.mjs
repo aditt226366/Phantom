@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { reportUnreadableMessage } from "./gate-signals.mjs";
+
 /**
  * Run the suite, and refuse a run that collected fewer tests than it should.
  *
@@ -168,9 +170,21 @@ try {
     try {
       counts.push(JSON.parse(readFileSync(report, "utf8")).numTotalTests ?? null);
     } catch (cause) {
+      /*
+       * Through gate-signals.mjs, which is the only place the marker the
+       * pre-commit hook greps for is written. The sentence here used to BE
+       * that marker, and naming the group in it - which is worth doing, and
+       * is still done - switched the gate's retry off for a whole phase.
+       * That file has the story; the short version is that a guard whose
+       * trigger lives in one file and whose text lives in another has a
+       * hinge, and this is where the hinge was.
+       */
       console.error(
-        `\nCould not read the ${group.label} report at ${report}: ` +
-          `${cause instanceof Error ? cause.message : String(cause)}`,
+        reportUnreadableMessage(
+          group.label,
+          report,
+          cause instanceof Error ? cause.message : String(cause),
+        ),
       );
       counts.push(null);
     }

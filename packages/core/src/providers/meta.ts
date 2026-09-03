@@ -224,10 +224,48 @@ export async function graphGetJson<T = unknown>(
   secretValues: readonly string[],
   fetchImpl: FetchImpl = fetch,
 ): Promise<GraphResult<T>> {
+  return graphGetQuery<T>(
+    path,
+    fields ? { fields } : {},
+    accessToken,
+    secretValues,
+    fetchImpl,
+  );
+}
+
+/**
+ * The same GET, with arbitrary query parameters and a multi-segment path.
+ *
+ * graphGetJson answers the shape of question a media lookup asks: one object
+ * id, an optional field list. The ads endpoints ask a different one -
+ * `me/adaccounts`, and `act_123/insights` with a level, a time increment and a
+ * time range - and neither fits.
+ *
+ * It is this function that the other delegates to, rather than the two of them
+ * growing separate copies of the fetch, the timeout and the decoder. The
+ * header of this file is about exactly that: one error envelope, one
+ * classification, one place that scrubs what Meta echoes back.
+ *
+ * The path is encoded PER SEGMENT. encodeURIComponent over the whole string
+ * turns `me/adaccounts` into `me%2Fadaccounts`, which Graph answers with a 400
+ * naming a node that does not exist - a confusing error a long way from its
+ * cause.
+ */
+export async function graphGetQuery<T = unknown>(
+  path: string,
+  params: Readonly<Record<string, string>>,
+  accessToken: string,
+  secretValues: readonly string[],
+  fetchImpl: FetchImpl = fetch,
+): Promise<GraphResult<T>> {
   try {
-    const url =
-      `${GRAPH_API_BASE}/${encodeURIComponent(path)}` +
-      (fields ? `?fields=${fields}` : "");
+    const encodedPath = path
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+
+    const query = new URLSearchParams(params).toString();
+    const url = `${GRAPH_API_BASE}/${encodedPath}${query ? `?${query}` : ""}`;
 
     const response = await fetchImpl(url, {
       /* Header, never the query string - see graphGet. */

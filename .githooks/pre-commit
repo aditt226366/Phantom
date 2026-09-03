@@ -69,9 +69,27 @@ run_gate() {
 # still does the real work, so a run where anything genuinely failed gets no
 # retry under either signature.
 #
+# The second signature is a MARKER rather than a sentence, and that is the
+# whole point of it. It used to be the exact prose test-floor.mjs printed -
+# "Could not read the test report at" - and when the suite was split into two
+# invocations that message gained the name of the half that died, so the
+# string this hook was looking for stopped existing anywhere. The retry was
+# dead from 9a6917a until it refused a commit it should have absorbed, one
+# phase later. Nothing went red in between, because nothing was watching.
+#
+# So what is matched now is a token whose only job is to be matched, emitted
+# by scripts/gate-signals.mjs and by nothing else. The prose beside it in the
+# log stays useful and can be reworded freely; it is no longer load-bearing.
+# The marker is label-free on purpose, so a THIRD vitest group added to
+# GROUPS later trips this with no edit here.
+#
+# packages/core/tests/gate-crash-matcher.test.ts reads the patterns out of
+# this function and runs them over the exact bytes that module produces, so
+# the two cannot drift apart again without a failing test.
+#
 is_crash_shaped() {
   { grep -q "Worker exited unexpectedly" "$1" 2>/dev/null ||
-      grep -q "Could not read the test report at" "$1" 2>/dev/null; } &&
+      grep -q "GATE-SIGNAL: report-unreadable" "$1" 2>/dev/null; } &&
     ! grep -qE "Tests +[0-9]+ failed" "$1" 2>/dev/null
 }
 

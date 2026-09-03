@@ -495,6 +495,35 @@ describe("money", () => {
     expect(rollup.costUnpricedCount).toBe(2);
   });
 
+  it("does not count ad spend as unpriced platform usage", async () => {
+    /*
+     * meta.ad.spend carries a null cost on purpose, and it is the one kind
+     * here that does NOT mean "we have not priced this yet". The money is
+     * Meta's, already charged to the tenant, in the ad account's own currency,
+     * and the figure lives on the insight row where it can be read per
+     * currency without anything summing across them.
+     *
+     * Counting it would make "N events have no price yet" read as OUR pricing
+     * being incomplete - on the one card whose entire job is to be honest
+     * about what a total is missing. That card was correct when Phase 7 wrote
+     * it, and this phase would have made it lie: exactly the obligation
+     * spec-amendments records, which is to check the copy of the cards a phase
+     * does NOT replace.
+     */
+    await seedUsage(company, [
+      { kind: "a", costMicros: 4_000_000n, currency: "INR", occurredAt: TODAY },
+      { kind: "b", costMicros: null, currency: null, occurredAt: TODAY },
+      { kind: "meta.ad.spend", costMicros: null, currency: null, occurredAt: TODAY },
+      { kind: "meta.ad.spend", costMicros: null, currency: null, occurredAt: TODAY },
+    ]);
+
+    await refresh();
+    const rollup = await read();
+
+    /* One, not three. */
+    expect(rollup.costUnpricedCount).toBe(1);
+  });
+
   it("excludes spend from before the month boundary", async () => {
     await seedUsage(company, [
       { kind: "a", costMicros: 4_000_000n, currency: "INR", occurredAt: TODAY },

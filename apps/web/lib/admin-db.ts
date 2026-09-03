@@ -640,6 +640,15 @@ export interface StoredSecretView {
   last4: string | null;
   keyId: string;
   updatedAt: Date;
+  /**
+   * When the provider says this credential stops working, where we know.
+   *
+   * Null is two different things and the console must not conflate them: a
+   * credential that never expires, and one whose expiry we did not manage to
+   * ask for. Both render as "no expiry recorded" and neither demotes - see
+   * tokenExpiryState, which has no_expiry as its own member for this reason.
+   */
+  expiresAt: Date | null;
 }
 
 export interface IntegrationView {
@@ -668,7 +677,13 @@ export async function listIntegrations(
       lastError: true,
       secrets: {
         /* Note what is absent: ciphertext. */
-        select: { key: true, last4: true, keyId: true, updatedAt: true },
+        select: {
+          key: true,
+          last4: true,
+          keyId: true,
+          updatedAt: true,
+          expiresAt: true,
+        },
         orderBy: { key: "asc" },
       },
     },
@@ -686,6 +701,7 @@ export async function listIntegrations(
       last4: secret.last4,
       keyId: secret.keyId,
       updatedAt: secret.updatedAt,
+      expiresAt: secret.expiresAt,
     })),
   }));
 }
@@ -728,6 +744,21 @@ export async function saveIntegrationSecrets(
   companyId: string,
   provider: IntegrationProviderName,
   submitted: Readonly<Record<string, string>>,
+  /**
+   * Expiry per key, for the credentials whose expiry this system tracks.
+   *
+   * Passed in rather than looked up here, because finding it out is a call to
+   * Meta and this function runs inside a transaction. The conventions are
+   * explicit that a transaction holds a pooled connection with a five-second
+   * budget; a Graph call inside one is a ten-second provider timeout sitting on
+   * it. The caller asks first and hands the answer down.
+   *
+   * A key absent from this map leaves the stored expiry ALONE, exactly as a
+   * blank field leaves the stored value alone. Writing null for an absent key
+   * would erase a known expiry every time an operator saved a different
+   * credential on the same form.
+   */
+  expiries: Readonly<Record<string, Date | null>> = {},
 ): Promise<SaveSecretsResult> {
   const fields = integrationFields(provider);
 
@@ -764,11 +795,18 @@ export async function saveIntegrationSecrets(
           ciphertext: sealed.ciphertext,
           keyId: sealed.keyId,
           last4: sealed.last4,
+          ...(field.key in expiries ? { expiresAt: expiries[field.key] } : {}),
         },
         update: {
           ciphertext: sealed.ciphertext,
           keyId: sealed.keyId,
           last4: sealed.last4,
+          /* A NEW value means the old expiry describes a credential that is no
+             longer there. Where the caller could not learn the new one, null is
+             the honest record - "we do not know when this lapses" - and is
+             strictly better than keeping a date that belonged to a token this
+             row no longer holds. */
+          ...(field.key in expiries ? { expiresAt: expiries[field.key] } : {}),
         },
       });
 

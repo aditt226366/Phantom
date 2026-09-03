@@ -11,6 +11,7 @@ import {
   type StatusOutcome,
 } from "./conversations.ts";
 import { recordConversationCharge } from "./conversation-charges.ts";
+import { recordReferral } from "./meta-ads.ts";
 import { applyTemplateStatus } from "./templates.ts";
 import { markWebhookProcessed } from "./webhook-events.ts";
 import { withCompany, type CompanyClient } from "./with-company.ts";
@@ -484,12 +485,31 @@ async function ingestMessage(
    * `where` and into `create`, and NOT into `update`. An update arm here scopes
    * a row it found by a compound unique, so the value has to be written out.
    */
+  /*
+   * A click-to-WhatsApp arrival, which touches three rows rather than one.
+   *
+   * Meta sends the referral block on the FIRST inbound message of the thread
+   * and never again, so everything derived from it is written here or not at
+   * all.
+   */
+  const referral = message.referral;
+
   const contact = await db.contact.upsert({
     where: { companyId_waId: { companyId, waId: message.from } },
     create: {
       companyId,
       waId: message.from,
       ...(message.profileName ? { profileName: message.profileName } : {}),
+      /*
+       * Where this person came from, recorded once at creation.
+       *
+       * INBOUND for an ordinary first message: they wrote in unprompted, which
+       * is a real answer rather than a fallback. Null stays reserved for the
+       * contacts predating this column, who arrived before anything was
+       * asking - calling those organic would be a claim about the tenant's
+       * business that nothing ever checked.
+       */
+      source: referral ? "ADS_CLICK_TO_WHATSAPP" : "INBOUND",
     },
     /*
      * The profile name is only ever written when Meta actually sent one. It
@@ -498,12 +518,40 @@ async function ingestMessage(
      * the second message of every conversation - and the inbox would show a
      * phone number where it used to show a person.
      */
+    /*
+     * The source is deliberately NOT written here, and the reason is the
+     * expensive half of attribution.
+     *
+     * A contact who wrote in cold in March and clicks an ad in September is a
+     * contact this business already had. Re-stamping them would put a lead the
+     * ad did not create into its cost-per-lead denominator - and would do it
+     * to precisely the contacts a tenant has been nurturing longest, which is
+     * the flattering direction of that error and therefore the one nobody
+     * checks.
+     *
+     * The one case worth filling in - a contact with no recorded source at all
+     * who arrives through an ad - needs a predicate an update arm cannot
+     * express, so it is the guarded updateMany below.
+     */
     update: {
       companyId,
       ...(message.profileName ? { profileName: message.profileName } : {}),
     },
     select: { id: true },
   });
+
+  if (referral) {
+    /*
+     * Only where nothing is recorded yet, and the null is in the WHERE rather
+     * than in a read-then-write. Two deliveries of the same first message -
+     * which Meta produces whenever it does not get a 200 - would both see null
+     * between a read and a write; here the second matches no row.
+     */
+    await db.contact.updateMany({
+      where: { id: contact.id, companyId, source: null },
+      data: { source: "ADS_CLICK_TO_WHATSAPP" },
+    });
+  }
 
   const conversation = await db.conversation.upsert({
     where: {
@@ -517,7 +565,10 @@ async function ingestMessage(
       companyId,
       contactId: contact.id,
       whatsappNumberId,
-      source: "INBOUND",
+      /* The thread's origin, which is not the contact's. A returning customer
+         clicking a new ad starts an ads-sourced conversation with an INBOUND
+         contact, and both facts are worth keeping. */
+      source: referral ? "ADS_CLICK_TO_WHATSAPP" : "INBOUND",
     },
     /*
      * Nothing to change. The timestamps, the window and the unread count are
@@ -572,6 +623,41 @@ async function ingestMessage(
       windowExpiresAt: windowExpiryFor(message.occurredAt),
       unread: 1,
     });
+  }
+
+  if (referral) {
+    /*
+     * The attribution row, written whether or not the message was an insert.
+     *
+     * Not gated on the insert, deliberately, and it is the one thing here that
+     * is not. A redelivery whose message row already exists still carries the
+     * referral, and the first delivery may have failed after the message and
+     * before this - so gating on the insert would lose the attribution for
+     * exactly the deliveries that had trouble. recordReferral is idempotent on
+     * (company, message), so the redundant case costs one refused insert.
+     */
+    const row = await db.message.findFirst({
+      where: { companyId, conversationId: conversation.id, wamid: message.wamid },
+      select: { id: true },
+    });
+
+    if (row) {
+      await recordReferral(db, companyId, {
+        conversationId: conversation.id,
+        contactId: contact.id,
+        messageId: row.id,
+        ctwaClid: referral.ctwaClid,
+        sourceId: referral.sourceId,
+        sourceType: referral.sourceType,
+        sourceUrl: referral.sourceUrl,
+        headline: referral.headline,
+        body: referral.body,
+        /* Meta's instant, never ours. A backfill re-reading payloads stored
+           months ago must land on the original moment, or a quarter of
+           attribution moves to the day somebody ran the script. */
+        occurredAt: message.occurredAt,
+      });
+    }
   }
 
   /*

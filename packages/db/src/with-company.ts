@@ -89,6 +89,10 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "WhatsAppConversationCharge",
   "VerseCampaign",
   "VerseCampaignRecipient",
+  "MetaAdAccount",
+  "MetaCampaign",
+  "MetaAdInsight",
+  "MetaAdReferral",
 ]);
 
 /** Operations whose `where` clause should be narrowed to the company. */

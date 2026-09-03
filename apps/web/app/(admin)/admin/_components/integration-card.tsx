@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { IntegrationView, VerificationEntry } from "@/lib/admin-db";
+import { expiryNotice, trackedExpiry } from "@/lib/credential-expiry";
 import { formatTimestamp } from "@/lib/format";
 import { AdminCsrfField } from "./admin-csrf-field";
 import { IntegrationForm, TestConnectionForm } from "./integration-form";
@@ -48,12 +49,32 @@ export function IntegrationCard({
     provider,
     stored.map((secret) => secret.key),
   );
+
+  /*
+   * A3's second obligation. The tenant now produces their own Meta token, so
+   * its lifetime is an operational fact they have to act on - and the failure
+   * it creates without this is the quiet one: the token lapses, the sync
+   * fails, spend stops updating, and the page keeps showing last week's figure
+   * with nothing to say it is stale.
+   *
+   * Read from the stored expiry rather than asked of Meta. A Graph call per
+   * render is a rate limit waiting to happen, and it answers worst at the one
+   * moment it matters most, because a call authorised by an expired token
+   * fails too.
+   */
+  const expiry = expiryNotice(
+    trackedExpiry(stored),
+    new Date(),
+    INTEGRATION_LABELS[provider],
+  );
+
   const connected =
     integration !== undefined &&
     effectiveIntegrationStatus(
       provider,
       stored.map((secret) => secret.key),
       integration.status === "CONNECTED" ? "CONNECTED" : "NOT_CONNECTED",
+      expiry.demotes,
     ) === "CONNECTED";
 
   return (
@@ -78,6 +99,26 @@ export function IntegrationCard({
           Action needed: {missing.join(", ")} {missing.length === 1 ? "is" : "are"}{" "}
           missing. The connection cannot be used until{" "}
           {missing.length === 1 ? "it is" : "they are"} saved.
+        </p>
+      ) : null}
+
+      {/*
+        * Two tones from two tokens, because the palette has exactly two
+        * semantic colours and this is not the commit to add a third. An
+        * expired credential IS an error and reads as one; an expiring one is
+        * an advisory, and it earns attention from the callout surface and the
+        * border rather than from a colour invented for it. Rule 7: every
+        * value comes from a --wa-* token, and there is no amber.
+        */}
+      {expiry.message ? (
+        <p
+          className={
+            expiry.tone === "error"
+              ? "rounded-md border border-hairline bg-surface-strong p-sm text-body-sm text-error"
+              : "rounded-md border border-hairline bg-surface-strong p-sm text-body-sm text-ink"
+          }
+        >
+          {expiry.message}
         </p>
       ) : null}
 

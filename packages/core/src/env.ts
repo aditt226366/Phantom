@@ -170,6 +170,23 @@ export const webEnvSchema = sharedEnvSchema.extend({
    */
   LEAD_SHEET_FIXTURE: z.string().optional(),
 
+  /**
+   * The same hook, for the Meta Ads connect screen.
+   *
+   * That screen is the second page in this application that must call a
+   * provider before it can render: it lists the ad accounts and Pages the
+   * tenant's own token can reach, and there is no useful version of it that
+   * does not. Without a fixture the gate spends two ten-second provider
+   * timeouts per run photographing an error state, and the screen where a
+   * tenant chooses which account will spend their money becomes the one screen
+   * nobody ever looks at.
+   *
+   * A second variable rather than one shared flag, deliberately. They switch
+   * different screens, and a single FIXTURES=1 would mean that turning one on
+   * for a local look silently turned the other on too.
+   */
+  META_ADS_FIXTURE: z.string().optional(),
+
   /* The same four keys, read by /dev/rag so the harness can call a model.
      Optional for the reason the worker's are - see verseKeys below. */
   VERSE_V1_API_KEY: optionalSecret,
@@ -215,7 +232,13 @@ export const webEnvSchema = sharedEnvSchema.extend({
    * production the deploy does not come up: loud, immediate and attributable,
    * which is the opposite of every property the silent version has.
    */
-  if (env.LEAD_SHEET_FIXTURE === undefined) return;
+  const fixtures = [
+    ["LEAD_SHEET_FIXTURE", env.LEAD_SHEET_FIXTURE],
+    ["META_ADS_FIXTURE", env.META_ADS_FIXTURE],
+  ] as const;
+
+  const set = fixtures.filter(([, value]) => value !== undefined);
+  if (set.length === 0) return;
   if (env.NODE_ENV !== "production") return;
 
   /* The test database, by name. Parsing the URL rather than matching a
@@ -232,15 +255,28 @@ export const webEnvSchema = sharedEnvSchema.extend({
 
   if (servingTestDatabase) return;
 
-  ctx.addIssue({
-    code: "custom",
-    path: ["LEAD_SHEET_FIXTURE"],
-    message:
-      "LEAD_SHEET_FIXTURE must not be set in production. It makes the lead-source " +
-      "mapping screen read a fixture instead of the tenant's real spreadsheet, so a " +
-      "mapping saved from it would be filled from the wrong columns. It is set by " +
-      "apps/web/playwright.config.ts and by nothing else - unset it.",
-  });
+  /* Reported per variable rather than as one message naming both, so a deploy
+     that inherited one of them is told which one. */
+  const WHY: Record<string, string> = {
+    LEAD_SHEET_FIXTURE:
+      "It makes the lead-source mapping screen read a fixture instead of the " +
+      "tenant's real spreadsheet, so a mapping saved from it would be filled " +
+      "from the wrong columns.",
+    META_ADS_FIXTURE:
+      "It makes the Meta Ads connect screen list fictional ad accounts and " +
+      "Pages instead of the tenant's own, so an account selected from it names " +
+      "something that does not exist and no spend would ever arrive.",
+  };
+
+  for (const [name] of set) {
+    ctx.addIssue({
+      code: "custom",
+      path: [name],
+      message:
+        `${name} must not be set in production. ${WHY[name] ?? ""} It is set by ` +
+        "apps/web/playwright.config.ts and by nothing else - unset it.",
+    });
+  }
 });
 
 /**

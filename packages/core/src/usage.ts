@@ -92,6 +92,23 @@ export const USAGE_KINDS = [
    * scoring.
    */
   "verse.lead_score",
+  /*
+   * One day of one campaign's ad spend, as Meta reported it.
+   *
+   * The only kind in this list whose cost we do NOT set. Every other entry
+   * records something we did and will price later against a rate card; this
+   * one records money the tenant has ALREADY been charged by Meta, in the ad
+   * account's own currency, and the amount is theirs rather than ours.
+   *
+   * That is why its price entry is not the answer and the cost is carried on
+   * the row. A priced entry here would be a second opinion about a number
+   * somebody has already been billed for.
+   *
+   * Deduped per (account, campaign, day), so the nightly re-read of a
+   * 28-day window restates rather than accumulates - the same key the
+   * insights table itself uses, for the same reason.
+   */
+  "meta.ad.spend",
 ] as const;
 
 export type UsageKind = (typeof USAGE_KINDS)[number];
@@ -162,6 +179,11 @@ const PRICES: readonly UsagePrice[] = [
   { kind: "verse.reply", currency: "INR", version: 1, micros: 0 },
   { kind: "verse.embedding", currency: "INR", version: 1, micros: 0 },
   { kind: "verse.lead_score", currency: "INR", version: 1, micros: 0 },
+  /* Zero, and here it means something different from the seven above.
+     Those are unpriced because Phase 11 will price them; this one has no
+     price of OURS at all - the real figure is Meta's, it is on the row, and
+     it is denominated in a currency this table cannot express per-kind. */
+  { kind: "meta.ad.spend", currency: "INR", version: 1, micros: 0 },
 ];
 
 /** The conversation kind for one of Meta's pricing categories, if we know it. */

@@ -213,11 +213,26 @@ export async function refreshDashboardRollup(
         GROUP BY currency
       ) grouped
     ),
+    /*
+     * Unpriced platform usage - and meta.ad.spend is deliberately not it.
+     *
+     * That kind carries a null cost on purpose: the money is META'S, already
+     * charged to the tenant, in the ad account's own currency, and it is
+     * recorded on the insight row where it can be read per currency. Counting
+     * it here would make "N events were not priced" read as OUR pricing being
+     * incomplete for a figure nobody here was ever going to price - on the one
+     * card whose whole job is to be honest about what a total is missing.
+     *
+     * This is the Phase 7 obligation seen from the other side: a phase must
+     * check the copy of the cards it does not replace, because one of them may
+     * be describing a world the phase has just ended.
+     */
     unpriced AS (
       SELECT count(*)::int AS n
       FROM usage_events
       WHERE occurred_at >= ${bounds.monthStart}
         AND cost_micros IS NULL
+        AND kind <> 'meta.ad.spend'
     )
     INSERT INTO dashboard_rollups (
       company_id, computed_at, day_start, month_start,

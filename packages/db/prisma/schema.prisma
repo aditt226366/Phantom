@@ -134,6 +134,10 @@ model Company {
   kbChunkSources         KbChunkSource[]
   conversationCharges    WhatsAppConversationCharge[]
   verseCampaigns         VerseCampaign[]
+  metaAdAccounts         MetaAdAccount[]
+  metaCampaigns          MetaCampaign[]
+  metaAdInsights         MetaAdInsight[]
+  metaAdReferrals        MetaAdReferral[]
   verseCampaignRecipients VerseCampaignRecipient[]
   dashboardRollup        DashboardRollup?
 
@@ -201,6 +205,7 @@ model User {
   flowsCreated            Flow[]                   @relation("FlowsCreated")
   flowVersionsCreated     FlowVersion[]            @relation("FlowVersionsCreated")
   flowVersionsPublished   FlowVersion[]            @relation("FlowVersionsPublished")
+  metaCampaignsPublished  MetaCampaign[]           @relation("MetaCampaignsPublished")
 
   @@index([companyId, createdAt])
   @@map("users")
@@ -395,6 +400,7 @@ model Integration {
   /// One per provider per company, for now. This relaxes in Phase 4/6, when a
   /// company gets several numbers and several sheet bindings - which is why
   /// `label` already exists and nothing keys off the provider alone.
+  metaAdAccounts  MetaAdAccount[]
   @@unique([companyId, provider])
   @@map("integrations")
 }
@@ -452,6 +458,18 @@ model IntegrationSecret {
   /// four characters of a six-character value discloses most of it, and the
   /// hint exists to confirm which credential is loaded, not to rebuild it.
   last4      String?
+
+  /// When the provider says this credential stops working. Null for the
+  /// credentials that do not expire at all - a private key, a verify token,
+  /// an app secret - which is most of them, and where a far-future date
+  /// would be an expiry the provider never issued.
+  ///
+  /// A3 requires this for Meta Ads: the tenant now does their own Meta-side
+  /// work to produce a token, so its lifetime is an operational fact they
+  /// have to act on rather than our internal detail. Without it the failure
+  /// is a campaign that silently stops working and an operator with no
+  /// reason for it.
+  expiresAt DateTime? @db.Timestamptz(3) @map("expires_at")
 
   createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
   updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
@@ -597,6 +615,7 @@ model WhatsAppNumber {
   /// failing to insert.
   verseCampaigns VerseCampaign[]
 
+  metaAdAccounts MetaAdAccount[]
   @@unique([companyId, phoneNumberId])
   @@index([companyId, createdAt(sort: Desc)])
   @@map("whatsapp_numbers")
@@ -704,6 +723,18 @@ model Contact {
   /// contact from future broadcasts; only one of them is a choice.
   undeliverableAt DateTime? @db.Timestamptz(3) @map("undeliverable_at")
 
+  /// How this contact first reached us.
+  ///
+  /// Shares conversation_source rather than declaring its own enum: a thread
+  /// and the person in it arrive the same way, and a second list could only
+  /// disagree with the first - in the direction where the dashboard's
+  /// lead-source card counts one thing and a report counts another.
+  ///
+  /// Null is not INBOUND. Every contact predating Phase 10 has null because
+  /// nothing recorded this, and defaulting them to INBOUND would tell a
+  /// tenant that months of contacts arrived organically when nobody asked.
+  source ConversationSource?
+
   /// How warm this lead is, as a flow's action node last set it.
   ///
   /// -----------------------------------------------------------------------
@@ -742,6 +773,7 @@ model Contact {
   verseCampaignRecipients VerseCampaignRecipient[]
   flowRuns      FlowRun[]
 
+  metaAdReferrals MetaAdReferral[]
   @@unique([companyId, waId])
   @@index([companyId, createdAt(sort: Desc)])
   /// The dashboard's lead-temperature card, grouped by score.
@@ -750,6 +782,8 @@ model Contact {
   /// company-first so that exclusion is a seek and not a scan of the whole
   /// contact book.
   @@index([companyId, optedOutAt])
+  /// The dashboard's lead-source card, grouped by where contacts came from.
+  @@index([companyId, source], map: "contacts_company_id_source_idx")
   @@map("contacts")
 }
 
@@ -868,6 +902,7 @@ model Conversation {
   /// upsert needs. Without it two deliveries for the same contact arriving
   /// together both find no conversation and both insert, and the customer ends
   /// up with two half-threads whose windows disagree.
+  metaAdReferrals MetaAdReferral[]
   @@unique([companyId, contactId, whatsappNumberId])
   /// The inbox list.
   @@index([companyId, lastMessageAt(sort: Desc)])
@@ -999,6 +1034,7 @@ model Message {
 
   /// Inbound idempotency. Meta redelivers, and a redelivered message must not
   /// appear twice in the thread.
+  metaAdReferrals MetaAdReferral[]
   @@unique([companyId, wamid])
   /// The thread read, ordered and tie-broken.
   @@index([companyId, conversationId, occurredAt(sort: Desc), id])
@@ -3037,4 +3073,235 @@ model VerseCampaignRecipient {
   @@unique([companyId, campaignId, phoneE164])
   @@index([companyId, campaignId, status])
   @@map("verse_campaign_recipients")
+}
+
+
+/// Meta's campaign lifecycle, as far as this product drives it.
+///
+/// PAUSED is the default and the safety property of the whole phase. A
+/// campaign created ACTIVE spends the tenant's money the instant a form posts,
+/// with a budget somebody typed while still thinking about it, and there is no
+/// undo for money Meta has already spent.
+enum MetaCampaignStatus {
+  PAUSED
+  ACTIVE
+  ARCHIVED
+
+  @@map("meta_campaign_status")
+}
+
+/// Meta's outcome-era objectives, which are the only ones their current API
+/// accepts on create. The older names (LINK_CLICKS, CONVERSIONS) are rejected,
+/// so offering them would be a builder that composes a campaign Meta refuses.
+enum MetaCampaignObjective {
+  OUTCOME_ENGAGEMENT
+  OUTCOME_LEADS
+  OUTCOME_TRAFFIC
+  OUTCOME_SALES
+
+  @@map("meta_campaign_objective")
+}
+
+/// An ad account the tenant selected, under their own Meta credentials.
+///
+/// A3: the credentials are theirs, stored per-tenant in the integrations
+/// section, and this app never holds one that reaches across tenants.
+model MetaAdAccount {
+  id            String @id @default(cuid())
+  companyId     String @map("company_id")
+  integrationId String @map("integration_id")
+
+  /// Meta's own identifier, stored WITH its act_ prefix, because that is the
+  /// form every Graph path takes and normalising on the way out is one more
+  /// place to forget.
+  metaAdAccountId String @map("meta_ad_account_id")
+  name            String
+
+  /// The account's own currency, and the reason spend is never summed across
+  /// accounts. There is no exchange rate in this system and one must not
+  /// appear at render time.
+  currency      String
+  timezoneName  String? @map("timezone_name")
+  accountStatus Int?    @map("account_status")
+
+  /// The Page a click-to-WhatsApp ad posts from. A CTWA ad cannot exist
+  /// without one, and the Page is what carries the WhatsApp number.
+  pageId   String? @map("page_id")
+  pageName String? @map("page_name")
+
+  /// The number Meta says that Page is linked to, as our row. Null when the
+  /// link points somewhere we do not own - an agency running ads for a
+  /// business whose WhatsApp lives elsewhere, which is real and common.
+  whatsappNumberId String? @map("whatsapp_number_id")
+  /// What Meta reported, verbatim, even when it matches nothing here. Without
+  /// it the mismatch is unexplainable: the page can say the Page is linked to
+  /// a different number but not which.
+  linkedPhoneE164 String? @map("linked_phone_e164")
+
+  /// How far the insights sync has read, as a date in the account's own
+  /// timezone. Null means it has never run.
+  insightsSyncedThrough DateTime? @db.Date @map("insights_synced_through")
+  insightsSyncedAt      DateTime? @db.Timestamptz(3) @map("insights_synced_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration    Integration     @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  whatsappNumber WhatsAppNumber? @relation(fields: [whatsappNumberId], references: [id], onDelete: SetNull)
+  campaigns      MetaCampaign[]
+  insights       MetaAdInsight[]
+
+  @@unique([companyId, metaAdAccountId], map: "meta_ad_accounts_company_id_meta_ad_account_id_key")
+  @@index([companyId, createdAt(sort: Desc)], map: "meta_ad_accounts_company_id_created_at_idx")
+  @@index([companyId, integrationId], map: "meta_ad_accounts_company_id_integration_id_idx")
+  @@map("meta_ad_accounts")
+}
+
+/// A campaign this product created at Meta.
+///
+/// A row here means a campaign EXISTS at Meta. There is deliberately no local
+/// draft state: that would be a second lifecycle to reason about, and the
+/// thing a tenant wants to keep half-finished is the form, which is not a
+/// database concern.
+model MetaCampaign {
+  id          String @id @default(cuid())
+  companyId   String @map("company_id")
+  adAccountId String @map("ad_account_id")
+
+  metaCampaignId String                @map("meta_campaign_id")
+  name           String
+  objective      MetaCampaignObjective
+  status         MetaCampaignStatus    @default(PAUSED)
+
+  /// Millionths of one unit of this row's currency, matching usage events.
+  /// Meta takes minor units; the conversion happens at the boundary so that
+  /// nothing here is denominated in paise for one row and rupees for another.
+  dailyBudgetMicros BigInt? @map("daily_budget_micros")
+  /// Copied from the ad account at creation rather than joined at read time.
+  /// Every reader of this table is forbidden from adding two currencies
+  /// together, so each row has to carry its own.
+  currency String
+
+  /// When somebody deliberately turned it on, and who. Stays set once set:
+  /// pausing a live campaign does not un-publish it, and "has this ever run"
+  /// must not be answered by the current state.
+  publishedAt       DateTime? @db.Timestamptz(3) @map("published_at")
+  publishedByUserId String?   @map("published_by_user_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  adAccount   MetaAdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  publishedBy User?         @relation("MetaCampaignsPublished", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, metaCampaignId], map: "meta_campaigns_company_id_meta_campaign_id_key")
+  @@index([companyId, createdAt(sort: Desc)], map: "meta_campaigns_company_id_created_at_idx")
+  @@index([companyId, adAccountId], map: "meta_campaigns_company_id_ad_account_id_idx")
+  @@map("meta_campaigns")
+}
+
+/// What Meta says a campaign spent, per day.
+///
+/// The day is Meta's, in the ad account's timezone. An account set to
+/// America/Los_Angeles has a different Tuesday from a platform day computed at
+/// +05:30, and re-syncing under our own boundary would move spend between days
+/// on every run.
+model MetaAdInsight {
+  id          String @id @default(cuid())
+  companyId   String @map("company_id")
+  adAccountId String @map("ad_account_id")
+
+  /// Meta's campaign id as text, NOT a relation to MetaCampaign.
+  ///
+  /// A tenant's account contains campaigns they built in Meta's own tools long
+  /// before connecting here, and those spend money that belongs in "cost this
+  /// month". A foreign key would force us to drop that spend or to invent
+  /// MetaCampaign rows for campaigns this product did not create - and a row
+  /// there means "we made this", which would stop being true.
+  metaCampaignId String  @map("meta_campaign_id")
+  campaignName   String? @map("campaign_name")
+
+  /// The advertising day. A date and not a timestamp: Meta reports a day, and
+  /// storing midnight in some zone invites somebody to render it as an instant.
+  date DateTime @db.Date
+
+  impressions BigInt @default(0)
+  clicks      BigInt @default(0)
+
+  /// Millionths of one unit of this row's currency. BigInt because the value
+  /// must never pass through a JSON number - past 2^53 it silently drops its
+  /// last digits, which is the worst possible way to discover a column's type.
+  spendMicros BigInt @default(0) @map("spend_micros")
+  currency    String
+
+  syncedAt DateTime @db.Timestamptz(3) @default(now()) @map("synced_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company   Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  adAccount MetaAdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+
+  /// What makes the sync idempotent. Meta restates recent days as attribution
+  /// windows close, so a re-read must UPDATE the day rather than add a second
+  /// copy - without this a nightly sync over a 28-day window multiplies every
+  /// figure by 28.
+  @@unique([companyId, adAccountId, metaCampaignId, date], map: "meta_ad_insights_company_id_ad_account_id_meta_campaig_date_key")
+  @@index([companyId, date(sort: Desc)], map: "meta_ad_insights_company_id_date_idx")
+  @@map("meta_ad_insights")
+}
+
+/// The click that started a conversation.
+///
+/// Meta attaches a referral block to the FIRST inbound message of a thread
+/// that began with a click-to-WhatsApp ad. It arrives exactly once. A webhook
+/// that reads it and drops it has lost the only join between money spent and a
+/// person who replied - permanently, because Meta's Insights API reports spend
+/// per ad and has no idea which WhatsApp thread it produced.
+///
+/// Its own table rather than columns on Conversation, for the reason
+/// WhatsAppConversationCharge gives about billing windows: one contact can
+/// click three different ads in a month, and columns would keep the newest and
+/// lose the two that actually converted.
+model MetaAdReferral {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  conversationId String @map("conversation_id")
+  contactId      String @map("contact_id")
+  /// The inbound message that carried the block, and the dedupe key: Meta
+  /// redelivers a webhook it did not get a 200 for.
+  messageId String @map("message_id")
+
+  /// Meta's click id, which their attribution reporting is keyed on.
+  ctwaClid String? @map("ctwa_clid")
+  /// The ad id. This is what joins a conversation to spend.
+  sourceId String? @map("source_id")
+  /// "ad" or "post", verbatim. An organic post referral is not an ad click and
+  /// must not be counted as one in a cost-per-lead figure.
+  sourceType String? @map("source_type")
+  sourceUrl  String? @map("source_url")
+
+  /// The ad's own copy, as Meta sent it. What makes a referral legible six
+  /// weeks later, when the ad has been edited or deleted and Meta will no
+  /// longer say what it said.
+  headline String?
+  body     String?
+
+  /// Meta's instant, never ours.
+  occurredAt DateTime @db.Timestamptz(3) @map("occurred_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  message      Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, messageId], map: "meta_ad_referrals_company_id_message_id_key")
+  @@index([companyId, sourceId], map: "meta_ad_referrals_company_id_source_id_idx")
+  @@index([companyId, occurredAt(sort: Desc)], map: "meta_ad_referrals_company_id_occurred_at_idx")
+  @@map("meta_ad_referrals")
 }

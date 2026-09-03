@@ -89,7 +89,9 @@ describe(".env.example", () => {
        * out by the documentation. It is set by playwright.config.ts and must be
        * set nowhere else.
        */
-      .filter((name) => name !== "LEAD_SHEET_FIXTURE");
+      .filter(
+        (name) => name !== "LEAD_SHEET_FIXTURE" && name !== "META_ADS_FIXTURE",
+      );
 
     expect(undocumented.sort()).toEqual([]);
   });

@@ -1,4 +1,5 @@
 import type { CompanyClient } from "./with-company.ts";
+import { claimDriver } from "./conversations.ts";
 import { materialiseOutboundTemplate } from "./outbound.ts";
 import { Prisma } from "./generated/prisma/client.ts";
 
@@ -54,6 +55,13 @@ export interface LeadClaimInput {
   template: { name: string; language: string };
   /** One per quick-reply button, for a binding that starts a flow. */
   buttonPayloads?: readonly string[];
+  /**
+   * Set only for a VERSE binding: the campaign that will answer the reply.
+   *
+   * A bare id rather than a relation, matching conversations.driver_ref, which
+   * points into two different tables depending on the driver.
+   */
+  verseCampaignId?: string | null;
   renderedBody: string;
   occurredAt: Date;
   createdByUserId: string | null;
@@ -126,6 +134,29 @@ export async function claimLeadRow(
     return { kind: "skipped", rowId: row.id, reason: LEAD_SKIP_OPTED_OUT };
   }
 
+  /*
+   * A VERSE binding claims the conversation for the campaign.
+   *
+   * Without this the template goes out and the customer's reply lands in the
+   * inbox unattended - which is a TEMPLATE binding, not a Verse one. The claim
+   * is what makes the difference, and it is here rather than in the caller so
+   * that it shares the transaction with the message row: a crash between them
+   * would otherwise leave a contacted lead nothing is listening to.
+   *
+   * A refusal is not an error. An automation never displaces another
+   * automation, so a lead already mid-conversation with a flow keeps it, and
+   * the message still went out - the row is SENT either way. What is lost is
+   * only that Verse will not answer this one, which is the correct outcome
+   * rather than a failure.
+   */
+  if (input.verseCampaignId) {
+    await claimDriver(db, companyId, outbound.conversationId, {
+      driver: "VERSE",
+      ref: input.verseCampaignId,
+      at: input.occurredAt,
+    });
+  }
+
   await db.leadSourceRow.update({
     where: { id: row.id },
     data: { state: "SENT", skipReason: null, messageId: outbound.messageId },
@@ -196,6 +227,27 @@ export async function leadSourceForPoll(
        * whatever is published when the poll happens.
        */
       flowVersionId: true,
+      /*
+       * The third action's target: a campaign, whose template opens the
+       * conversation exactly as the other two kinds' templates do. What
+       * differs is only what happens afterwards - the conversation is claimed
+       * for Verse, which then answers what comes back.
+       */
+      verseCampaign: {
+        select: {
+          id: true,
+          status: true,
+          template: {
+            select: {
+              id: true,
+              name: true,
+              language: true,
+              status: true,
+              components: true,
+            },
+          },
+        },
+      },
       flowVersion: {
         select: {
           id: true,

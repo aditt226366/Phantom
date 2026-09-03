@@ -142,6 +142,34 @@ printf '\npre-commit: the first run hit the known db worker crash - non-zero exi
 printf '            short test count, nothing actually failing. Retrying once.\n'
 printf '            Retry %s recorded in %s\n\n' "$retries" "$tally"
 
+#
+# Drop the page cache before retrying, because that is the documented remedy.
+#
+# The crash is memory exhaustion - characterised at length in the conventions -
+# and the cheapest reliable fix is reclaiming what vmmemWSL holds as cache. It
+# is non-destructive: clean pages only, no restart, no container bounce,
+# nothing lost, and Postgres simply re-reads from disk.
+#
+# It is here because it had been run BY HAND three times during Phase 9, each
+# time after the retry had already failed and the commit had already been
+# refused. A remedy that is documented, effective, and applied manually after
+# the fact is one the next person will not know to reach for - and the retry is
+# the exact moment it is worth having, because the second run starts with less
+# memory available than the first did.
+#
+# Every failure is swallowed. This is a best-effort improvement to a retry that
+# is itself a best-effort absorption of a known crash, so a machine with no
+# wsl, no docker-desktop distro, or no permission to write drop_caches must
+# still get its retry rather than a hook that fails for a reason having nothing
+# to do with the commit.
+#
+if command -v wsl >/dev/null 2>&1; then
+  printf 'pre-commit: dropping the WSL page cache first - the crash is memory\n'
+  printf '            pressure, and this is the documented remedy.\n\n'
+  wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" \
+    >/dev/null 2>&1 || true
+fi
+
 if run_gate "$retry_log"; then
   printf 'pre-commit: gate passed on the retry.\n'
   exit 0

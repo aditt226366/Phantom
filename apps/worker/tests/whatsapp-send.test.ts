@@ -129,7 +129,19 @@ vi.mock("@whatsapp-os/db", () => ({
   pauseRunForMessage: async () => null,
 }));
 
-vi.mock("@whatsapp-os/core/whatsapp", () => ({
+vi.mock("@whatsapp-os/core/whatsapp", async (importOriginal) => ({
+  /*
+   * The REAL readers, not stubs.
+   *
+   * `readTemplatePayload` and `readInteractivePayload` decide whether this job
+   * is sending a template, an interactive message or text - and stubbing them
+   * would make every assertion below about a decision the test itself had
+   * made. They are pure functions over a jsonb value, so there is nothing to
+   * fake and nothing to gain by faking it.
+   *
+   * Only the two Graph calls are wrapped, and only to record ordering.
+   */
+  ...(await importOriginal<typeof import("@whatsapp-os/core/whatsapp")>()),
   sendWhatsAppTemplate: (
     secrets: Record<string, string>,
     input: { to: string; name: string; language: string; parameters: string[] },
@@ -161,12 +173,25 @@ const { handleWhatsAppMessageSend } = await import("../src/jobs/whatsapp-send.ts
 const JOB = { companyId: "c1", messageId: "m1", sendAttempt: 0 };
 
 function messageRow(
-  over: { wamid?: string | null; waId?: string; broadcastId?: string | null } = {},
+  over: {
+    wamid?: string | null;
+    waId?: string;
+    broadcastId?: string | null;
+    /* What the row SAYS it is. The send path uses it to tell a genuine text
+       message from a template whose stored payload will not read back - both
+       of which make the readers return null. */
+    type?: string;
+    templatePayload?: unknown;
+    interactivePayload?: unknown;
+  } = {},
 ) {
   return {
     id: "m1",
     conversationId: "cnv-1",
     body: "hello",
+    type: over.type ?? "text",
+    templatePayload: over.templatePayload ?? null,
+    interactivePayload: over.interactivePayload ?? null,
     wamid: over.wamid ?? null,
     /* Null means an ordinary send. A broadcast recipient carries the run, and
        the job has to consult its status before doing anything at all. */
@@ -686,5 +711,72 @@ describe("what a refusal means beyond one message", () => {
     await handleWhatsAppMessageSend({ companyId: "c1", messageId: "m1", sendAttempt: 0 });
 
     expect(markContactUndeliverable).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a stored payload that will not read back", () => {
+  /**
+   * The fault that used to arrive wearing somebody else's name.
+   *
+   * Both readers return null defensively, and the null used to fall through to
+   * the text branch. For a row typed `template` that sends the rendered body as
+   * free-form text - a different message, missing its variables and its button
+   * payloads - and free-form text is exactly what Meta refuses outside a
+   * 24-hour window.
+   *
+   * So a payload fault on a cold recipient, which is every bulk, lead-source
+   * and campaign send, surfaced as `window_closed` on a message whose window
+   * was fine. Nothing named the real cause.
+   */
+  it("is declined rather than sent as text", async () => {
+    findFirstMessage.mockResolvedValue(
+      messageRow({
+        type: "template",
+        /* The key is present and the shape is wrong - what an older build or a
+           bad migration leaves behind. */
+        templatePayload: { nome: "order_shipped" },
+      }),
+    );
+
+    const result = await handleWhatsAppMessageSend(JOB);
+
+    expect(result).toEqual({ result: "declined" });
+    /* Nothing reached Meta at all, by either route. */
+    expect(sendWhatsAppText).not.toHaveBeenCalled();
+    expect(sendWhatsAppTemplate).not.toHaveBeenCalled();
+  });
+
+  it("records the reason on the row, in the POLICY namespace", async () => {
+    findFirstMessage.mockResolvedValue(
+      messageRow({ type: "template", templatePayload: { nome: "order_shipped" } }),
+    );
+
+    await handleWhatsAppMessageSend(JOB);
+
+    expect(recordSendDeclined).toHaveBeenCalledTimes(1);
+    /* The code, not a sentence - describeRefusal owns the wording so one
+       refusal cannot get two of them. */
+    expect(recordSendDeclined.mock.calls[0]![3]).toBe("stored_payload_unreadable");
+  });
+
+  it("still sends an ordinary text message, whose type says it has no payload", async () => {
+    /*
+     * The other side of the discriminator. A genuine text row also reads back
+     * as null, and must not be caught by the refusal above - otherwise every
+     * free-form reply in the product stops going out.
+     */
+    findFirstMessage.mockResolvedValue(messageRow({ type: "text" }));
+    sendWhatsAppText.mockResolvedValue({
+      ok: true,
+      wamid: "wamid.OK",
+      waId: null,
+      messageStatus: "accepted",
+      held: false,
+    });
+
+    const result = await handleWhatsAppMessageSend(JOB);
+
+    expect(result).toEqual({ result: "sent" });
+    expect(sendWhatsAppText).toHaveBeenCalledTimes(1);
   });
 });

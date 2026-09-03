@@ -25,6 +25,7 @@ export {
   parseSheetRef,
   pollIntervalSchema,
   flowActionSchema,
+  verseActionSchema,
   templateActionSchema,
 } from "./binding.ts";
 export type {

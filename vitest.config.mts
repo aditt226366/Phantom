@@ -93,6 +93,68 @@ const GLOBAL_SETUP = fileURLToPath(
  * `db` stays on forks deliberately. It is the project that has never crashed
  * while web-server was forked, and changing a second thing at the same time
  * would make the next measurement unreadable.
+ *
+ * ---------------------------------------------------------------------------
+ * The conclusion above is WRONG, and this is what falsified it
+ * ---------------------------------------------------------------------------
+ *
+ * "The crash needs a forked worker on a database-touching file AND
+ * cross-project overlap; remove either and it stops" did not survive being
+ * tested directly. The settings above are all still in place and
+ * .git/gate-retries.log passed forty retries, so the crash plainly never
+ * stopped - but the shape of it was still being read as a project-overlap
+ * problem, because twice in a row the file that never reported was a `db` file
+ * and every `worker` file had already finished.
+ *
+ * scripts/test-floor.mjs now runs the suite as two sequential vitest
+ * processes, `!db` then `db`, so there is no overlap of any kind between them:
+ * the first process has exited before the second is spawned. Five gates:
+ *
+ *   1  clean
+ *   2  clean
+ *   3  the `!db` process died whole - exit 127, no JSON report, three
+ *      web-server files in. `db` then ran clean on its own.
+ *   4  worker crash INSIDE the `db` process, running alone, with no other
+ *      project in it. dashboard-rollup.test.ts never reported.
+ *   5  clean
+ *
+ * Run 4 is decisive. Cross-project overlap was not merely reduced, it was
+ * absent - one project, one process - and the crash happened anyway. Whatever
+ * this is, it is not the projects interfering with each other, and the fifteen
+ * gates above measured something real without identifying it.
+ *
+ * Run 3 also separated TWO failure modes that forty retries had been recording
+ * under one name, because the retry path only ever asked "short, non-zero,
+ * nothing actually failing?" and both answer yes:
+ *
+ *   ONE WORKER DIES. "Worker exited unexpectedly". The run carries on, vitest
+ *   still exits non-zero and still writes its JSON report, and the files that
+ *   never started go missing rather than failing - so there is always a named
+ *   file left behind. Blaming that file is how this investigation ended up at
+ *   project transitions in the first place; it was a different `db` file every
+ *   time, which should have been the clue.
+ *
+ *   THE WHOLE PROCESS DIES. Exit 127, no report written at all, the run stops
+ *   mid-file with no summary. Nothing is named, because nothing got far enough
+ *   to name it.
+ *
+ * They are not the same event and the second is not rarer - it simply had no
+ * evidence to leave.
+ *
+ * The likelier explanation is underneath all of it and is not a vitest
+ * setting. Measured on the machine these gates ran on: 18 GB of process commit
+ * and ~23 GB of total commit charge against 16 GB of RAM, with 2.4 GB
+ * available at rest. `next build` and a forked worker per test file on top of
+ * that is an allocation failure waiting for a place to land, and all three
+ * observed symptoms are what that looks like - a fork killed, a process
+ * killed, and one Playwright run that took 3.4x its usual time and failed 48
+ * screenshots on layout shifts.
+ *
+ * So the two levers above are kept because they were measured and nothing here
+ * argues they made things worse - but they should not be read as a fix. The
+ * conventions skill carries the diagnosis under "the machine before the
+ * config", and that is the order to work in: this file has now been rewritten
+ * twice by people reading a dying fork as a configuration problem.
  */
 export default defineConfig({
   test: {

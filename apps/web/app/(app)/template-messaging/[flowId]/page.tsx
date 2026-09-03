@@ -13,6 +13,7 @@ import {
   flowStateLabel,
   flowStateVariant,
   nodeKindLabel,
+  inRunStatusOrder,
   runStatusLabel,
   runStatusVariant,
 } from "@/lib/flow-display";
@@ -102,13 +103,22 @@ export default async function FlowPage({
 
     const templates = await db.whatsAppTemplate.findMany({
       where: { companyId, status: "APPROVED" },
-      orderBy: { name: "asc" },
+      /* Then id, because name is not unique: the same template approved in
+         two languages is two rows sharing it, and a tied ORDER BY lets the
+         database pick an order per query. */
+      orderBy: [{ name: "asc" }, { id: "asc" }],
       select: { id: true, name: true, language: true },
     });
 
     const runs = await db.flowRun.findMany({
       where: { flowId: flow.id },
-      orderBy: { startedAt: "desc" },
+      /*
+       * Then id. A tied sort key under a LIMIT does not merely reorder the
+       * answer, it changes which rows ARE the answer - and runs tie readily,
+       * because a broadcast's entry template starts every recipient's run in
+       * the same instant.
+       */
+      orderBy: [{ startedAt: "desc" }, { id: "asc" }],
       take: RUN_LIMIT,
       select: {
         id: true,
@@ -122,6 +132,9 @@ export default async function FlowPage({
       },
     });
 
+    /* Unordered on purpose: a groupBy has no meaningful order to ask the
+       database for, and the one this page wants is a lifecycle rather than a
+       column. inRunStatusOrder applies it at the point of rendering. */
     const counts = await db.flowRun.groupBy({
       by: ["status"],
       where: { flowId: flow.id },
@@ -201,7 +214,7 @@ export default async function FlowPage({
         ) : (
           <>
             <ul className="mt-sm flex flex-wrap gap-xs">
-              {counts.map((row) => (
+              {inRunStatusOrder(counts).map((row) => (
                 <li key={row.status}>
                   <Badge variant={runStatusVariant(row.status)}>
                     {runStatusLabel(row.status)}: {row._count._all}

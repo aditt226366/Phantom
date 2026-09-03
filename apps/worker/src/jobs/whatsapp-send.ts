@@ -9,6 +9,8 @@ import {
   sendWhatsAppInteractive,
   sendWhatsAppTemplate,
   sendWhatsAppText,
+  readInteractivePayload,
+  readTemplatePayload,
 } from "@whatsapp-os/core/whatsapp";
 import {
   broadcastRunState,
@@ -69,6 +71,10 @@ export async function handleWhatsAppMessageSend(
         conversationId: true,
         body: true,
         wamid: true,
+        /* What the row SAYS it is, so an unreadable payload can be told from a
+           genuine text message. Without it both look identical to the reader
+           and the fault silently becomes a text send. */
+        type: true,
         /* Present means this row is a template send. The payload holds the
            name, language and the parameter values chosen at send time - and,
            for a flow's entry, one payload per quick-reply button. */
@@ -189,6 +195,51 @@ export async function handleWhatsAppMessageSend(
   /* Decided once, before the check and the call, so they cannot disagree. */
   const template = readTemplatePayload(loaded.templatePayload);
   const interactive = readInteractivePayload(loaded.interactivePayload);
+
+  /*
+   * A stored payload that will not read back is REFUSED, not downgraded.
+   *
+   * -------------------------------------------------------------------------
+   * What this used to do, and why the symptom pointed somewhere else
+   * -------------------------------------------------------------------------
+   *
+   * Both readers return null defensively, and the null used to fall through to
+   * the text branch below. For a row whose `type` is `template` or
+   * `interactive`, that sends the rendered body as ordinary free-form text -
+   * a different message than the producer wrote, missing its variables,
+   * missing the button payloads that make a tap start a flow.
+   *
+   * And free-form text is exactly what Meta refuses outside a 24-hour window.
+   * So a payload fault on a cold recipient - which is every bulk, lead-source
+   * and campaign send - arrived as `window_closed` on a message whose window
+   * was fine, and nothing anywhere named the real cause.
+   *
+   * Refusing costs one message that was going to be wrong anyway, and puts
+   * the reason on the row where the thread renders it.
+   */
+  const payloadUnreadable =
+    (loaded.type === "template" && template === null) ||
+    (loaded.type === "interactive" && interactive === null);
+
+  if (payloadUnreadable) {
+    await withCompany(companyId, (db, scoped) =>
+      recordSendDeclined(
+        db,
+        scoped,
+        messageId,
+        "stored_payload_unreadable",
+        now,
+      ),
+    );
+
+    log.error("send declined: stored payload could not be read", {
+      companyId,
+      messageId,
+      type: loaded.type,
+    });
+
+    return { result: "declined" };
+  }
 
   const sendability = await withCompany(companyId, (db, scoped) =>
     canSend(
@@ -487,65 +538,4 @@ async function reconcileWaId(
   });
 }
 
-/**
- * What a template row carries, or null if this is an ordinary text.
- *
- * Parsed defensively because `template_payload` is jsonb: the column will hold
- * whatever was written, and a row half-written by an older build must not make
- * the worker throw on every attempt. A payload it cannot read is treated as a
- * text send, which is the safe direction - the message goes out as its body
- * rather than as a template nobody could reconstruct.
- */
-function readTemplatePayload(raw: unknown): {
-  name: string;
-  language: string;
-  parameters: string[];
-  buttonPayloads: string[];
-} | null {
-  if (!raw || typeof raw !== "object") return null;
 
-  const payload = raw as Record<string, unknown>;
-  const name = payload["name"];
-  const language = payload["language"];
-
-  if (typeof name !== "string" || typeof language !== "string") return null;
-
-  const parameters = Array.isArray(payload["parameters"])
-    ? payload["parameters"].filter((v): v is string => typeof v === "string")
-    : [];
-
-  /* Absent on every template row written before flows existed, and on every
-     one written since by a producer with no buttons to fill. */
-  const buttonPayloads = Array.isArray(payload["buttonPayloads"])
-    ? payload["buttonPayloads"].filter((v): v is string => typeof v === "string")
-    : [];
-
-  return { name, language, parameters, buttonPayloads };
-}
-
-/**
- * What an interactive row carries, or null if this is not one.
- *
- * Parsed as defensively as the template payload beside it and for the same
- * reason: the column is jsonb and holds whatever was written. A payload this
- * cannot read falls through to a text send of the row's body, which is the
- * safe direction - the customer gets the question without the buttons rather
- * than nothing at all, and the thread shows what happened.
- *
- * The shape is only checked as far as Meta needs it to be. Rebuilding it from
- * the flow version instead would be the tempting alternative and is wrong: the
- * ids inside name a specific run and node, and re-deriving them at send time
- * would silently repair a payload whose ids no longer match the run - turning
- * a bug into a question a customer actually receives.
- */
-function readInteractivePayload(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-
-  const payload = raw as Record<string, unknown>;
-  const type = payload["type"];
-
-  if (type !== "button" && type !== "list") return null;
-  if (!payload["action"] || typeof payload["action"] !== "object") return null;
-
-  return payload;
-}

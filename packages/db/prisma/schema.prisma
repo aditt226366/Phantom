@@ -128,6 +128,13 @@ model Company {
   flowVersions           FlowVersion[]
   flowRuns               FlowRun[]
   flowRunSteps           FlowRunStep[]
+  knowledgeBases         KnowledgeBase[]
+  kbDocuments            KbDocument[]
+  kbChunks               KbChunk[]
+  kbChunkSources         KbChunkSource[]
+  conversationCharges    WhatsAppConversationCharge[]
+  verseCampaigns         VerseCampaign[]
+  verseCampaignRecipients VerseCampaignRecipient[]
   dashboardRollup        DashboardRollup?
 
   @@map("companies")
@@ -588,6 +595,8 @@ model WhatsAppNumber {
   /// per company keeps the uniqueness a tenant fact rather than a global one -
   /// two companies must never collide, and neither must learn of the other by
   /// failing to insert.
+  verseCampaigns VerseCampaign[]
+
   @@unique([companyId, phoneNumberId])
   @@index([companyId, createdAt(sort: Desc)])
   @@map("whatsapp_numbers")
@@ -701,7 +710,7 @@ model Contact {
   /// The column that turns a pending dashboard card into a real one
   /// -----------------------------------------------------------------------
   ///
-  /// "Lead temperature" has been an honest empty state since Phase 9, saying
+  /// "Lead temperature" has been an honest empty state since Phase 7, saying
   /// the scoring did not exist. It does now, and it is deterministic: a flow
   /// author draws "this answer makes them hot", so the score is a rule
   /// somebody wrote rather than a model's opinion. That is a different and
@@ -730,6 +739,7 @@ model Contact {
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  verseCampaignRecipients VerseCampaignRecipient[]
   flowRuns      FlowRun[]
 
   @@unique([companyId, waId])
@@ -796,6 +806,41 @@ model Conversation {
   /// Three writers now - an unread inbound, a handoff node, an action node's
   /// notify - and Verse's escalation is the fourth. Reading the flag is not
   /// the same act as clearing it.
+  /// Who is currently speaking for the business in this thread.
+  ///
+  /// -----------------------------------------------------------------------
+  /// One column, so "at most one" is unrepresentable rather than kept
+  /// -----------------------------------------------------------------------
+  ///
+  /// Phase 8 shipped the two-writer bug and its fix: a flow run standing in a
+  /// thread while an operator types into the same thread is a conversation
+  /// with two authors, neither aware of the other, and only the customer able
+  /// to see both. That was solved for TWO writers by having the inbox hand off
+  /// any live run.
+  ///
+  /// There are three now - an operator, a flow run, and Verse - and three is
+  /// where "whoever wrote last wins" stops being survivable. The losing writer
+  /// is not merely overwritten; it CARRIES ON, on its own schedule, into a
+  /// conversation somebody else is now having.
+  ///
+  /// A single column is the whole mechanism: at most one driver is not a rule
+  /// anybody enforces, it is a thing this type cannot express the negation of.
+  ///
+  /// NOBODY is a real member rather than NULL, so the most-read column in the
+  /// inbox does not put three-valued logic into every predicate.
+  driver      ConversationDriver @default(NOBODY)
+  /// Since when. An instant rather than a boolean for the reason
+  /// needs_human_at is one: "an operator has held this for forty minutes" is a
+  /// fact somebody acts on, and a boolean cannot say it. Tied to the driver by
+  /// a CHECK.
+  driverSince DateTime?          @db.Timestamptz(3) @map("driver_since")
+  /// Which run or campaign, so the inbox can say "Verse (Diwali offers)".
+  ///
+  /// Deliberately a bare id and NOT a foreign key: it points into two
+  /// different tables depending on the driver, and a thread must not become
+  /// unreadable because a campaign was archived.
+  driverRef   String?            @map("driver_ref")
+
   needsHumanAt     DateTime? @db.Timestamptz(3) @map("needs_human_at")
   /// Why, in words the queue can show. Set and cleared with the instant above,
   /// by CHECK constraint rather than by convention.
@@ -817,6 +862,7 @@ model Conversation {
   assignedUser   User?          @relation("ConversationsAssigned", fields: [assignedUserId], references: [id], onDelete: SetNull)
   messages       Message[]
   flowRuns       FlowRun[]
+  verseCampaignRecipients VerseCampaignRecipient[]
 
   /// One thread per contact per number, and the conflict target the inbound
   /// upsert needs. Without it two deliveries for the same contact arriving
@@ -825,11 +871,14 @@ model Conversation {
   @@unique([companyId, contactId, whatsappNumberId])
   /// The inbox list.
   @@index([companyId, lastMessageAt(sort: Desc)])
-  /// canSend, and Phase 9's "windows closing within the hour".
+  /// canSend, and Phase 7's "windows closing within the hour".
   @@index([companyId, windowExpiresAt])
   @@index([companyId, assignedUserId])
   /// The needs-a-person queue, and the dashboard card above it.
   @@index([companyId, needsHumanAt])
+  /// "Which threads is Verse holding", for the dashboard card and the
+  /// campaign detail page.
+  @@index([companyId, driver])
   @@map("conversations")
 }
 
@@ -937,6 +986,7 @@ model Message {
   conversation Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   media        WhatsAppMedia? @relation(fields: [mediaId], references: [id], onDelete: SetNull)
   broadcast    Broadcast?     @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
+  verseCampaignRecipients VerseCampaignRecipient[]
   /// The lead-source rows that point at this message. At most one in practice;
   /// a list because Prisma models the back side of an optional relation that
   /// way, not because a message can belong to two bindings.
@@ -1080,6 +1130,80 @@ model WhatsAppMedia {
 ///   3. It gives the route handler something to do that is ONE statement.
 ///      Deriving a key by parsing the payload would put the parse inside the
 ///      five seconds Meta allows before it retries.
+/// One 24-hour conversation window Meta told us about, and what they charge for.
+///
+/// -----------------------------------------------------------------------
+/// Its own table, because Meta's conversation is not ours
+/// -----------------------------------------------------------------------
+///
+/// `conversations` is a thread between a contact and one of our numbers, and it
+/// lasts for ever. Meta's conversation is a 24-hour BILLING WINDOW: one thread
+/// running for a month is thirty of them, each with its own id, category and
+/// charge. Storing this on `conversations` would keep the last window and lose
+/// the twenty-nine before it, which is the whole bill.
+///
+/// -----------------------------------------------------------------------
+/// Why the row exists at all, beside the usage_events row it produces
+/// -----------------------------------------------------------------------
+///
+/// usage_events records THAT a window was charged, keyed on the id, and the
+/// category is folded into the kind. This keeps what Meta actually said - the
+/// pricing model that decides how the category is rated, and whether they
+/// called it billable in the first place. A non-billable window gets a row and
+/// no charge, which is a fact worth having: "we had no marketing conversations"
+/// and "we had eleven and Meta billed none of them" are different businesses.
+///
+/// Phase 11 reprices in arrears from what was recorded rather than from what
+/// somebody later assumes the rate card was.
+model WhatsAppConversationCharge {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's own id for the window. The unit they bill and dedupe on.
+  ///
+  /// The same id arrives on many status callbacks - sent, delivered, read, for
+  /// every message in the window - so this is the key that makes one charge out
+  /// of dozens of notifications.
+  metaConversationId String @map("meta_conversation_id")
+
+  /// marketing | utility | authentication | service, verbatim from Meta.
+  ///
+  /// Nullable because Meta omits the pricing block on some statuses, and a row
+  /// that records the window without the category is still worth more than no
+  /// row: it says the window existed. Only a category that maps to a
+  /// USAGE_KINDS member produces a charge - see conversationUsageKind.
+  category String?
+
+  /// CBP, PMP, or whatever Meta names next. Verbatim, never mapped.
+  pricingModel String? @map("pricing_model")
+
+  /// What Meta said about whether they are charging for it.
+  ///
+  /// A free-tier service window is real and is not a charge. Recorded either
+  /// way; only `true` writes a usage row.
+  billable Boolean @default(false)
+
+  /// The message whose status callback first told us about this window. Kept
+  /// for tracing a charge back to something a person can look at.
+  firstWamid String? @map("first_wamid")
+
+  /// When Meta's callback said it happened, not when we wrote the row - a
+  /// backfill from stored payloads must land on the original instant or a
+  /// month's spend moves to the day the backfill ran.
+  occurredAt DateTime @db.Timestamptz(3) @map("occurred_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// One row per window per company. What makes dozens of status callbacks into
+  /// one charge, and what makes the backfill safe to run twice.
+  @@unique([companyId, metaConversationId])
+  @@index([companyId, occurredAt(sort: Desc)])
+  @@map("whatsapp_conversation_charges")
+}
+
 model WhatsAppWebhookEvent {
   id            String @id @default(cuid())
   companyId     String @map("company_id")
@@ -1120,7 +1244,7 @@ model WhatsAppWebhookEvent {
   /// is re-enqueued rather than discarded. And it is the only thing that makes
   /// a silent failure visible: events older than a few minutes with
   /// processed_at still null are work that vanished, which is a one-line
-  /// health check and what Phase 9's dashboard will read.
+  /// health check and what Phase 7's dashboard will read.
   processedAt DateTime? @db.Timestamptz(3) @map("processed_at")
 
   /// Why nothing was done with it. 'company_deactivated' is the one that is not
@@ -1279,6 +1403,7 @@ model WhatsAppTemplate {
   edits       WhatsAppTemplateEdit[]
   broadcasts  Broadcast[]
   leadSources LeadSource[]
+  verseCampaigns VerseCampaign[]
   flowVersions FlowVersion[]
 
   /// Meta's own uniqueness rule, scoped per company so it is a tenant fact.
@@ -1628,6 +1753,12 @@ enum LeadSourceAction {
   /// binding would contact it, and what differs is that a tap now goes
   /// somewhere.
   FLOW
+  /// Enrol the row in a Verse campaign: the campaign's approved template opens
+  /// the conversation, and what the customer writes back is answered from the
+  /// campaign's knowledge base. The third member, added by its own migration
+  /// because PostgreSQL will not let a new enum value be used in the
+  /// transaction that added it.
+  VERSE
 
   @@map("lead_source_action")
 }
@@ -1696,6 +1827,10 @@ model LeadSource {
   /// leads across two trees. Repointing the binding at the new version is a
   /// deliberate edit on its page.
   flowVersionId    String? @map("flow_version_id")
+  /// The third member of the action column. A binding keeps its sheet, its
+  /// tab, its mapping, its cleaning, its cursor and its idempotency index;
+  /// only the last step changes. Tied to `action` by a CHECK.
+  verseCampaignId  String? @map("verse_campaign_id")
   whatsappNumberId String  @map("whatsapp_number_id")
 
   status              LeadSourceStatus @default(ACTIVE)
@@ -1756,12 +1891,14 @@ model LeadSource {
   company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   template       WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: Restrict)
   flowVersion    FlowVersion?      @relation(fields: [flowVersionId], references: [id], onDelete: Restrict)
+  verseCampaign  VerseCampaign?    @relation(fields: [verseCampaignId], references: [id], onDelete: Restrict)
   whatsappNumber WhatsAppNumber    @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
   createdBy      User?             @relation("LeadSourcesCreated", fields: [createdByUserId], references: [id], onDelete: SetNull)
   rows           LeadSourceRow[]
 
   @@index([companyId, createdAt(sort: Desc)])
   @@index([companyId, status])
+  @@index([companyId, verseCampaignId])
   @@map("lead_sources")
 }
 
@@ -2154,7 +2291,7 @@ model UsageEvent {
 
   /// Cost in millionths of one unit of `currency`. 1_000_000 micros = ₹1.
   ///
-  /// Micros, not minor units. Phase 7 prices AI calls below a cent each, and a
+  /// Micros, not minor units. Phase 11 prices AI calls below a cent each, and a
   /// paise- or cent-denominated column rounds a $0.0003 reply to zero - so a
   /// thousand conversations sum to nothing and the invoice is silently short.
   /// Micros keep every arithmetic step an integer, with rounding deferred to
@@ -2183,6 +2320,45 @@ model UsageEvent {
 
   /// Why this row has no cost. Null when it does.
   unpricedReason String? @map("unpriced_reason")
+
+  /// What the provider said this call consumed. Null when it did not say.
+  ///
+  /// -----------------------------------------------------------------------
+  /// Recorded now because a later phase cannot reconstruct them
+  /// -----------------------------------------------------------------------
+  ///
+  /// Every row carries a `price_version` so it can be repriced in arrears, and
+  /// per-CALL pricing can indeed be recomputed from the rows we already have.
+  /// Per-TOKEN pricing cannot, and per-token is how every model provider bills.
+  /// The provider's response is gone the moment the job ends; if these are not
+  /// written at the call, no work in Phase 11 or afterwards can recover them.
+  ///
+  /// Nullable, never backfilled to zero. A Graph call has no tokens at all -
+  /// whatsapp.message.sent, integration.verify and whatsapp.numbers.refresh
+  /// will always be null here - and every row written before the column
+  /// existed genuinely has none. Zero is the same lie `cost_micros` refuses:
+  /// it claims a call consumed nothing, sums as though it were measured, and
+  /// is indistinguishable from a measured zero. Null keeps "which rows do we
+  /// have counts for" an answerable question, which is the first thing a
+  /// repricing has to ask.
+  ///
+  /// -----------------------------------------------------------------------
+  /// input_tokens will stop being the whole input bill
+  /// -----------------------------------------------------------------------
+  ///
+  /// Anthropic returns `cache_creation_input_tokens` and
+  /// `cache_read_input_tokens` beside `input_tokens`, and they are NOT included
+  /// in it - they are a separate split of the billable input, priced above and
+  /// far below the base rate respectively. Measured live in Phase 9; the shape
+  /// is in 20260909100000's header and in verse-probe.mjs, which printed it.
+  ///
+  /// Both are zero today because nothing enables prompt caching, so these two
+  /// columns are complete. The moment anything turns it on - and a system
+  /// prompt carrying a knowledge base is what caching is for - this column set
+  /// needs two more, with the same rule about zero. Written down rather than
+  /// built, because a column nothing writes is a column nothing writes.
+  inputTokens  Int? @map("input_tokens")
+  outputTokens Int? @map("output_tokens")
 
   /// Idempotency, because DEFAULT_JOB_OPTIONS sets attempts: 5.
   ///
@@ -2283,10 +2459,21 @@ model DashboardRollup {
 
   /// Conversations a flow has handled at least one step of.
   ///
-  /// From flow_runs, never inferred from an absent assignee. Phase 9 refused
+  /// From flow_runs, never inferred from an absent assignee. Phase 7 refused
   /// that proxy for the AI card because it counts every untouched thread as an
   /// automation success; the same objection applies here and the same answer.
   conversationsAutomated Int @default(0) @map("conversations_automated")
+  /// Threads a Verse campaign stood in.
+  ///
+  /// Its own column rather than a wider reading of the one above, because the
+  /// two are different capabilities with different remedies: a flow taking no
+  /// work needs its tree looked at, a campaign taking none needs its knowledge
+  /// base looked at. Collapsed, a tenant whose flow does nothing and whose
+  /// campaigns do everything reads one healthy number and learns nothing.
+  ///
+  /// They may overlap - a thread a flow handed over and a campaign later
+  /// picked up is counted by both - which is why no CHECK asserts their sum.
+  conversationsVerse Int @default(0) @map("conversations_verse")
 
   /// Spend since monthStart, per currency, in micros held as strings. A map
   /// rather than a total because there is no exchange rate in this system;
@@ -2444,4 +2631,410 @@ model AdminAuditLog {
 
   @@index([createdAt(sort: Desc)])
   @@map("admin_audit_log")
+}
+
+/// Who is currently speaking for the business in a thread.
+///
+/// ---------------------------------------------------------------------------
+/// One column, because "at most one" should be unrepresentable rather than kept
+/// ---------------------------------------------------------------------------
+///
+/// Phase 8 shipped the two-writer bug and its fix: a flow run standing in a
+/// thread while an operator types into the same thread is a conversation with
+/// two authors, neither aware of the other, and only the customer able to see
+/// both. That was solved for two writers by having the inbox hand off any live
+/// run.
+///
+/// There are three now - an operator, a flow run, and Verse - and three is
+/// where "whoever wrote last wins" stops being survivable. The losing writer is
+/// not merely overwritten; it CARRIES ON, on its own schedule, into a
+/// conversation somebody else is now having.
+///
+/// A single column is the whole mechanism. "At most one driver" is not a rule
+/// anybody enforces; it is a thing this type cannot express the negation of.
+/// Three booleans would need a CHECK to say the same, and a correct writer at
+/// every site to keep it true.
+///
+/// NOBODY is a real member rather than NULL, so the most-read column in the
+/// inbox does not put three-valued logic into every predicate. `driver IS
+/// DISTINCT FROM 'VERSE'` is the kind of thing written as `!=` and got wrong
+/// for exactly the rows that matter.
+enum ConversationDriver {
+  NOBODY
+  OPERATOR
+  FLOW
+  VERSE
+
+  @@map("conversation_driver")
+}
+
+enum KbSourceKind {
+  FILE
+  URL
+
+  @@map("kb_source_kind")
+}
+
+/// Per document, never per base: one unreadable PDF must not make a whole
+/// knowledge base look broken.
+enum KbDocumentStatus {
+  PENDING
+  EXTRACTING
+  EMBEDDING
+  INDEXED
+  FAILED
+
+  @@map("kb_document_status")
+}
+
+enum VerseCampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  /// Stopped by us, not by a person: Meta rejected or paused the template
+  /// mid-flight. Distinct from PAUSED because nobody chose it and resuming will
+  /// not fix it - see stoppedReason.
+  STOPPED
+  ARCHIVED
+
+  @@map("verse_campaign_status")
+}
+
+enum VerseRecipientStatus {
+  PENDING
+  SENT
+  SKIPPED
+  FAILED
+
+  @@map("verse_recipient_status")
+}
+
+/// One tenant's uploaded knowledge, and the model its vectors came from.
+model KnowledgeBase {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  name      String
+
+  /// The pin, stamped per index.
+  ///
+  /// Denormalised from VERSE_EMBEDDING deliberately. The constant says what NEW
+  /// work uses; this says what the vectors in this base actually came from, and
+  /// during a re-embedding migration those two disagree for as long as it runs.
+  /// A retrieval that cannot tell the difference is one that mixes models.
+  embeddingModel   String @map("embedding_model")
+  embeddingVersion Int    @map("embedding_version")
+
+  createdAt DateTime  @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime  @db.Timestamptz(3) @updatedAt @map("updated_at")
+  /// Archived, never deleted. A campaign that ran against this base is a record
+  /// of what customers were told, and these passages are the only evidence of
+  /// why the answers said what they said.
+  archivedAt DateTime? @db.Timestamptz(3) @map("archived_at")
+
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  documents KbDocument[]
+  chunks    KbChunk[]
+  campaigns VerseCampaign[]
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@map("knowledge_bases")
+}
+
+/// One uploaded file or crawled page, and how far through the pipeline it got.
+model KbDocument {
+  id              String @id @default(cuid())
+  companyId       String @map("company_id")
+  knowledgeBaseId String @map("knowledge_base_id")
+
+  kind      KbSourceKind
+  title     String
+  sourceUrl String?      @map("source_url")
+  filename  String?
+  mimeType  String?      @map("mime_type")
+  byteSize  Int?         @map("byte_size")
+
+  status KbDocumentStatus @default(PENDING)
+
+  /// Why it failed, in words an operator can act on.
+  ///
+  /// Not a boolean and not a code. The realistic failures are "this PDF is a
+  /// scan with no text layer", "the server returned 403" and "robots.txt
+  /// disallows this path", and each has a remedy the tenant can carry out. A
+  /// red dot saying FAILED sends them to support for something they could have
+  /// fixed in a minute. A CHECK ties this to the status.
+  failureReason String? @map("failure_reason")
+
+  /// The uploaded file. Null for a URL document.
+  ///
+  /// Stored so extraction can happen in the worker: a 300-page PDF takes
+  /// seconds to parse, and a server action holding a pooled connection for
+  /// that long is a request nobody waits out. Same arrangement as
+  /// whatsapp_media.bytes and kyc_documents.bytes, including STORAGE EXTERNAL.
+  ///
+  /// Never selected by a list query. Every read of this column is the
+  /// ingestion handler asking for one document by id.
+  bytes Bytes?
+
+  chunkCount Int       @default(0) @map("chunk_count")
+  indexedAt  DateTime? @db.Timestamptz(3) @map("indexed_at")
+
+  /// sha256 of the extracted TEXT, not of the bytes.
+  ///
+  /// A PDF's bytes change when its producer re-saves it and the words do not.
+  /// Re-embedding two thousand chunks because Acrobat rewrote a timestamp is a
+  /// real bill, and text is what the index is actually made of.
+  contentHash String? @map("content_hash")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  chunkSources  KbChunkSource[]
+
+  @@index([companyId, knowledgeBaseId, createdAt(sort: Desc)])
+  @@index([companyId, status])
+  @@map("kb_documents")
+}
+
+/// One retrievable passage, and its vector. Deduplicated by content.
+///
+/// ---------------------------------------------------------------------------
+/// One passage, many sources
+/// ---------------------------------------------------------------------------
+///
+/// Identical text is one chunk that several documents point at, not several
+/// chunks. That is not tidiness: retrieval is `LIMIT k`, so k duplicates of one
+/// paragraph is a top-k holding ONE passage while the code, the /dev/rag
+/// harness and the operator all believe it holds k. Grounding is thinner than
+/// it looks and nothing says so.
+///
+/// Identical text is ordinary in a knowledge base - a boilerplate paragraph
+/// repeated across documents, the same page crawled under two URLs, a PDF and
+/// its web version both uploaded, a terms section quoted in a FAQ.
+///
+/// So `document_id` and `seq` live on KbChunkSource, one row per place the text
+/// appears, and this table is keyed by content within a base.
+model KbChunk {
+  id              String @id @default(cuid())
+  companyId       String @map("company_id")
+  knowledgeBaseId String @map("knowledge_base_id")
+
+  /// SHA-256 of `content`, hex, and the deduplication key.
+  ///
+  /// Exact bytes, never normalised. Collapsing on whitespace or case would
+  /// merge passages that are not the same text, which is a claim about meaning
+  /// this column has no business making - and it is unrecoverable, because the
+  /// discarded variant is gone. Two passages differing by one space stay two
+  /// chunks; that is the safe direction to be wrong in.
+  contentHash String @map("content_hash")
+
+  content    String
+  tokenCount Int @map("token_count")
+
+  /// The embedding.
+  ///
+  /// ---------------------------------------------------------------------
+  /// Unsupported, which is why packages/db/src/verse.ts holds raw SQL
+  /// ---------------------------------------------------------------------
+  ///
+  /// Prisma has no vector type, so this column cannot be selected, inserted or
+  /// compared through the query builder at all - `Unsupported` fields are
+  /// omitted from every generated type. Retrieval is a `<=>` operator against
+  /// a bound vector with an ORDER BY and a LIMIT, which has no query-builder
+  /// form even in principle.
+  ///
+  /// So `verse.ts` is the tenth entry in no-raw-sql.test.ts, and the narrowest
+  /// justification of the ten: not "this is faster" but "this is the only way
+  /// to read this column".
+  ///
+  /// The width is the pin, in DDL. See the migration header - changing it is a
+  /// re-embedding migration and never an ALTER, because every stored vector is
+  /// wrong the instant the model changes.
+  embedding Unsupported("vector(1536)")
+
+  /// Which model produced THIS vector.
+  ///
+  /// Redundant with the knowledge base's column on every correct row, and that
+  /// is the point: during a re-embedding migration it is the only way to tell a
+  /// converted row from an unconverted one. A mixed index is otherwise
+  /// invisible, and verse-embedding-pin.test.ts asserts no base holds two.
+  embeddingModel   String @map("embedding_model")
+  embeddingVersion Int    @map("embedding_version")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  sources       KbChunkSource[]
+
+  /// The deduplication key, and it is per knowledge base rather than per
+  /// company on purpose: two bases are two indexes, and one may be re-embedded
+  /// while the other is not. Sharing a row across them would make a vector
+  /// belong to two pins at once.
+  @@unique([companyId, knowledgeBaseId, contentHash])
+  @@index([companyId, knowledgeBaseId])
+  @@map("kb_chunks")
+}
+
+/// Where a chunk's text appears: one row per (document, position).
+///
+/// The many half of the many-to-one. A chunk with two sources is one passage
+/// that two documents contain, and BOTH are cited - which is the reason this is
+/// a relation rather than a discarded duplicate. An answer that says "From
+/// Terms" when the sentence is also in the FAQ has not lied, but it has told
+/// the operator less than we knew.
+///
+/// Deleting a document cascades these away and leaves the chunk behind if
+/// another document still points at it. A chunk whose last source is gone is
+/// deleted explicitly - see deleteDocumentAndOrphanedChunks. Nothing about a
+/// foreign key can express "delete the parent when its last child goes", and
+/// getting that wrong leaves a passage answering customers from a document the
+/// tenant believes they deleted.
+model KbChunkSource {
+  id         String @id @default(cuid())
+  companyId  String @map("company_id")
+  chunkId    String @map("chunk_id")
+  documentId String @map("document_id")
+
+  /// Position in THIS document, so a retrieved passage can be shown in context
+  /// and two adjacent hits can be recognised as adjacent. It moves here from
+  /// kb_chunks because one passage can sit at position 3 of one document and
+  /// position 40 of another.
+  seq Int
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+
+  company  Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  chunk    KbChunk    @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  document KbDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /// One passage per position in a document - the same key kb_chunks used to
+  /// carry, moved to the table where it is now true.
+  @@unique([companyId, documentId, seq])
+  @@index([companyId, chunkId])
+  @@map("kb_chunk_sources")
+}
+
+/// One AI campaign: what it is for, what opens it, and when it may speak.
+model VerseCampaign {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+  name      String
+
+  /// The tenant's own words, verbatim into the system prompt.
+  ///
+  /// Stored as written and never normalised, summarised or reformatted. This is
+  /// the one part of the prompt the tenant authored, and editing it on their
+  /// behalf - even to fix spelling - changes what the model was asked to do in
+  /// a way nothing in the UI would show.
+  goal String
+
+  /// What opens the conversation. An approved template, because nothing else
+  /// may be sent before a 24-hour window exists.
+  templateId String @map("template_id")
+  /// 'V1' | 'V2' | 'V3'. Text rather than an enum, because the tiers are
+  /// defined in packages/core/src/verse/models.ts and a Prisma enum here could
+  /// only ever disagree with it - the argument usage_events.kind already makes.
+  modelTier       String @map("model_tier")
+  knowledgeBaseId String @map("knowledge_base_id")
+
+  /// Which number this campaign sends from.
+  ///
+  /// Not derived from the template: a template belongs to an integration and
+  /// an integration can hold several numbers, so "the template's number" would
+  /// be a silent pick among them - and a business running one number for
+  /// support and another for marketing would find a campaign going out from
+  /// whichever sorted first.
+  ///
+  /// Nullable because a DRAFT is built field by field in the wizard. A CHECK,
+  /// not NOT NULL, is what stops a RUNNING campaign without one.
+  whatsappNumberId String? @map("whatsapp_number_id")
+
+  status        VerseCampaignStatus @default(DRAFT)
+  /// Why we stopped it. Tied to STOPPED by a CHECK.
+  stoppedReason String?             @map("stopped_reason")
+
+  /// An IANA name, never an offset. An offset is wrong twice a year, and what
+  /// that produces is messaging people an hour either side of a window whose
+  /// entire purpose is that nobody is messaged at 2am.
+  timezone String
+  startAt  DateTime? @db.Timestamptz(3) @map("start_at")
+
+  /// Minutes past local midnight, or null for no daily window.
+  ///
+  /// Minutes rather than a `time` column because the comparison happens in
+  /// JavaScript against a tenant-local wall clock derived from the timezone
+  /// above. A `time` column invites comparing it in SQL against a server clock
+  /// that is in UTC, which is the bug this shape exists to make awkward.
+  dailyWindowStartMinute Int? @map("daily_window_start_minute")
+  dailyWindowEndMinute   Int? @map("daily_window_end_minute")
+  /// Most messages per calendar day in the tenant's timezone. Null = no cap.
+  dailyCap Int? @map("daily_cap")
+
+  archivedAt DateTime? @db.Timestamptz(3) @map("archived_at")
+  createdAt  DateTime  @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt  DateTime  @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template      WhatsAppTemplate         @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  /// Restrict, not Cascade. Deleting a knowledge base out from under a running
+  /// campaign leaves it retrieving from nothing and answering from the model's
+  /// general knowledge - the exact failure this phase exists to prevent.
+  knowledgeBase KnowledgeBase            @relation(fields: [knowledgeBaseId], references: [id], onDelete: Restrict)
+  /// Restrict: a campaign whose number was deleted must not silently become
+  /// one that sends from nowhere. The delete is refused instead.
+  whatsappNumber WhatsAppNumber?         @relation(fields: [whatsappNumberId], references: [id], onDelete: Restrict)
+  recipients    VerseCampaignRecipient[]
+  leadSources   LeadSource[]
+
+  @@index([companyId, createdAt(sort: Desc)])
+  @@index([companyId, status])
+  @@index([companyId, whatsappNumberId])
+  @@map("verse_campaigns")
+}
+
+/// One person a campaign intends to contact, before and after it does.
+///
+/// A draft audience is not message rows, for the reason Phase 5 gives about
+/// broadcast_recipients: putting un-sent intent into `messages` would need a
+/// pre-send member on message_status, describing rows that are not messages
+/// yet, in the one enum every delivery callback already reasons about.
+model VerseCampaignRecipient {
+  id         String @id @default(cuid())
+  companyId  String @map("company_id")
+  campaignId String @map("campaign_id")
+
+  contactId String? @map("contact_id")
+  phoneE164 String  @map("phone_e164")
+  /// The template's parameters, in Meta's positional order.
+  variables Json    @default("[]")
+
+  status     VerseRecipientStatus @default(PENDING)
+  /// Why this one was not sent. Tied to SKIPPED by a CHECK.
+  skipReason String?              @map("skip_reason")
+
+  /// Where the audience became an ordinary message, exactly as bulk does it.
+  messageId      String? @map("message_id")
+  conversationId String? @map("conversation_id")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campaign     VerseCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  message      Message?      @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  /// One row per person per campaign.
+  ///
+  /// The same argument as the lead-source idempotency index: a check-then-insert
+  /// loses to a retrying job, and what comes out of that race is a real
+  /// customer messaged twice by the same campaign.
+  @@unique([companyId, campaignId, phoneE164])
+  @@index([companyId, campaignId, status])
+  @@map("verse_campaign_recipients")
 }

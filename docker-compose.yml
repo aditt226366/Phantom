@@ -12,7 +12,24 @@ name: whatsapp-os
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector, not plain postgres, and the version is pinned to the same major.
+    #
+    # The Verse knowledge base stores embeddings in a `vector(1536)` column with
+    # an HNSW index, and `CREATE EXTENSION vector` is not available in the stock
+    # image - postgres:17-alpine reports zero rows from pg_available_extensions
+    # for it. This image IS postgres 17 with pgvector compiled in, so nothing
+    # about the server version changes.
+    #
+    # What DOES change is libc: the alpine image is musl and this one is glibc,
+    # and text collation differs between them. An existing data directory keeps
+    # working, but indexes on text columns were built under the old collation
+    # and their ordering is not guaranteed under the new one.
+    #
+    # That was handled by rebuilding rather than by hoping: `db:nuke -- dev` and
+    # `-- test` drop and recreate the schema, so every table and every index in
+    # this system was rebuilt under glibc by the commit that changed this line.
+    # A later clone never sees the problem - it initialises here from the start.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: whatsapp

@@ -263,6 +263,33 @@ enforcement.
 Retention intent (30 days) is in the migration header rather than discovered by
 a compliance question.
 
+> ### ⚠ THE 30-DAY PRUNE MUST NOT BE BUILT UNTIL THE BACKFILL HAS RUN
+>
+> Added in Phase 9, and this ordering is load-bearing in a way nothing in the
+> prune's own code would ever mention.
+>
+> Meta bills per 24-hour conversation window and that is the largest real cost
+> in the product. Nothing recorded a single one of those charges between Phase 4
+> and Phase 9: `payload.ts` parsed `pricing.category` and `pricing.billable` off
+> every status callback, and the webhook dropped them.
+>
+> The history survived only because this prune was deferred and never built. Every
+> delivery since Phase 4 is still sitting in `whatsapp_webhook_events.payload`,
+> verbatim, so the entire billing history is reconstructable by re-parsing it -
+> which is what `npm run backfill:charges` does.
+>
+> **It stops being reconstructable the day the prune ships.** A prune written
+> without knowing this would look completely correct, pass every test, and
+> destroy the only record of the product's largest cost. There is no second copy:
+> Meta's Insights API does not go back far enough and does not expose
+> per-conversation ids.
+>
+> So the order is: run the backfill, confirm `whatsapp_conversation_charges`
+> holds what you expect, and only then build the prune. When it is built, it
+> should refuse to delete an event whose statuses have not been reflected into
+> that table - the same shape as every other "prove it before you drop it" guard
+> here, and cheaper than being right by memory.
+
 **R10 — `typedRoutes` sequences the commits.** A link to
 `/inbox/[conversationId]` does not typecheck until the page exists.
 

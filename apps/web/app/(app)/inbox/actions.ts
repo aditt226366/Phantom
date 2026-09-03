@@ -13,6 +13,7 @@ import {
 import {
   advanceConversation,
   canSend,
+  claimDriver,
   clearNeedsHuman,
   handOff,
   withCompany,
@@ -182,7 +183,11 @@ export async function sendMessageAction(
    * message going out is the point of the action, and a run that could not be
    * handed off must not lose the operator's reply.
    */
-  await handOffFlowRun(session.companyId, conversationId);
+  await takeOverFromAutomation(
+    session.companyId,
+    conversationId,
+    session.userId,
+  );
 
   /* The action stays on the page, so nothing re-renders without this. */
   revalidatePath(`/inbox/${conversationId}`);
@@ -192,36 +197,76 @@ export async function sendMessageAction(
 }
 
 /**
- * End whatever flow is standing in this conversation, if one is.
+ * A person has taken this thread. Release whatever automation was driving it.
  *
- * Reads first so that the ordinary case - no flow, which is most threads - is
- * one indexed lookup and no write at all.
+ * ---------------------------------------------------------------------------
+ * The claim comes first, and it is what makes this correct for THREE writers
+ * ---------------------------------------------------------------------------
+ *
+ * This used to look for a live flow run and end it, which was right while a
+ * flow was the only automation that could be standing in a thread. Verse is
+ * the second, and looking for one specific kind of automation is a check that
+ * silently stops covering the cases added after it.
+ *
+ * So the operator claims the DRIVER instead. That single UPDATE is what
+ * establishes the person is now in charge - it displaces anything, because a
+ * person outranks every automation - and what it displaced comes back, so the
+ * only per-automation work left is whatever that particular one needs to wind
+ * down. A third automation added later gets its own arm here and cannot be
+ * forgotten, because the claim already displaced it and the switch is the only
+ * place that says what to do about it.
+ *
+ * After the enqueue and outside the transaction, deliberately: the message
+ * going out is the point of the action, and a driver that could not be claimed
+ * must not lose the operator's reply.
  */
-async function handOffFlowRun(
+async function takeOverFromAutomation(
   companyId: string,
   conversationId: string,
+  userId: string,
 ): Promise<void> {
-  const run = await withCompany(companyId, (db) =>
-    db.flowRun.findFirst({
-      where: { activeConversationId: conversationId },
-      select: { id: true },
+  const claim = await withCompany(companyId, (db, scopedCompanyId) =>
+    claimDriver(db, scopedCompanyId, conversationId, {
+      driver: "OPERATOR",
+      ref: userId,
+      at: new Date(),
     }),
   );
 
-  if (!run) return;
+  /* Nothing was driving, or the thread is not visible here. Most threads. */
+  if (claim.kind !== "claimed") return;
+
+  if (claim.displaced === "FLOW") {
+    const run = await withCompany(companyId, (db) =>
+      db.flowRun.findFirst({
+        where: { activeConversationId: conversationId },
+        select: { id: true },
+      }),
+    );
+
+    if (!run) return;
+
+    /*
+     * false: this handoff records that a person has ALREADY arrived, so the
+     * thread must not be flagged as needing one. See handOff - its two callers
+     * mean opposite things, and flagging here would put a request for a person
+     * into the queue in front of the person who just took the thread.
+     */
+    await handOff(
+      companyId,
+      run.id,
+      "Someone from the team replied, so the flow stopped here.",
+      false,
+    );
+  }
 
   /*
-   * false: this handoff records that a person has ALREADY arrived, so the
-   * thread must not be flagged as needing one. See handOff - its two callers
-   * mean opposite things, and flagging here would put a request for a person
-   * into the queue in front of the person who just took the thread.
+   * VERSE needs nothing wound down. A campaign holds no position in the
+   * conversation - it answers what arrives, and it only answers while it holds
+   * the driver - so losing the claim IS the stop. That asymmetry with FLOW is
+   * the reason this switches on what was displaced rather than doing one
+   * thing to everything.
    */
-  await handOff(
-    companyId,
-    run.id,
-    "Someone from the team replied, so the flow stopped here.",
-    false,
-  );
 }
 
 /* ------------------------------------------------------------------------- *

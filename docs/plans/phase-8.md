@@ -1,7 +1,9 @@
-# The rule-based flow builder
+# Phase 8 — the rule-based flow builder
 
 Working plan, written as the phase ran. Status: **complete, tagged
-`flow-builder-runtime` and `flow-builder`.**
+`phase-8-runtime` and `phase-8`** — renamed from `flow-builder-runtime` and
+`flow-builder` by the renumbering pass at the start of Phase 9. Neither had
+been pushed, which is the only reason they could move.
 
 Amendment A1. A tenant draws a decision tree; a customer taps buttons and the
 flow advances. No model is involved at any point, so the same input always
@@ -11,14 +13,32 @@ without an argument.
 
 ---
 
-## Why the tags are named rather than numbered
+## Why the tags were named, and why they are numbered now
 
-Phase 7 is already conversation pricing (`phase-5.md` says so), Phase 9 is the
-dashboard, and `spec-amendments.md` is explicit that the numbers need **one
-deliberate renumbering pass** rather than an edit per amendment — three phases
-changed size and two changed position. Claiming a number here would be the
-thing that document asks nobody to do, so the tags are `flow-builder-runtime`
-and `flow-builder`.
+This phase shipped as `flow-builder-runtime` and `flow-builder` rather than as
+a number, and the reasoning was sound at the time: Phase 11 was already
+conversation pricing (`phase-5.md` says so), the dashboard held 9, and
+`spec-amendments.md` was explicit that the numbers needed **one deliberate
+renumbering pass** rather than an edit per amendment. Claiming a number then
+would have been the thing that document asks nobody to do.
+
+The renumbering pass happened at the start of Phase 9, and this phase is
+**Phase 8**. The scheme it settled is the one thing worth carrying forward:
+
+> **A phase number is its position in ship order.** Nothing else. Not the
+> order things were planned in, not their size, not what a tag happens to say.
+
+That was affordable only because of an accident of publication. Tags
+`phase-0` through `phase-6` are pushed to the remote and are therefore
+immutable — a number somebody may already have fetched cannot be reassigned
+without lying about history. `phase-9`, `flow-builder-runtime` and
+`flow-builder` had never left this machine, so they could be renamed to
+`phase-7`, `phase-8-runtime` and `phase-8` at no cost to anybody.
+
+Had the flow-builder tags been pushed, the honest answer would have been the
+worse-looking one: leave them named, and record that numbers are an identity
+rather than an ordering. The scheme is not better in the abstract — it was
+available, and it was taken while it still was.
 
 The split is at the line between the runtime and the builder UI, which is also
 where `.githooks/SKIP_VISUAL` lived: nothing below that line renders a page.
@@ -274,7 +294,7 @@ version deleted still has to say where it is.
 
 ## The dashboard obligation, discharged
 
-Phase 9 wrote it down: the phase that lands one of the pending capabilities
+Phase 7 wrote it down: the phase that lands one of the pending capabilities
 replaces its card.
 
 **Lead temperature** is a real distribution now. Unscored contacts are absent
@@ -290,7 +310,7 @@ pending card is not a placeholder that can be left; it is a claim, and claims
 expire.
 
 It counts conversations a flow actually stood in, `DISTINCT` on the
-conversation. Never the absent-assignee proxy Phase 9 already refused, and
+conversation. Never the absent-assignee proxy Phase 7 already refused, and
 never a count of runs — a customer who returns has two runs in one thread,
 which would report more automated conversations than the tenant has
 conversations. A CHECK refuses that outright.

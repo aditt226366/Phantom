@@ -1233,6 +1233,200 @@ describe("lead sources and the rows they have claimed", () => {
   });
 });
 
+describe("a tenant's knowledge and the campaigns that read it", () => {
+  /* Seeding goes through the ORM on purpose; no-orm-in-isolation examines
+     assertion bodies only. */
+  async function seedKnowledge(company: SeededCompany, label: string) {
+    return withCompany(company.id, async (db, companyId) => {
+      const base = await db.knowledgeBase.create({
+        data: {
+          companyId,
+          name: `${label} handbook`,
+          embeddingModel: "text-embedding-3-small",
+          embeddingVersion: 1,
+        },
+        select: { id: true },
+      });
+
+      const document = await db.kbDocument.create({
+        data: {
+          companyId,
+          knowledgeBaseId: base.id,
+          kind: "FILE",
+          title: `${label} refund policy`,
+          filename: `${label}-refunds.pdf`,
+          mimeType: "application/pdf",
+          status: "INDEXED",
+        },
+        select: { id: true },
+      });
+
+      /*
+       * The chunk is written with raw SQL because `embedding` is Unsupported
+       * in Prisma and cannot be inserted any other way - which is the same
+       * reason packages/db/src/verse.ts exists.
+       */
+      const vector = `[${new Array(1536).fill(0.01).join(",")}]`;
+      await db.$executeRawUnsafe(
+        `INSERT INTO kb_chunks
+           (id, company_id, knowledge_base_id, content_hash, content,
+            token_count, embedding, embedding_model, embedding_version)
+         VALUES ($1, $2, $3, encode(sha256(convert_to($4, 'UTF8')), 'hex'), $4,
+                 12, $5::vector, 'text-embedding-3-small', 1)`,
+        `${label}-chunk`,
+        companyId,
+        base.id,
+        `${label} refunds are available within 14 days.`,
+        vector,
+      );
+
+      /* Where the passage came from, now a row of its own. Written here too so
+         the isolation fixture matches the shape retrieval actually reads. */
+      await db.$executeRawUnsafe(
+        `INSERT INTO kb_chunk_sources (id, company_id, chunk_id, document_id, seq)
+         VALUES ($1, $2, $3, $4, 0)`,
+        `${label}-source`,
+        companyId,
+        `${label}-chunk`,
+        document.id,
+      );
+
+      return { baseId: base.id, documentId: document.id };
+    });
+  }
+
+  async function seedCampaign(company: SeededCompany, label: string) {
+    const { baseId } = await seedKnowledge(company, `${label}-c`);
+
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "WHATSAPP_CLOUD", label: `${label}-verse` },
+        select: { id: true },
+      });
+      const template = await db.whatsAppTemplate.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          name: `${label}_verse_open`,
+          language: "en_US",
+          category: "MARKETING",
+          components: [{ type: "BODY", text: "Hello {{1}}" }],
+          status: "APPROVED",
+        },
+        select: { id: true },
+      });
+      await db.verseCampaign.create({
+        data: {
+          companyId,
+          name: `${label} winter push`,
+          goal: `${label} secret goal`,
+          templateId: template.id,
+          modelTier: "V1",
+          knowledgeBaseId: baseId,
+          timezone: "Asia/Kolkata",
+        },
+      });
+    });
+  }
+
+  it("does not show one company's knowledge bases to another", async () => {
+    await seedKnowledge(alpha, "alpha");
+    await seedKnowledge(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ name: string }>>`
+        SELECT name FROM knowledge_bases ORDER BY name`,
+    );
+
+    expect(rows).toEqual([{ name: "beta handbook" }]);
+  });
+
+  it("does not show one company's passages to another", async () => {
+    /*
+     * The single most sensitive read this phase adds. kb_chunks.content is the
+     * tenant's own operating knowledge in plain text - pricing, policies,
+     * scripts - sliced into passages that are, by design, the parts worth
+     * quoting. A competitor reading another tenant's chunks would have the
+     * business, not a contact list.
+     */
+    await seedKnowledge(alpha, "alpha");
+    await seedKnowledge(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ content: string }>>`
+        SELECT content FROM kb_chunks ORDER BY content`,
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.content).toContain("beta refunds");
+  });
+
+  it("does not let a similarity search reach across companies", async () => {
+    /*
+     * Retrieval is an ORDER BY on a distance operator with a LIMIT, and it has
+     * no WHERE clause of its own naming the company - the policy is what
+     * scopes it. So this asserts the shape retrieval actually uses rather than
+     * a plain SELECT: a nearest-neighbour query that ignores company_id
+     * entirely still cannot see another tenant's passages.
+     *
+     * Worth its own test because the HNSW index has no notion of the policy.
+     * The index is searched first and the rows are filtered after, so "the
+     * index found it" and "the caller may read it" are genuinely different
+     * questions here in a way they are not for a btree lookup.
+     */
+    await seedKnowledge(alpha, "alpha");
+    await seedKnowledge(beta, "beta");
+
+    const probe = `[${new Array(1536).fill(0.01).join(",")}]`;
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRawUnsafe<Array<{ content: string }>>(
+        `SELECT content FROM kb_chunks ORDER BY embedding <=> $1::vector LIMIT 10`,
+        probe,
+      ),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.content).toContain("beta refunds");
+  });
+
+  it("refuses to write a chunk into another company", async () => {
+    const { baseId, documentId } = await seedKnowledge(beta, "beta");
+    const vector = `[${new Array(1536).fill(0.02).join(",")}]`;
+
+    await expect(
+      withCompany(alpha.id, (db) =>
+        db.$executeRawUnsafe(
+          `INSERT INTO kb_chunks
+             (id, company_id, knowledge_base_id, content_hash, content,
+              token_count, embedding, embedding_model, embedding_version)
+           VALUES ('smuggled', $1, $2,
+                   encode(sha256(convert_to('injected', 'UTF8')), 'hex'),
+                   'injected', 3, $3::vector, 'text-embedding-3-small', 1)`,
+          beta.id,
+          baseId,
+          vector,
+        ),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("does not show one company's campaigns, including the goal", async () => {
+    /*
+     * `goal` is the tenant's own words, verbatim, describing what they are
+     * trying to get out of a conversation. It is strategy in a text column.
+     */
+    await seedCampaign(alpha, "alpha");
+    await seedCampaign(beta, "beta");
+
+    const rows = await withCompany(beta.id, (db) =>
+      db.$queryRaw<Array<{ goal: string }>>`SELECT goal FROM verse_campaigns`,
+    );
+
+    expect(rows).toEqual([{ goal: "beta secret goal" }]);
+  });
+});
+
 describe("flows, their versions, and the runs pinned to them", () => {
   /* A fixture, deliberately outside any `it` - seeding goes through the ORM on
      purpose, and no-orm-in-isolation examines assertion bodies only. */

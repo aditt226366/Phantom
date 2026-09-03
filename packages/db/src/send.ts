@@ -201,6 +201,8 @@ export function describeRefusal(reason: SendRefusal): string {
   switch (reason) {
     case "window_closed":
       return "The 24-hour window closed before this was sent. Only an approved template can be sent now.";
+    case "stored_payload_unreadable":
+      return "This message was stored as a template or an interactive message and its saved contents could not be read back, so nothing was sent. Sending it as plain text would have delivered a different message.";
     case "number_not_sendable":
       return "The number this would send from is not in a state that permits sending.";
     case "number_status_unknown":

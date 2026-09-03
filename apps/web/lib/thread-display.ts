@@ -75,6 +75,14 @@ export function statusDisplay(status: string): StatusDisplay {
 const REFUSAL_SENTENCES: Record<SendRefusal, string> = {
   window_closed:
     "More than 24 hours have passed since this customer last wrote, so WhatsApp only allows an approved template.",
+  /*
+   * A data fault, not a policy one, and it is in this map because a customer's
+   * thread must not show a blank reason. The wording deliberately does not
+   * blame the window: that was the symptom this refusal exists to stop
+   * producing.
+   */
+  stored_payload_unreadable:
+    "This message could not be sent because its saved contents could not be read back.",
   number_not_sendable:
     "Meta has put this number in a state that does not allow sending. Check it in Business Manager.",
   number_status_unknown:

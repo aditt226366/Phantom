@@ -8,20 +8,40 @@ Written down before the affected phases start, so that the code which depends on
 them — schema shapes, sequencing, what blocks what — is not re-derived from a
 conversation nobody can find.
 
-Status: **A4 and A1 are done.** Phase 3 shipped and is tagged (`phase-3.md`);
-the flow builder shipped and is tagged `flow-builder-runtime` and
-`flow-builder` (`flow-builder.md`). A6 is in force and has been run against dev
-and test at every tag since. A2, A3 and A5 have not started. Phases 4a, 4b, 5,
-6 and 9 are complete; see `phase-4.md`, `phase-5.md`, `phase-6.md` and
-`phase-9.md`.
+Status: **A4, A1 and the renumbering are done; A2 is in progress.** Phase 3
+shipped and is tagged (`phase-3.md`); the flow builder is **Phase 8**
+(`phase-8.md`), tagged `phase-8-runtime` and `phase-8`. A6 is in force and has
+been run against dev and test at every tag since. A3 and A5 have not started —
+A5 becomes binding inside A2, which is Phase 9 and is being built now. Phases
+4a, 4b, 5, 6, 7 and 8 are complete; see `phase-4.md`, `phase-5.md`,
+`phase-6.md`, `phase-7.md` and `phase-8.md`.
 
-The flow builder is tagged by NAME rather than by number, and deliberately.
-Phase 7 is already conversation pricing in `phase-5.md` and Phase 9 is the
-dashboard, so there is no free number — and this document says below that the
-numbering needs one deliberate pass rather than an edit per amendment. Claiming
-a number here would be the thing this document asks nobody to do.
+**The renumbering pass this document asked for has happened.** It ran at the
+start of Phase 9, in its own commit, across the schema comments, the
+migrations, `PHASES.md`, the plan docs and the source. The rule it settled:
 
-Phase 9 adds one obligation to A1, A2 and A3 that is cheap now and a backfill
+> **A phase number is its position in ship order, and nothing else.**
+
+Which resolved as: the dashboard 9 → **7**, the flow builder (named) → **8**,
+the Verse AI layer → **9**. Forward: 10 Meta Ads, 11 conversation pricing and
+billing, 12 launch readiness.
+
+Two things about it are worth keeping, because neither is obvious from the
+result. The first is what made it affordable: tags `phase-0` through `phase-6`
+are **pushed** and were therefore untouchable, while `phase-9`,
+`flow-builder-runtime` and `flow-builder` had never left one machine and could
+be renamed for free. Ship order was not chosen because it is right in the
+abstract — it was the better scheme that happened to still be available, and
+one push of those three tags would have taken it off the table permanently.
+
+The second is that editing an applied migration's comments is not free. It
+changes the recorded checksum, which is the only evidence the C10 incident left
+behind, so the pass was followed by rebuilding **both** databases — dev
+included — exactly as the conventions skill requires of any in-place
+amendment. A renumbering that skipped that would have spent the diagnostic it
+was tidying up around.
+
+Phase 7 adds one obligation to A1, A2 and A3 that is cheap now and a backfill
 later. **The dashboard renders a card for every capability those phases bring**
 — AI handling, lead temperature, the cold-to-order pyramid, orders — each
 currently an honest empty state naming the section it arrives with, in
@@ -30,7 +50,7 @@ replacing its entry with a real card, and the page is laid out so that the space
 is already the right shape. A phase that ships the capability and leaves the
 card saying "arrives with" is one whose own dashboard denies it exists.
 
-Both obligations below were met, and `flow-builder.md` records how. The
+Both obligations below were met, and `phase-8.md` records how. The
 dashboard one turned out to have a second half nobody had written down: a
 pending card is a claim, so a phase must also **check the copy of the cards it
 does not replace**. `aiHandling` said "Nothing here is automated yet", which
@@ -133,16 +153,37 @@ canvas primitives — no node, no edge, no viewport, no pan. Every node names
 where each branch goes, by the name of the node it goes to, in a select that
 cannot point at a node that does not exist. What a canvas adds over that is
 spatial memory, which matters at fifty nodes and not at eight — and eight is
-what three reply buttons per question produces. See `flow-builder.md`.
+what three reply buttons per question produces. See `phase-8.md`.
 
 ---
 
 ## A2. AI Messaging is unchanged
 
-**Changes: nothing.** Recorded so that "the flow builder replaced it" is not
-inferred from A1. The AI layer ships as originally specified, after the flow
-builder, and A5 below is a compliance constraint on it rather than a change to
-its scope.
+**Changes: nothing. Phase 9 — runtime tagged, campaign layer code-complete and
+deliberately untagged** (`phase-9.md`).
+
+The tag is held on one thing: the 20/5 acceptance metric has never run, because
+there are no provider credentials. The runtime can sit unmeasured because
+nothing points a customer at it; a campaign is the mechanism that aims the
+engine at real people on a schedule, and an unmeasured similarity floor behind
+one either refuses answerable questions or invents policies — invisibly in both
+directions.
+
+Recorded so that "the flow builder replaced it" is not inferred from A1. The AI
+layer ships as originally specified, after the flow builder, and A5 below is a
+compliance constraint on it rather than a change to its scope.
+
+Three things it inherits, none of which it may rebuild:
+
+- **The producer.** A model that sends is a caller of
+  `materialiseOutboundTemplate`, the fourth after bulk, lead sources and flows.
+  There is one send path and this phase does not add a second.
+- **The gate.** `canUseFeatures` covers every page and action, mechanically, so
+  the knowledge base and the campaign wizard are gated by being walked rather
+  than by being remembered.
+- **The handoff.** `flagNeedsHuman` is the state a proactive escalation writes,
+  and Verse is its fourth caller. Deriving "needs a person" from unread counts
+  was wrong with two writers and would be wronger with four.
 
 ---
 
@@ -293,6 +334,42 @@ migration.
 
 ---
 
+## A7. The webhook prune waits for the conversation-charge backfill
+
+**Adds to: Phase 11 (conversation pricing and billing), and constrains R9 in
+`phase-4.md`.**
+
+Meta bills per 24-hour conversation window, per category, and it is the largest
+real cost in the product. **Nothing recorded one between Phase 4 and Phase 9.**
+`payload.ts` parsed `pricing.category` and `pricing.billable` off every status
+callback the whole time; the webhook read them and dropped them. Four usage
+kinds sat declared and priced with no writer, which is what
+`packages/core/tests/usage-kinds-wired.test.ts` now exists to prevent.
+
+Phase 9 wired it, and the history survived only by accident: R9's 30-day prune
+of `whatsapp_webhook_events` was deferred and never built, so every delivery
+since Phase 4 is still stored verbatim and the whole billing history is
+reconstructable by re-parsing it. `npm run backfill:charges` does exactly that,
+idempotently, through the same function the live webhook calls.
+
+**So the ordering is load-bearing, and nothing in the prune's own code would
+ever say so:**
+
+1. run `npm run backfill:charges -- --dry-run`, then for real;
+2. confirm `whatsapp_conversation_charges` holds what you expect;
+3. only then build the prune.
+
+A prune written without knowing this would look correct, pass every test, and
+destroy the only record of the product's largest cost. There is no second copy —
+Meta's Insights API does not reach back far enough and does not expose
+per-conversation ids.
+
+When the prune is built it should refuse to delete an event whose statuses are
+not already reflected in `whatsapp_conversation_charges`, so the ordering is
+enforced by the code rather than remembered from this document.
+
+---
+
 ## Sequencing, after these amendments
 
 Two hard orderings, each with its reason:
@@ -300,9 +377,34 @@ Two hard orderings, each with its reason:
 | Ordering | Because |
 | --- | --- |
 | ~~KYC **before** every feature phase~~ **done** | A gate retrofitted onto existing entry points is a gate with a hole in it |
-| Flow builder **before** the AI layer | The deterministic engine is what the AI layer would otherwise improvise, and building it second builds it twice |
+| ~~Flow builder **before** the AI layer~~ **done** | The deterministic engine is what the AI layer would otherwise improvise, and building it second builds it twice |
 
-Exact phase numbers are not renumbered here. Three phases changed size and two
-changed position, so the numbering needs one deliberate pass rather than an
-edit per amendment — and every `Phase N` reference already in the schema
-comments, the migrations and `PHASES.md` moves with it.
+## The numbering, settled
+
+The pass this document asked for ran at the start of Phase 9. **A phase number
+is its position in ship order, and nothing else.**
+
+| # | What | Tag | Doc |
+| --- | --- | --- | --- |
+| 0 | scaffold | `phase-0` (pushed) | — |
+| 1 | authentication, RLS, shell, platform admin | `phase-1` (pushed) | — |
+| 2 | admin console and credential vault | `phase-2` (pushed) | — |
+| 3 | KYC documents and the feature gate | `phase-3` (pushed) | `phase-3.md` |
+| 4 | WhatsApp core | `phase-4a`, `phase-4b` (pushed) | `phase-4.md` |
+| 5 | bulk messaging | `phase-5` (pushed) | `phase-5.md` |
+| 6 | Google Sheets as a lead source | `phase-6` (pushed) | `phase-6.md` |
+| 7 | the tenant dashboard | `phase-7` *(was `phase-9`)* | `phase-7.md` |
+| 8 | the rule-based flow builder | `phase-8-runtime`, `phase-8` *(were named)* | `phase-8.md` |
+| 9 | **the Verse AI layer** | `phase-9-runtime`, `phase-9` | `phase-9.md` |
+| 10 | Meta Ads | — | — |
+| 11 | conversation pricing and billing | — | — |
+| 12 | launch readiness | — | — |
+
+4a and 4b keep their letters because both tags are pushed. They are one phase
+that shipped in two halves, not two phases, and the numbering does not pretend
+otherwise.
+
+Renumbering was only possible because the three tags that had to move —
+`phase-9`, `flow-builder-runtime`, `flow-builder` — had never been pushed.
+Everything at 6 and below was already on the remote and was left alone. **From
+here the numbers are load-bearing: a pushed tag fixes its number for good.**

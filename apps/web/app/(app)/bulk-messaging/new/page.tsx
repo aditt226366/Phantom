@@ -34,12 +34,15 @@ export default async function NewBroadcastPage() {
       const [templates, numbers] = await Promise.all([
         db.whatsAppTemplate.findMany({
           where: { companyId, status: "APPROVED" },
-          orderBy: { name: "asc" },
+          /* Then id: a name is shared by every language of one template. */
+          orderBy: [{ name: "asc" }, { id: "asc" }],
           select: { id: true, name: true, language: true, components: true },
         }),
         db.whatsAppNumber.findMany({
           where: { companyId },
-          orderBy: { displayNumber: "asc" },
+          /* Then id. Nothing makes display_number unique - it is Meta's label
+             for the number, not a key. */
+          orderBy: [{ displayNumber: "asc" }, { id: "asc" }],
           select: {
             id: true,
             displayNumber: true,

@@ -143,7 +143,10 @@ export default async function Page({
          quality rating, which is the thing a tenant cannot get back. */
       templates: await db.whatsAppTemplate.findMany({
         where: { status: "APPROVED" },
-        orderBy: [{ name: "asc" }],
+        /* Then id, because name is NOT unique - one template approved in two
+           languages is two rows sharing it. At `take: 50` a tie at the
+           boundary drops a language the composer could otherwise send. */
+        orderBy: [{ name: "asc" }, { id: "asc" }],
         take: 50,
         select: { id: true, name: true, language: true, components: true },
       }),

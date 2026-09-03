@@ -8,6 +8,7 @@ import {
   last4Of,
   secretAad,
 } from "@whatsapp-os/core";
+import { VERSE_EMBEDDING } from "@whatsapp-os/core/verse";
 import { FIXTURE } from "../tests/visual/fixture.ts";
 import {
   TEST_DATABASE_NAME,
@@ -512,7 +513,7 @@ const FINISHED_RECIPIENTS = [
   { phone: "+919876543224", status: "DELIVERED", error: null },
   { phone: "+919876543225", status: "SENT", error: null },
   /*
-   * The three failures carry Meta's own codes, and did not until Phase 9.
+   * The three failures carry Meta's own codes, and did not until Phase 7.
    *
    * The titles were already Meta's wording for specific errors - "cannot
    * receive WhatsApp messages" IS 131026 - so a row with that sentence and a
@@ -1947,7 +1948,7 @@ try {
   }
 
   /* ---------------------------------------------------------------- */
-  /* Phase 9: what the dashboard reads                                  */
+  /* Phase 7: what the dashboard reads                                  */
   /* ---------------------------------------------------------------- */
 
   /*
@@ -2609,6 +2610,360 @@ for (const [runId, seq, kind, nodeId, choice, messageId] of STEPS) {
       "2026-08-14T08:41:00Z",
     ],
   );
+}
+
+/* ------------------------------------------------------------------------- *
+ * Verse: a knowledge base, a running campaign, and two threads
+ * ------------------------------------------------------------------------- *
+ *
+ * EVERY VALUE RENDERED HERE IS A LITERAL.
+ *
+ * The rule the conventions state and the inbox badge broke for five phases: a
+ * seeded value that gets RENDERED must not come from the clock. Four things on
+ * these screens are dates or derived from them - the knowledge base's "Created",
+ * a document's status, the campaign's schedule, and both threads' message
+ * timestamps - and every one is a fixed instant below.
+ *
+ * The one that would have drifted quietly is `needs_human_at` on the handoff
+ * thread. Nothing renders it as a duration today, which is exactly the state
+ * `webhook_key` was in when it was seeded randomly for months: safe until the
+ * first page prints it. It is a literal so that day is uneventful.
+ */
+
+const VERSE_AT = {
+  /* The base was made a week before the campaign, so "Created" is visibly not
+     the same date as everything else on the page. */
+  baseCreated: "2026-08-07T05:30:00Z", //     07/08/2026 11:00:00
+  documentIndexed: "2026-08-07T05:34:00Z", // 07/08/2026 11:04:00
+  documentFailed: "2026-08-07T05:36:00Z", //  07/08/2026 11:06:00
+  campaignCreated: "2026-08-14T05:30:00Z", // 14/08/2026 11:00:00
+  /* The two threads, an hour apart, both on the day the baselines describe. */
+  answeredOpened: "2026-08-14T06:00:00Z", //  14/08/2026 11:30:00
+  answeredAsked: "2026-08-14T06:02:00Z",
+  answeredReplied: "2026-08-14T06:02:09Z",
+  handoffOpened: "2026-08-14T07:00:00Z", //   14/08/2026 12:30:00
+  handoffAsked: "2026-08-14T07:03:00Z",
+  handoffReplied: "2026-08-14T07:03:11Z",
+};
+
+  {
+  /* ----------------------------------------------------------------- *
+   * The knowledge base, with one document indexed and one failed
+   * ----------------------------------------------------------------- */
+
+  await client.query(
+    `INSERT INTO knowledge_bases
+       (id, company_id, name, embedding_model, embedding_version,
+        created_at, updated_at)
+     VALUES ($1, $2, $3, $4, 1, $5, $5)`,
+    [
+      FIXTURE.knowledgeBaseId,
+      COMPANY.active,
+      "Delivery and returns",
+      /* The pinned model, from the constant rather than a literal - a fixture
+         that hardcoded it would keep passing after a re-embedding migration
+         while every real base disagreed with it. */
+      VERSE_EMBEDDING.model,
+      VERSE_AT.baseCreated,
+    ],
+  );
+
+  await client.query(
+    `INSERT INTO kb_documents
+       (id, company_id, knowledge_base_id, kind, title, filename, mime_type,
+        byte_size, status, chunk_count, indexed_at, created_at, updated_at)
+     VALUES ($1, $2, $3, 'FILE', $4, $5, 'application/pdf', 184320,
+             'INDEXED', 24, $6, $6, $6)`,
+    [
+      FIXTURE.kbDocumentId,
+      COMPANY.active,
+      FIXTURE.knowledgeBaseId,
+      "Delivery and returns handbook",
+      "delivery-and-returns.pdf",
+      VERSE_AT.documentIndexed,
+    ],
+  );
+
+  /*
+   * The failed one, and the whole reason this screenshot exists.
+   *
+   * A scanned PDF is the most common upload failure this feature will see, and
+   * the picture worth having is the one that proves the sentence is rendered
+   * in full rather than truncated to a red dot. The text is the worker's own,
+   * copied from extractPdf, so a change to that message shows up here.
+   */
+  await client.query(
+    `INSERT INTO kb_documents
+       (id, company_id, knowledge_base_id, kind, title, source_url,
+        status, failure_reason, chunk_count, created_at, updated_at)
+     VALUES ($1, $2, $3, 'URL', $4, $5, 'FAILED', $6, 0, $7, $7)`,
+    [
+      FIXTURE.kbFailedDocumentId,
+      COMPANY.active,
+      FIXTURE.knowledgeBaseId,
+      "kamattextiles.example/pricing",
+      "https://kamattextiles.example/pricing",
+      "Every page found was disallowed by the site's robots.txt, so nothing " +
+        "was indexed. robots.txt is the site operator's standing instruction " +
+        "about automated access, and it is respected even when the site " +
+        "belongs to you - change it there if this is wrong.",
+      VERSE_AT.documentFailed,
+    ],
+  );
+
+  /* ----------------------------------------------------------------- *
+   * A running campaign
+   * ----------------------------------------------------------------- */
+
+  await client.query(
+    `INSERT INTO verse_campaigns
+       (id, company_id, name, goal, template_id, model_tier,
+        knowledge_base_id, whatsapp_number_id, status, timezone,
+        daily_window_start_minute, daily_window_end_minute, daily_cap,
+        created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 'V1', $6, $7, 'RUNNING', 'Asia/Kolkata',
+             540, 1200, 200, $8, $8)`,
+    [
+      FIXTURE.campaignId,
+      COMPANY.active,
+      "Order updates",
+      "Answer questions about orders that have shipped - where it is, when " +
+        "it will arrive, and what to do if it has not. Hand anything about " +
+        "refunds to a person.",
+      FIXTURE.approvedTemplateId,
+      FIXTURE.knowledgeBaseId,
+      NUMBERS[0].id,
+      VERSE_AT.campaignCreated,
+    ],
+  );
+
+  /*
+   * An audience with all four states present, so the campaign page shows a
+   * breakdown rather than four zeroes and one number.
+   *
+   * The SKIPPED one carries the reason a refused driver claim writes, because
+   * that is the interesting skip - "already in a conversation" is the outcome
+   * that proves a campaign does not interrupt one.
+   */
+  const RECIPIENTS = [
+    { n: 1, status: "SENT", reason: null },
+    { n: 2, status: "SENT", reason: null },
+    { n: 3, status: "SENT", reason: null },
+    { n: 4, status: "PENDING", reason: null },
+    { n: 5, status: "PENDING", reason: null },
+    {
+      n: 6,
+      status: "SKIPPED",
+      reason:
+        "This contact is already in an automated conversation, so this " +
+        "campaign did not interrupt it.",
+    },
+  ];
+
+  for (const recipient of RECIPIENTS) {
+    await client.query(
+      `INSERT INTO verse_campaign_recipients
+         (id, company_id, campaign_id, phone_e164, variables, status,
+          skip_reason, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, '[]'::jsonb, $5::verse_recipient_status,
+               $6, $7, $7)`,
+      [
+        `c000visualfixtureverserec${recipient.n}`,
+        COMPANY.active,
+        FIXTURE.campaignId,
+        `+9198765000${String(recipient.n).padStart(2, "0")}`,
+        recipient.status,
+        recipient.reason,
+        VERSE_AT.campaignCreated,
+      ],
+    );
+  }
+
+  /* ----------------------------------------------------------------- *
+   * Two threads: one Verse answered, one it handed off
+   * ----------------------------------------------------------------- */
+
+  const THREADS = [
+    {
+      conversationId: FIXTURE.verseConversationId,
+      contactId: "c000visualfixtureversecon1",
+      phone: "+919876500011",
+      name: "Meera Iyer",
+      firstName: "Meera",
+      orderRef: "NW-4417",
+      opened: VERSE_AT.answeredOpened,
+      asked: VERSE_AT.answeredAsked,
+      replied: VERSE_AT.answeredReplied,
+      question: "when will it arrive in Pune?",
+      answer:
+        "It should reach Pune in 3 to 5 working days from despatch. " +
+        "Delivery is free on orders over Rs 2,000.",
+      /* Still driving: this is the thread where it worked. */
+      driver: "VERSE",
+      driverRef: FIXTURE.campaignId,
+      needsHumanAt: null,
+      needsHumanReason: null,
+    },
+    {
+      conversationId: FIXTURE.verseHandoffConversationId,
+      contactId: "c000visualfixtureversecon2",
+      phone: "+919876500012",
+      name: "Rahul Nair",
+      firstName: "Rahul",
+      orderRef: "NW-4423",
+      opened: VERSE_AT.handoffOpened,
+      asked: VERSE_AT.handoffAsked,
+      replied: VERSE_AT.handoffReplied,
+      question: "can I get a refund instead?",
+      /*
+       * The handoff message, verbatim from handoffMessage("no_grounding").
+       *
+       * This is the screenshot that matters most and is least likely to be
+       * looked at, so the fixture uses the real sentence: a change to the copy
+       * moves this baseline, which is the only way anybody would notice.
+       */
+      /*
+       * handoffMessage("restricted_subject"), verbatim.
+       *
+       * A refund is refused by policy rather than by the floor, and it is the
+       * stronger of the two illustrations: the floor's refusal depends on what
+       * happens to be indexed, and this one holds whatever the knowledge base
+       * contains. The campaign's own goal says to hand refunds to a person, so
+       * the thread and the goal agree.
+       */
+      answer:
+        "That is something I would rather a colleague handled. I have passed " +
+        "this on and someone will reply here shortly.",
+      /*
+       * Released, because handing over is what releases it. A handoff thread
+       * still showing VERSE as its driver would be the bug, not the picture.
+       */
+      driver: "NOBODY",
+      driverRef: null,
+      needsHumanAt: VERSE_AT.handoffReplied,
+      needsHumanReason:
+        "Verse stopped: the customer raised a refund, complaint, legal or " +
+        "medical question.",
+    },
+  ];
+
+  for (const thread of THREADS) {
+    await client.query(
+      `INSERT INTO contacts
+         (id, company_id, wa_id, phone_e164, profile_name, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+      [
+        thread.contactId,
+        COMPANY.active,
+        thread.phone.slice(1),
+        thread.phone,
+        thread.name,
+        thread.opened,
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO conversations
+         (id, company_id, contact_id, whatsapp_number_id, source,
+          last_inbound_at, last_message_at, last_message_preview,
+          window_expires_at, unread_count, driver, driver_since, driver_ref,
+          needs_human_at, needs_human_reason, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'CAMPAIGN', $5, $6, $7, $8, 0,
+               $9::conversation_driver, $10, $11, $12, $13, $14, $14)`,
+      [
+        thread.conversationId,
+        COMPANY.active,
+        thread.contactId,
+        NUMBERS[0].id,
+        thread.asked,
+        thread.replied,
+        thread.answer,
+        /*
+         * The window, relative to now() on purpose and the one exception to
+         * the literal rule.
+         *
+         * The conventions are explicit that this cuts both ways: a thread must
+         * stay near its deadline the day after a baseline is recorded, and
+         * nothing may PRINT it as an instant. The inbox renders it through
+         * windowBucket, which is a coarse state and not a time, so this is
+         * safe - and a fixed instant here would have the thread's window
+         * silently expire and change the picture a day later.
+         */
+        null,
+        thread.driver,
+        thread.driver === "NOBODY" ? null : thread.replied,
+        thread.driverRef,
+        thread.needsHumanAt,
+        thread.needsHumanReason,
+        thread.opened,
+      ],
+    );
+
+    /* The campaign's opening template. */
+    await client.query(
+      `INSERT INTO messages
+         (id, company_id, conversation_id, direction, status, type, body,
+          template_payload, occurred_at, send_attempt, created_at, updated_at)
+       VALUES ($1, $2, $3, 'OUTBOUND', 'DELIVERED', 'template', $4,
+               $5::jsonb, $6, 0, $6, $6)`,
+      [
+        `${thread.conversationId}m1`,
+        COMPANY.active,
+        thread.conversationId,
+        /*
+         * The body of the template the campaign actually names, filled per
+         * thread.
+         *
+         * Two things this guards, both found by looking at the picture rather
+         * than by a test. A fixture where the campaign says it opens with
+         * `order_shipped` and its conversations show some other message tells
+         * two stories - and the screenshots are the only place anybody sees
+         * the two side by side. And a greeting hardcoded to one name renders
+         * "Hi Meera" at the top of Rahul's thread, which no assertion here
+         * would ever have caught.
+         */
+        `Hi ${thread.firstName}, order ${thread.orderRef} has left our ` +
+          "warehouse and should reach you in two working days.",
+        JSON.stringify({
+          name: "order_shipped",
+          language: "en_US",
+          parameters: [thread.firstName, thread.orderRef],
+        }),
+        thread.opened,
+      ],
+    );
+
+    /* What the customer asked. */
+    await client.query(
+      `INSERT INTO messages
+         (id, company_id, conversation_id, direction, status, type, body,
+          wamid, occurred_at, send_attempt, created_at, updated_at)
+       VALUES ($1, $2, $3, 'INBOUND', 'DELIVERED', 'text', $4, $5, $6, 0, $6, $6)`,
+      [
+        `${thread.conversationId}m2`,
+        COMPANY.active,
+        thread.conversationId,
+        thread.question,
+        `wamid.${thread.conversationId}m2`,
+        thread.asked,
+      ],
+    );
+
+    /* What Verse said - an answer, or the handoff sentence. */
+    await client.query(
+      `INSERT INTO messages
+         (id, company_id, conversation_id, direction, status, type, body,
+          occurred_at, send_attempt, created_at, updated_at)
+       VALUES ($1, $2, $3, 'OUTBOUND', 'READ', 'text', $4, $5, 0, $5, $5)`,
+      [
+        `${thread.conversationId}m3`,
+        COMPANY.active,
+        thread.conversationId,
+        thread.answer,
+        thread.replied,
+      ],
+    );
+  }
 }
 
   /*

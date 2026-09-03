@@ -54,7 +54,7 @@
 -- ---------------------------------------------------------------------------
 --
 --   conversations (company_id, last_message_at DESC)   the inbox list
---   conversations (company_id, window_expires_at)      canSend, and Phase 9's
+--   conversations (company_id, window_expires_at)      canSend, and Phase 7's
 --                                                      closing-windows card
 --   messages (company_id, conversation_id,
 --             occurred_at DESC, id)                    the thread
@@ -80,7 +80,7 @@
 -- Sixty-three times, on a query whose whole purpose is to be cheap enough to
 -- put on a dashboard. So: never range on now() in SQL against this column.
 -- Compute the bounds in TypeScript and bind them. canSend is unaffected - it
--- reads one conversation by id - but Phase 9's "closing within the hour" card
+-- reads one conversation by id - but Phase 7's "closing within the hour" card
 -- is exactly this query, and would have shipped as a sequential scan.
 --
 -- ---------------------------------------------------------------------------

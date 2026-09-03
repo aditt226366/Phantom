@@ -92,8 +92,12 @@ describe("usageDedupeKey", () => {
   });
 
   it("includes the kind, so two kinds of work on one job do not collide", () => {
-    expect(usageDedupeKey("integration.verify", "job1")).not.toBe(
-      usageDedupeKey("integration.test", "job1"),
+    /* Two kinds that genuinely run against the same subject: a Verse answer and
+       the lead score computed from it share our message id. Before, this used
+       `integration.test`, which has since been deleted for being a kind nothing
+       could write. */
+    expect(usageDedupeKey("verse.reply", "msg1")).not.toBe(
+      usageDedupeKey("verse.lead_score", "msg1"),
     );
   });
 });

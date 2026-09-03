@@ -13,6 +13,11 @@ export { resolveCompany } from "./resolve-company.ts";
 export type { ResolveKind } from "./resolve-company.ts";
 export { createCompany, slugify } from "./company.ts";
 export { recordUsage } from "./usage.ts";
+export { recordConversationCharge } from "./conversation-charges.ts";
+export type {
+  ConversationChargeInput,
+  ConversationChargeOutcome,
+} from "./conversation-charges.ts";
 export { mediaStore, MediaTruncatedError } from "./media-store.ts";
 export {
   recordWebhookDelivery,
@@ -33,10 +38,14 @@ export {
   markConversationRead,
   flagNeedsHuman,
   clearNeedsHuman,
+  claimDriver,
+  releaseDriver,
 } from "./conversations.ts";
 export type {
   Sendability,
   ConversationActivity,
+  ConversationDriver,
+  DriverClaim,
   ReadReceiptTarget,
   StatusOutcome,
   StatusUpdateInput,
@@ -230,3 +239,17 @@ export {
   FlowStepKind,
   LeadScore,
 } from "./generated/prisma/enums.ts";
+export {
+  campaignSentSince,
+  chunkContentHash,
+  deleteDocumentAndOrphanedChunks,
+  deleteOrphanedChunks,
+  embeddingModelsInBase,
+  nextCampaignRecipients,
+  readDocumentBytes,
+  replaceChunks,
+  retrieveChunks,
+  stopCampaignForTemplate,
+  verseContextFor,
+} from "./verse.ts";
+export type { ChunkToStore, VerseContext } from "./verse.ts";

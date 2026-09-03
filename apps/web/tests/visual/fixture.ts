@@ -41,6 +41,23 @@ export const FIXTURE = {
    */
   conversationId: "c000visualfixtureconvo01",
   /**
+   * The two Verse threads, and the pair is the point.
+   *
+   * One where the knowledge base answered and Verse is still driving, one
+   * where nothing cleared the floor and it handed over. The second is the
+   * picture that matters most and the one least likely to be looked at: it is
+   * the only place the refusal - the whole product - is visible as a thing a
+   * customer actually receives.
+   */
+  verseConversationId: "c000visualfixtureconvo05",
+  verseHandoffConversationId: "c000visualfixtureconvo06",
+  /** A knowledge base with one document indexed and one failed. */
+  knowledgeBaseId: "c000visualfixtureversekb1",
+  kbDocumentId: "c000visualfixtureversedoc1",
+  kbFailedDocumentId: "c000visualfixtureversedoc2",
+  /** A running campaign, with all four recipient states present. */
+  campaignId: "c000visualfixtureversecmp1",
+  /**
    * The closed-window thread, and the more interesting of the two to look at.
    *
    * It carries everything the open one cannot: a composer disabled with its
@@ -212,6 +229,27 @@ export const ROUTES: readonly VisualRoute[] = [
     audience: "tenant",
   },
   { name: "ai-messaging", path: "/ai-messaging", audience: "tenant" },
+  {
+    /* The knowledge base, carrying an indexed document and a failed one. The
+       failed row is the reason this shot exists: it proves the worker's
+       sentence renders in full rather than collapsing to a red dot. */
+    name: "ai-messaging-knowledge",
+    path: "/ai-messaging/knowledge",
+    audience: "tenant",
+  },
+  { name: "ai-messaging-new", path: "/ai-messaging/new", audience: "tenant" },
+  {
+    /* A running campaign, with all four recipient states present so the
+       breakdown is four numbers rather than one and three zeroes. */
+    name: "ai-messaging-campaign",
+    path: `/ai-messaging/${FIXTURE.campaignId}`,
+    audience: "tenant",
+  },
+  {
+    name: "ai-messaging-rag",
+    path: "/ai-messaging/rag",
+    audience: "tenant",
+  },
   { name: "template-messaging", path: "/template-messaging", audience: "tenant" },
   {
     name: "template-messaging-new",
@@ -236,6 +274,29 @@ export const ROUTES: readonly VisualRoute[] = [
   {
     name: "inbox-flow-paused",
     path: `/inbox/${FIXTURE.pausedFlowConversationId}`,
+    audience: "tenant",
+  },
+  {
+    /* Verse answered this one from the knowledge base, and is still driving
+       it. The ordinary success, and the control for the picture below. */
+    name: "inbox-verse-answered",
+    path: `/inbox/${FIXTURE.verseConversationId}`,
+    audience: "tenant",
+  },
+  {
+    /*
+     * Verse handed this one over, and this is the photograph that matters
+     * most in the phase.
+     *
+     * It is the only place the refusal - which is the entire product - is
+     * visible as something a customer actually receives: a question the
+     * knowledge base could not answer, a sentence naming no machinery, and a
+     * thread flagged for a person with the reason an operator reads. It is
+     * also the shot least likely to be looked at, which is why it is seeded
+     * with the real handoff copy rather than a placeholder.
+     */
+    name: "inbox-verse-handoff",
+    path: `/inbox/${FIXTURE.verseHandoffConversationId}`,
     audience: "tenant",
   },
   { name: "bulk-messaging", path: "/bulk-messaging", audience: "tenant" },

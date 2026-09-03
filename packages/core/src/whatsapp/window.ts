@@ -83,7 +83,7 @@ export function describeWindow(
  * bucket, never as an instant - because the screenshot fixture seeds an open
  * window relative to now(), and anything decrementing differs between the seed
  * and the capture. That hazard was latent for as long as no fixture had a
- * near-term window; Phase 9 seeded three, and both inbox baselines moved by
+ * near-term window; Phase 7 seeded three, and both inbox baselines moved by
  * ~190 pixels a run. Not rasteriser noise, which is one or two.
  *
  * Here rather than in either page because the inbox badge and the dashboard's

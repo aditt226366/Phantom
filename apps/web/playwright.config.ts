@@ -208,6 +208,33 @@ export default defineConfig({
        * or a payload, so it can only ever produce one obviously-fake sheet.
        */
       LEAD_SHEET_FIXTURE: "northwind-visual-fixture",
+
+      /*
+       * The Verse keys, pinned EMPTY - because /dev/rag renders which of them
+       * are configured, and therefore reads the developer's own .env.
+       *
+       * This is the APP_URL lesson again, one page along. That comment used to
+       * say the port was not rendered anywhere; this one would have said the
+       * keys were not either, and both stopped being true the moment a page
+       * printed them. The failure arrived exactly that way: a real
+       * VERSE_V1_API_KEY was added to .env for an unrelated live check, and two
+       * baselines went red on a commit that touched neither the page nor the
+       * fixture. On a machine with all four set the page would have rendered a
+       * fourth state again.
+       *
+       * Empty rather than fake values, so the photographed state is the one a
+       * fresh clone has - the warning that retrieval will fail until these are
+       * set. That warning is a designed state worth having a picture of, and
+       * pinning it costs no baseline churn.
+       *
+       * Empty strings and not omissions: next.config.ts loads the root .env,
+       * and dotenv fills a key that is ABSENT while leaving one that is present
+       * and empty. The same distinction verse-metric-keys.test.ts turns on.
+       */
+      VERSE_V1_API_KEY: "",
+      VERSE_V2_API_KEY: "",
+      VERSE_V3_API_KEY: "",
+      VERSE_EMBEDDING_API_KEY: "",
     },
   },
 });

@@ -27,6 +27,27 @@ const postgresUrl = (name: string) =>
       `${name} must be a postgres:// or postgresql:// connection string`,
     );
 
+/**
+ * A credential that may simply not be set.
+ *
+ * `.optional()` alone accepts `undefined` and REFUSES an empty string - and an
+ * empty string is exactly how an unset variable is written in a .env file:
+ *
+ *     VERSE_V1_API_KEY=
+ *
+ * Without this, `.env.example` fails its own contract test and a fresh clone
+ * cannot boot, because four variables nobody has set are each "too small".
+ * That is a boot failure for the absence of an optional feature, which is the
+ * shape of guard that gets deleted rather than satisfied.
+ *
+ * So blank means absent, which is what a person writing that line meant.
+ */
+const optionalSecret = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().min(1).optional(),
+);
+
 /** Variables both the web app and the worker need. */
 export const sharedEnvSchema = z.object({
   NODE_ENV: nodeEnv,
@@ -148,6 +169,13 @@ export const webEnvSchema = sharedEnvSchema.extend({
    * below can exist: a boot-time check beats a comment asking people not to.
    */
   LEAD_SHEET_FIXTURE: z.string().optional(),
+
+  /* The same four keys, read by /dev/rag so the harness can call a model.
+     Optional for the reason the worker's are - see verseKeys below. */
+  VERSE_V1_API_KEY: optionalSecret,
+  VERSE_V2_API_KEY: optionalSecret,
+  VERSE_V3_API_KEY: optionalSecret,
+  VERSE_EMBEDDING_API_KEY: optionalSecret,
 }).superRefine((env, ctx) => {
   /**
    * The fixture must never be live.
@@ -215,8 +243,38 @@ export const webEnvSchema = sharedEnvSchema.extend({
   });
 });
 
+/**
+ * The Verse model keys, on the worker only.
+ *
+ * ---------------------------------------------------------------------------
+ * Optional, and that is the whole of the "fail loudly" design
+ * ---------------------------------------------------------------------------
+ *
+ * A required key here would refuse to boot a worker that has plenty of other
+ * jobs to run - webhooks, sends, media, rollups - because one feature nobody
+ * has switched on yet has no credential. That is a guard which gets deleted
+ * rather than satisfied.
+ *
+ * So they are optional and the failure moves to the point of use, where it can
+ * say something specific: an ingestion FAILS the document with a sentence
+ * naming the variable, and `npm run verse:metric` exits non-zero naming every
+ * one that is missing. Neither of those is a skip, and neither prints a pass.
+ *
+ * Platform-level rather than per-tenant, deliberately - no tenant has an
+ * Anthropic or an OpenAI account, and the point of the Verse naming is that
+ * they never learn which model answered. Cost is attributed per tenant through
+ * usage_events instead.
+ */
+const verseKeys = {
+  VERSE_V1_API_KEY: optionalSecret,
+  VERSE_V2_API_KEY: optionalSecret,
+  VERSE_V3_API_KEY: optionalSecret,
+  VERSE_EMBEDDING_API_KEY: optionalSecret,
+};
+
 /** Worker-only additions. */
 export const workerEnvSchema = sharedEnvSchema.extend({
+  ...verseKeys,
   /** How many jobs a single worker process handles at once. */
   WORKER_CONCURRENCY: z.coerce.number().int().positive().max(200).default(5),
   /** Queue prefix, so several environments can share one Redis instance. */

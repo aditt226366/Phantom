@@ -79,7 +79,7 @@ ALTER TYPE "lead_source_action" ADD VALUE 'FLOW';
 ALTER TABLE "messages" ADD COLUMN "interactive_payload" JSONB;
 
 -- Lead temperature, which has been an honest empty state on the dashboard
--- since Phase 9 and stops being one here.
+-- since Phase 7 and stops being one here.
 --
 -- NULL is not COLD. A report counting unscored contacts as cold would tell a
 -- business its entire contact book was uninterested, which is the same class of

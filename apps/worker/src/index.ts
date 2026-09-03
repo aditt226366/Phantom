@@ -22,6 +22,9 @@ import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
 import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
+import { handleVerseIngest } from "./jobs/verse-ingest.ts";
+import { handleVerseReply } from "./jobs/verse-reply.ts";
+import { handleVerseCampaignTick } from "./jobs/verse-campaign.ts";
 import { systemQueue } from "./queue.ts";
 
 /**
@@ -126,6 +129,41 @@ async function processJob(job: Job): Promise<unknown> {
        */
       return handleDashboardRollup(
         parseJobPayload(JOB_NAMES.DASHBOARD_ROLLUP, job.data),
+      );
+
+    case JOB_NAMES.VERSE_INGEST:
+      /*
+       * Extraction, chunking and embedding for one knowledge base document.
+       *
+       * Here rather than in the upload request because a 300-page PDF takes
+       * seconds to parse and a server action holding a pooled connection for
+       * that long is a request nobody's browser waits out.
+       */
+      return handleVerseIngest(
+        parseJobPayload(JOB_NAMES.VERSE_INGEST, job.data),
+      );
+
+    case JOB_NAMES.VERSE_REPLY:
+      /*
+       * One customer message answered, or handed to a person.
+       *
+       * The driver is re-read inside the handler rather than trusted from this
+       * payload: time passes between the webhook enqueuing and this running,
+       * and an operator may have taken the thread in between.
+       */
+      return handleVerseReply(
+        parseJobPayload(JOB_NAMES.VERSE_REPLY, job.data),
+      );
+
+    case JOB_NAMES.VERSE_CAMPAIGN_TICK:
+      /*
+       * Delivered by a per-campaign scheduler, for the reason the lead-source
+       * poll and the dashboard rollup are: this process cannot enumerate
+       * companies, so a sweeping scheduler would select zero rows, succeed,
+       * and contact nobody.
+       */
+      return handleVerseCampaignTick(
+        parseJobPayload(JOB_NAMES.VERSE_CAMPAIGN_TICK, job.data),
       );
 
     default:

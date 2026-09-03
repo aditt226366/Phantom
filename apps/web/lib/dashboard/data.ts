@@ -133,7 +133,7 @@ export interface DashboardData {
    */
   leads: { byScore: Array<{ score: string; count: number }>; unscored: number } | null;
   /** Conversations a flow handled at least one step of, and the total. */
-  automation: { automated: number; total: number } | null;
+  automation: { automated: number; verse: number; total: number } | null;
   spend: DashboardSpend | null;
   counts: DashboardCounts;
   closing: ClosingWindow[];
@@ -276,6 +276,7 @@ export async function loadDashboard(
     automation: rollup
       ? {
           automated: rollup.conversationsAutomated,
+          verse: rollup.conversationsVerse,
           total: rollup.conversationsTotal,
         }
       : null,

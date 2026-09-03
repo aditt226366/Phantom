@@ -9,6 +9,7 @@ import {
   testDatabaseUrl,
 } from "./db-urls.mjs";
 import { EXIT_SCHEMA_DRIFT } from "./setup-exit-codes.mjs";
+import { unexplainedDrift } from "./invariants.mjs";
 
 /**
  * Create the test database if it is missing, then bring it up to date.
@@ -119,6 +120,16 @@ function runMigrations() {
   }
 }
 
+/** A diff that could not run at all is not evidence about the schema. */
+function reportBrokenDiff(result) {
+  console.error(
+    `\nCould not compare ${TEST_DATABASE_NAME} against prisma/schema.prisma ` +
+      `(prisma migrate diff exited ${result.status}).\n`,
+  );
+  console.error(result.stderr || result.stdout || "");
+  process.exit(result.status ?? 1);
+}
+
 /**
  * Refuse to run against a test database holding something no migration created.
  *
@@ -180,12 +191,59 @@ function assertTestDatabaseMatchesSchema() {
   if (diff.status === 0) return;
 
   if (diff.status !== 2) {
-    console.error(
-      `\nCould not compare ${TEST_DATABASE_NAME} against prisma/schema.prisma ` +
-        `(prisma migrate diff exited ${diff.status}).\n`,
+    reportBrokenDiff(diff);
+  }
+
+  /*
+   * A difference is not automatically drift.
+   *
+   * schema.prisma cannot express an HNSW index, and cannot index an
+   * `Unsupported` column at all - so the vector index behind Verse retrieval
+   * appears here on EVERY run, for ever. Left alone that would refuse every
+   * test run in the repository with a message about a killed break: wrong, and
+   * the fastest possible way to teach people to bypass this check.
+   *
+   * So the diff is re-taken as a script and compared statement by statement
+   * against a waiver that names the exact statements Prisma emits for objects
+   * the schema language has no words for. Anything else is real drift and
+   * still refuses, including a CHANGE to that index - it would produce a
+   * different statement than the one waived.
+   *
+   * The waiver is only half a mechanism, because it would also go quiet if the
+   * index were genuinely dropped. OUT_OF_BAND_DDL carries the index as an
+   * object that must EXIST, and db:verify fails when it does not. Neither half
+   * is sufficient alone.
+   */
+  const script = spawnSync(
+    process.execPath,
+    [
+      prismaCli,
+      "migrate",
+      "diff",
+      "--from-config-datasource",
+      "--to-schema",
+      "prisma/schema.prisma",
+      "--script",
+    ],
+    {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_URL: testDatabaseUrl() },
+    },
+  );
+
+  if (script.status !== 0) {
+    reportBrokenDiff(script);
+  }
+
+  const unexplained = unexplainedDrift(script.stdout ?? "");
+
+  if (unexplained.length === 0) {
+    console.log(
+      `${TEST_DATABASE_NAME} differs from prisma/schema.prisma only in objects ` +
+        "the schema language cannot express. Continuing.",
     );
-    console.error(diff.stderr || diff.stdout || "");
-    process.exit(diff.status ?? 1);
+    return;
   }
 
   console.error(

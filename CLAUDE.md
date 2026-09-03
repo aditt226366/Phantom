@@ -87,10 +87,10 @@ database is: reachable only from inside, and everything downstream assumes so.
 Anything that ever accepts a job from outside this system has to re-derive the
 company id rather than read it.
 
-Raw SQL is confined to nine files in `packages/db/src` — `client.ts`,
+Raw SQL is confined to ten files in `packages/db/src` — `client.ts`,
 `with-company.ts`, `resolve-company.ts`, `company.ts`, `vault.ts`,
-`media-store.ts`, `kyc.ts`, `conversations.ts` and `dashboard.ts` — each because
-the statement it needs has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
+`media-store.ts`, `kyc.ts`, `conversations.ts`, `dashboard.ts` and `verse.ts` —
+each because the statement it needs has no query-builder form. `SELECT … FOR UPDATE`, without which re-encrypting a
 credential loses a concurrent save irrecoverably. `substring()` over `bytea`,
 without which a chunked read materialises the whole file — twice, over two
 tables that must not share rows, because generalising one site to take a table
@@ -101,10 +101,14 @@ the newest timestamp beside the older message's preview. One UPDATE evaluates
 every guard against one locked tuple. `FILTER` and `jsonb_object_agg`, without
 which the dashboard's refresh is nineteen round trips instead of one — nineteen
 passes over `messages`, seeing nineteen different snapshots, under a single
-`computed_at` none of them individually supports.
+`computed_at` none of them individually supports. And `<=>` against a bound
+vector, which is the narrowest of the ten and the only one that is not a
+judgement about cost: Prisma has no vector type, so `kb_chunks.embedding` is
+`Unsupported` and is omitted from every generated type — it cannot be selected,
+inserted or ordered by through the builder at all.
 
 The list lives in `packages/db/tests/no-raw-sql.test.ts`, which fails in both
-directions, so a tenth site is a diff in a security test rather than a line
+directions, so an eleventh site is a diff in a security test rather than a line
 here. The unscoped client is confined to `lib/auth/lockout.ts` and the admin client to
 `lib/admin-db.ts`, enforced by both a lint rule and
 `apps/web/tests/server/no-raw-prisma.test.ts`.

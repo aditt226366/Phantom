@@ -39,6 +39,22 @@ export type SendRefusal =
   /** The template exists but Meta has not approved it. */
   | "template_not_approved"
   /**
+   * The row says it carries a template or an interactive payload, and the
+   * stored jsonb could not be read back into one.
+   *
+   * Its own code rather than a fallback to a text send, which is what the
+   * worker used to do. Sending the body as free-form text is a DIFFERENT
+   * message than the one the producer intended, and outside a 24-hour window
+   * Meta refuses it - so the fault surfaced as a window error on a message
+   * whose window was fine, and the actual cause was invisible.
+   *
+   * This is never produced by sendPolicy. It is written by the send path when
+   * the reader returns null, and it lives in this union so the refusal gets
+   * one wording and lands in the POLICY namespace with every other reason we
+   * refused before calling Meta.
+   */
+  | "stored_payload_unreadable"
+  /**
    * The company has not been verified, so no feature is open to it - sending
    * least of all. A4: KYC gates everything, not only the send path.
    *

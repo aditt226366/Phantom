@@ -246,6 +246,16 @@ every compose command. Single quotes are literal for both Compose and dotenv.
 
 ## Tests
 
+**An observational entry says how many times it was observed.** "Always after
+every file reported" is a claim; "observed twice, both after every file
+reported" is data, and the next person can see at a glance whether their third
+observation should change it. The first form is how a sample of two became a
+property of the system twice in this file — "always the db project" and "always
+auth-schema" were both written from two runs and both turned out to be wrong,
+and the second cost an investigation that rewrote `vitest.config.mts`. Write the
+count. Where the denominator is unknown, say that too: 41 retries with no record
+of how many gates ran is 41 observations, not a rate.
+
 **Every `DATABASE_URL*` must be redirected.** `assertTestDatabaseOnly()` runs in
 both setup files and enforces it. Three variables have each caused this once:
 the code under test reads a *different database* than the assertions, nothing
@@ -279,6 +289,13 @@ test of a module that uses it. Scripts that import such a module run with
 `Error: [vitest-pool]: Worker forks emitted error / Caused by: Error: Worker
 exited unexpectedly`, in a full `vitest run`, with **zero tests failing** and a
 non-zero exit.
+
+Observed 41 times between 2026-08-15 and 2026-09-02, across 32 distinct
+commits — that is the length of `.git/gate-retries.log`, which the pre-commit
+hook appends to whenever it retries. **It is a count of retries, not a rate:**
+nothing records how many gates ran in total, so the log cannot say whether this
+is one run in three or one in thirty. It also merges two distinct failures until
+Phase 9 separated them — see "The machine before the config".
 
 It was investigated across two phases as a race, and it is not one. The machine
 runs out of physical memory and the OS refuses or kills a fork. Four
@@ -328,11 +345,13 @@ Treat a recurrence as pressure, not as a race.
 
 **Diagnosing one:** match on the signature — a file that never reports, zero
 tests failing, a non-zero exit — and find it by diffing reported names against
-the files on disk **per project**. Do not go by filename: it has been
-`auth-schema.test.ts`, `conversation-send.test.ts`,
-`company-deactivation.test.ts`, `webhook-throttle.test.ts` and
-`read-receipts.test.ts` at different times, and two older notes claiming "always
-the db project" and "always auth-schema" were both simply wrong.
+the files on disk **per project**. Do not go by filename: **seven distinct files across seven
+observations** — `auth-schema.test.ts`, `conversation-send.test.ts`,
+`company-deactivation.test.ts`, `webhook-throttle.test.ts`,
+`read-receipts.test.ts`, `dashboard-ordering.test.ts` and
+`number-refresh.test.ts` — no file twice. Two older notes claiming "always the
+db project" and "always auth-schema" were each written from two observations and
+were both wrong.
 
 Two other presentations of the same thing, so they are not chased separately:
 
@@ -341,10 +360,16 @@ Two other presentations of the same thing, so they are not chased separately:
   — so the reset is the worker dying and taking its socket down, not the
   database closing it.
 - **`Could not read the test report at …report.json` (exit 127).** Vitest died
-  before writing the report. Every file had already reported ✓. **The
-  pre-commit hook matches this signature too**, as of Phase 3 — it knew only
-  `"Worker exited unexpectedly"` and refused a commit with 63 files reported and
-  no assertion failing, which is the false red the retry exists to absorb.
+  before writing the report. **The pre-commit hook matches this signature too**,
+  as of Phase 3 — it knew only `"Worker exited unexpectedly"` and refused a
+  commit with 63 files reported and no assertion failing, which is the false red
+  the retry exists to absorb.
+
+  This was recorded as happening only once every file had already reported ✓,
+  and that is not a property of it. Phase 9 saw the same exit 127 kill the
+  process **three files into web-server**, with nothing else run and no summary
+  printed. It is the whole process dying, and it can die at any point — see "The
+  machine before the config" below.
 
 **What to do about it:** free memory. On a 16 GB machine, browsers and the WSL
 VM are the reclaimable bulk — capping WSL (`.wslconfig`) and closing browsers
@@ -358,8 +383,11 @@ already capped at 4 GB, `vmmemWSL` still held 2.8 GB of it as cache:
 wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"
 ```
 
-That took it to 1117 MB, and the very next gate run passed — on two separate
-occasions in Phase 9, after five and two consecutive crashed runs respectively.
+That took it to 1117 MB, and the very next gate run passed — **observed three
+times**: twice in Phase 7 (after five and after two consecutive crashed runs)
+and once in Phase 9, where the hook ran it automatically on its retry path and
+the retry passed. No occasion is recorded where it was tried and did not help,
+which is weaker than it sounds: nobody was recording the failures.
 Clean cache only: no restart, no container bounce, nothing lost, and Postgres
 simply re-reads from disk. It is a great deal cheaper than editing `.wslconfig`,
 which needs `wsl --shutdown` and takes the database and Redis down with it.
@@ -369,20 +397,47 @@ which needs `wsl --shutdown` and takes the database and Redis down with it.
 already recorded below — but in that shape a test genuinely *reports as failed*,
 and `is_crash_shaped` refuses a retry when anything failed. That refusal is
 correct and must not be relaxed casually: it is what stops a real failure
-getting a second roll of the dice. Phase 9 hit it twice and re-ran by hand.
+getting a second roll of the dice. Phase 7 hit it twice and re-ran by hand.
 Widening it belongs in its own diff, never in one that needed it to pass.
 
+
+**The full diagnosis, and the order to work in, is under "The machine before the config" at the end of this section.** `scripts/test-floor.mjs` and `vitest.config.mts` both point there.
 
 **`vi.fn` with a zero-argument implementation types its calls as `[]`.** So
 `mock.calls[0][2]` is an index into an empty tuple: it runs perfectly and fails
 to typecheck. Type the mock to the real signature —
 `vi.fn(async (_db: unknown, _id: string, _input: unknown) => "x")`.
 
-Worth knowing where it surfaces: **`npm run typecheck` did not catch the first
-occurrence and `next build` did.** The web workspace's own `tsc` pass during the
-build covers files the root typecheck does not, so a test file can be green in
-one and red in the other. Run the build, not only the typecheck, before assuming
-a test file is clean.
+**This entry used to claim the root typecheck could not see it. That is not
+true, and was worth an hour to disprove.**
+
+It said `npm run typecheck` missed the first occurrence and `next build` caught
+it, because "the web workspace's own tsc pass covers files the root typecheck
+does not". Measured in Phase 9, that is wrong in both halves:
+
+- **The root pass covers every workspace's tests.** `typecheck --workspaces
+  --if-present` runs all four, and all four tsconfigs include `tests/**`
+  (`apps/web` includes `**/*.ts` and `**/*.tsx`, which is broader still).
+  Break-once confirms it twice: the exact `vi.fn` indexing error in an
+  `apps/web` test, and a loose-typed property read in a `packages/db` test,
+  each make the ROOT command fail.
+- **`next build` catches nothing extra today.** `apps/web/tsconfig.json`
+  includes `.next/types/**/*.ts`, which is empty until a build - so there IS a
+  file set the root pass cannot see on a fresh clone. It buys nothing: the
+  generated `validator.ts` types page props as `{ params: Promise<…> } & any`,
+  and `& any` collapses to `any`. A page whose `params` is not a Promise
+  typechecks AND builds clean, verified both ways.
+
+So the rule is simply **run `npm run typecheck`**, and there is no second
+command that sees more. If a workspace is ever added without a `typecheck`
+script, `--if-present` will skip it in silence - that is the failure mode this
+entry should have described, and it is the one to check first if a type error
+ever reaches a gate again.
+
+What actually happened both times somebody believed this entry: the typecheck
+was **not run** before committing, and the gate caught it. A missing step is
+easy to mistake for a blind tool, and the mistake is expensive because it sends
+the next person looking for a hole in the setup.
 
 **A source-level assertion must parse, not grep.** Several checks in this
 repository read a file and match a string, and each one has flagged its own
@@ -589,6 +644,162 @@ tests that drifted were all correct when committed; what changed underneath them
 was `COMPANY_SCOPED_MODELS` gaining entries, which silently converted existing
 ORM assertions into extension tests.
 
+
+### Every limited read needs a total ordering
+
+**`ORDER BY` on a column that is not unique is not an order.** Postgres returns
+tied rows in whatever order the plan yields and may yield a different one
+tomorrow for the same rows. The fix is always the same: make the last sort key
+a unique column, which in this schema means `{ id: "asc" }`.
+
+**With a `take`, the tie decides which rows are in the answer at all.** Six of
+eight tied rows come back and no two runs need agree on which six. Nothing looks
+wrong — the list is full, any count beside it is computed separately and stays
+right, and the two rows that vanished are unseen precisely because they are not
+on the page. Without a `take` it is milder: the page reorders itself between two
+loads, which a screenshot suite at `maxDiffPixelRatio: 0` will find and a person
+usually will not.
+
+**Under keyset pagination it is worse again.** `cursor` + `skip: 1` means
+"everything after the cursor row in this ordering", so if the ordering does not
+place that row uniquely, rows tied with it can land on both pages or neither. An
+operator paging a list would simply never see a row.
+
+**`created_at` ties are the normal case here, not the exotic one.** Measured, in
+this system: Meta's refresh writes an account's numbers in one pass; a broadcast
+advances every recipient's conversation to one `occurredAt`; a campaign audience
+is a single INSERT; a Sheets poll writes a page of rows in one transaction; an
+integration check runs against every integration at once. `name` is not unique
+either — one template approved in two languages is two rows sharing it.
+
+**`packages/core/tests/total-ordering.test.ts` enforces it**, by reading the
+`orderBy` of every `findMany` that carries a `take` and failing when the last
+key is not `id`. `ORDER_INDEPENDENT` is the escape hatch and takes a reason. Two
+things it deliberately does not cover, both of which cost a draft to learn:
+
+- **It matches `take[:,]`, not `take:`.** A helper taking its own limit as a
+  parameter passes the shorthand `take,` — three do, including
+  `nextCampaignRecipients` on the campaign send path. The first draft matched
+  only `take:`, skipped all three in silence and was green.
+- **It cannot see a tie resolved in JavaScript.** `broadcastProgress` sorts
+  failure reasons by count with `Array.prototype.sort`, which is stable, so
+  equal counts keep the order an unordered `groupBy` returned. A second sort key
+  is the fix and no source-level check will find the next one.
+
+**A `groupBy` is fine when its result is consumed as a lookup** — a `Map`, an
+`Object.fromEntries`, a `.find()` — and is a latent instance the moment it is
+rendered in sequence. The flow builder's run-state chips were exactly that, and
+their order is now declared in `flow-display.ts` rather than asked of the
+database, because a lifecycle is not something a column knows: `ORDER BY status`
+spells it alphabetically and reads as nothing.
+
+**Two of these fixes have no test that fails without them**, and both say so at
+the top of their own file rather than looking like evidence
+(`admin-pagination.test.ts`, and the failure-report case in
+`tie-consequences.test.ts`). Both need the plan to change between two queries,
+and a six-row fixture gives Postgres one plan. The source-level check is the
+guard for the first; the second has none.
+
+### A cascade cannot delete a parent when its last child goes
+
+`kb_chunks` is deduplicated by content hash within a knowledge base, and
+`kb_chunk_sources` holds one row per document the passage appears in. That shape
+has a hazard worth stating in general, because anything many-to-one acquires it.
+
+**`ON DELETE CASCADE` runs the wrong direction for this.** Deleting a document
+removes its SOURCE rows. A passage shared with another document survives, which
+is correct; a passage that was only in the deleted document is left with no
+sources at all — still in the index, still scoring, still answering customers
+out of a document the tenant just deleted, and citing a document that no longer
+exists. Nothing in SQL expresses "delete the parent when its last child goes".
+
+So the sweep is explicit (`deleteOrphanedChunks`) and lives in the same
+transaction as the delete (`deleteDocumentAndOrphanedChunks`). Two statements in
+the calling action would leave a window where retrieval reads exactly that state.
+Both halves have a test, because getting either wrong looks identical from
+outside: keep-the-shared-one and delete-the-orphan fail separately.
+
+**Deduplication changes what a `LIMIT` means, which is the reason it exists.**
+Identical text embeds identically, so duplicates score *exactly* the same and
+arrive together — a top-5 over a paragraph in five documents was one passage
+filling five slots while every layer above counted five. Grounding thinner than
+the code believes, with nothing reporting it. Any `LIMIT k` over a corpus that
+can contain the same row twice has this shape, not only vectors.
+
+**A content hash must not normalise.** Trimming or case-folding merges passages
+that are not the same text — a claim about meaning a hash has no business
+making, and unrecoverable, because the variant that lost is gone. Two passages
+differing by one space stay two chunks.
+
+**The hash has two implementations and they must be asserted against each
+other.** The migration backfilled `encode(sha256(convert_to(content,'UTF8')),'hex')`;
+every row since comes from Node's `createHash`. A divergence deduplicates
+nothing and is invisible — both sides stay internally consistent and nothing
+errors — so `verse-dedupe.test.ts` computes one in Postgres and one in Node and
+compares them, rather than asserting either against a literal.
+
+**Deduplication invalidated a test's premise, and that is a normal outcome.**
+`verse-ordering.test.ts` built its tie from eight chunks of identical text.
+Identical text is now one chunk, so the fixture stopped being constructible —
+correct, and it would have left the distance tiebreak untested. Rebuilt from
+geometry instead: distinct passages on distinct one-hot axes, all orthogonal to
+the query, so every distance is exactly 1. When a change makes a fixture
+impossible, the assertion usually still matters; find another way to reach the
+state.
+
+### The machine before the config
+
+`scripts/test-floor.mjs` and `vitest.config.mts` both point here, because this
+file has now been rewritten twice by somebody reading a dying fork as a
+configuration problem. Work in this order.
+
+**The machine is oversubscribed before the gate starts.** One measurement, at
+rest, with nothing building: **18 GB of process commit and ~23 GB of total commit charge
+against 16 GB of physical RAM, with 2.4 GB available.** `vmmemWSL` is the single
+largest holder at 3.6 GB; the rest is a long tail of browser, editor, Steam and
+Defender processes, none individually alarming. `next build` and a forked worker
+per test file land on top of that. The earlier note recording 11.4 GB resident
+and 0.8 GB free was the same machine in a worse moment — the point of the newer
+figure is that the headroom is already gone *before* anything runs.
+
+**One shape, three faults' worth of symptoms.** These are not separate problems
+and must not be chased separately:
+
+| symptom | what died | times seen |
+| --- | --- | --- |
+| `Worker exited unexpectedly`, report still written, a named file missing | one fork | 7 with the file named; 41 retries logged in total, which merges this row with the next |
+| exit 127, **no report at all**, run stops mid-file | the whole vitest process | 2 |
+| Playwright at 3.4x its usual wall time, 48 screenshots failing on 44px layout shifts | nothing — it thrashed | 1 |
+
+The third had never been written down and looks nothing like the other two: page
+heights change because fonts and layout resolve differently under pressure, so
+it presents as a mass visual regression on a commit that touched no CSS. If a
+screenshot run is both very slow and very red, read the wall time first.
+
+The first two were folded together by the pre-commit retry for forty entries in
+`.git/gate-retries.log`, because it only asks "short, non-zero, nothing actually
+failing?" and both answer yes. Only the first leaves a named file behind — and
+blaming that file is exactly how the last investigation went wrong.
+
+**The cross-project-overlap theory is dead, and `vitest.config.mts` says so.**
+Twice running, the file that never reported was a `db` file while every `worker`
+file had finished, which put the crash at the project handover. The gate's test
+step was split into two sequential vitest processes to test that. Over five
+gates it failed twice — once as the whole `!db` process dying, and once as a
+worker dying **inside the `db` process running alone, with no other project in
+it**. Overlap was not reduced, it was absent. One observation is enough to
+falsify "remove either and it stops"; it is not enough to put a rate on
+anything, and two failures in five is a sample of five. The split is kept because it costs
+nothing measurable (228-236s split, 226-243s single, same within noise) and a
+failure now names which half died — not because it fixed anything.
+
+**So: free memory first.** The page-cache drop
+(`wsl -d docker-desktop --exec sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"`,
+recorded earlier in this section) is non-destructive and has worked
+repeatedly. Nothing in `vitest.config.mts` is worth editing before that
+has been tried, and a fourth rewrite of its pool settings is very unlikely to be
+the answer.
+
 ## Next.js 16
 
 **The core barrel pulls native modules into a client bundle.**
@@ -670,7 +881,7 @@ Things worth knowing before touching it:
   rendered `45m left` from Phase 4, and its own test asserted that string under
   a comment claiming the value "may never render an instant - only a bucket".
   Both were wrong together for five phases, and nothing caught it because no
-  fixture had ever seeded a near-term window. Phase 9 seeded three and both
+  fixture had ever seeded a near-term window. Phase 7 seeded three and both
   inbox baselines moved ~190 pixels a run - not rasteriser noise, which is one
   or two. `windowBucket` in `@whatsapp-os/core/whatsapp` is the single
   definition now, and the inbox and the dashboard both render the column
@@ -678,7 +889,7 @@ Things worth knowing before touching it:
 
   The general form, which is the useful part: **which column may be seeded from
   the clock is decided by what RENDERS it, not by the table it lives in.** A
-  Phase 9 conversation carries a `window_expires_at` relative to `now()` - it
+  Phase 7 conversation carries a `window_expires_at` relative to `now()` - it
   has to move, or the thread stops being near its deadline the day after the
   baseline is recorded, and nothing prints it as an instant - beside a
   `last_message_at` that is a literal, because the inbox prints that one
@@ -704,6 +915,18 @@ Things worth knowing before touching it:
   True until Configuration > Numbers printed the webhook URL, at which point an
   escape hatch for a busy port silently re-recorded a screenshot. It is a fixed
   literal now. Nothing navigates by `APP_URL` — Playwright uses `baseURL`.
+- **And a rendered value must not come from the developer's `.env`** — the same
+  rule, one step further out, and it has now happened twice. `/dev/rag` prints
+  which of the four `VERSE_KEY_VARS` are configured, so the suite read whatever
+  the machine had. It surfaced when a real `VERSE_V1_API_KEY` was added to
+  `.env` for an unrelated live check and two baselines went red on a commit
+  touching neither the page nor the fixture; a machine with all four set would
+  have produced a third rendering. All four are pinned **empty** in the
+  `webServer` env, which photographs the state a fresh clone has. Empty strings,
+  not omissions: `next.config.ts` loads the root `.env` through dotenv, which
+  fills a key that is ABSENT and leaves one that is present and empty.
+  **When a page starts rendering a variable, pin it in `playwright.config.ts`
+  the same day.**
 - **A run crossing midnight IST** between seed and screenshot sees the two
   windowed cards go to zero. Re-seed and re-run.
 - **The TRUNCATE is discovered, not listed**, for the reason `truncateAll` in
@@ -1153,7 +1376,7 @@ statement that used it. The volatile-expression rule still holds for something
 genuinely volatile. `now()` is not it.
 
 **A rate that "cannot exceed 100%" is worth a CHECK constraint, not a comment.**
-Phase 9's rollup asserts its own partitions in the database -
+Phase 7's rollup asserts its own partitions in the database -
 `outbound_* summed = messages_outbound`, `conversations_replied <=
 conversations_messaged`. A `FILTER` clause that overlaps or misses a status
 makes a chart quietly not add up, and one statement computing all seven counters
@@ -1161,7 +1384,7 @@ is the only thing that would ever notice. Break-once confirmed it: narrowing one
 count is refused with `23514` rather than by an assertion.
 
 **The dashboard shows staleness rather than hiding it, and never shows a zero it
-cannot support.** Two rules from Phase 9, both of which a later change would
+cannot support.** Two rules from Phase 7, both of which a later change would
 find it natural to "improve".
 
 The rolled-up half of the page is up to a minute old and says so on every load -
@@ -1289,7 +1512,7 @@ and one exactly at it completes. The general form — **when a constant is the
 guard, assert the constant from both sides.** A single-sided assertion passes for
 every value above the real one.
 
-**A pending dashboard card is a claim, and claims expire.** Phase 9's
+**A pending dashboard card is a claim, and claims expire.** Phase 7's
 `aiHandling` card said "Nothing here is automated yet, so every reply so far was
 written by your team." Correct when written, and a false statement about the
 tenant's own business the moment a flow was published — on a page whose every

@@ -39,7 +39,9 @@ export default async function BulkMessagingPage() {
   const broadcasts = await withCompany(session.companyId, (db, companyId) =>
     db.broadcast.findMany({
       where: { companyId },
-      orderBy: { createdAt: "desc" },
+      /* Tie-broken on id. Under a LIMIT a tied created_at decides which runs
+         appear in the history at all, not merely their sequence. */
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: HISTORY_LIMIT,
       select: {
         id: true,

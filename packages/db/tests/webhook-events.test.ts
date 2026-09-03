@@ -186,7 +186,7 @@ describe("an oversized payload", () => {
 describe("the unprocessed backlog", () => {
   it("counts only deliveries that never finished", async () => {
     /*
-     * The health check Phase 9's dashboard reads. Without processed_at, an
+     * The health check Phase 7's dashboard reads. Without processed_at, an
      * event whose job vanished looks exactly like one handled successfully.
      */
     const lost = await deliver(alpha, alphaIntegration, "key-lost");

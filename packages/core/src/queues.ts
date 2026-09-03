@@ -40,6 +40,9 @@ export const JOB_NAMES = {
   BROADCAST_START: "broadcast.start",
   LEAD_SOURCE_POLL: "lead-source.poll",
   DASHBOARD_ROLLUP: "dashboard.rollup",
+  VERSE_INGEST: "verse.ingest",
+  VERSE_REPLY: "verse.reply",
+  VERSE_CAMPAIGN_TICK: "verse.campaign.tick",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -352,6 +355,95 @@ export function dashboardRollupSchedulerId(companyId: string): string {
 }
 
 /**
+ * Ingest one knowledge base document: extract, chunk, embed, store.
+ *
+ * The payload carries the document id and nothing else - not the bytes. A PDF
+ * is already stored, and putting it in the job would duplicate every upload
+ * into Redis, including the ones at the size cap. The same reasoning as
+ * whatsapp.webhook carrying an event id.
+ *
+ * Re-runnable by construction: replaceChunks deletes the document's passages
+ * before inserting, so a job that dies half way and is retried does not leave
+ * a document holding two overlapping sets of chunks.
+ */
+export const verseIngestJobSchema = z.object({
+  companyId: z.string().min(1),
+  documentId: z.string().min(1),
+});
+
+export type VerseIngestJob = z.infer<typeof verseIngestJobSchema>;
+
+/**
+ * Answer one inbound customer message with Verse.
+ *
+ * Carries the message id rather than its text, so the handler reads the
+ * conversation as it stands at the moment it runs rather than as it stood when
+ * the webhook landed. Those differ whenever a customer sends two messages in a
+ * row, and answering the first in ignorance of the second is how an assistant
+ * replies to a question that has already been withdrawn.
+ */
+export const verseReplyJobSchema = z.object({
+  companyId: z.string().min(1),
+  conversationId: z.string().min(1),
+  messageId: z.string().min(1),
+});
+
+export type VerseReplyJob = z.infer<typeof verseReplyJobSchema>;
+
+/**
+ * The job id for a Verse reply, naming the message.
+ *
+ * BullMQ refuses a job whose id it already holds, so this is the deduplication:
+ * two webhook deliveries of the same customer message must not produce two
+ * answers, and Meta redelivers. The message id rather than the conversation id,
+ * because a genuinely new message in the same thread IS a new job.
+ */
+export function verseReplyJobId(messageId: string): string {
+  return `verse-reply:${messageId}`;
+}
+
+/**
+ * One tick of a running campaign.
+ *
+ * ---------------------------------------------------------------------------
+ * A repeatable job per campaign, for the fourth time
+ * ---------------------------------------------------------------------------
+ *
+ * The same constraint that shaped integration.verify, lead-source.poll and
+ * dashboard.rollup: this process connects as app_runtime with NO company
+ * context, so `SELECT id FROM verse_campaigns WHERE status = 'RUNNING'` returns
+ * zero rows, succeeds, and looks exactly like "nothing to send". A sweeping
+ * scheduler would run for ever and contact nobody.
+ *
+ * So the fan-out lives where a company id can be established - a server action
+ * after requireSession() registers a scheduler when a campaign starts.
+ *
+ * Pausing does NOT unregister it. The handler returns early on any status but
+ * RUNNING, so resuming is one UPDATE rather than a re-registration that could
+ * fail and leave a campaign saying RUNNING while nothing ticks it.
+ */
+export const verseCampaignTickJobSchema = z.object({
+  companyId: z.string().min(1),
+  campaignId: z.string().min(1),
+});
+
+export type VerseCampaignTickJob = z.infer<typeof verseCampaignTickJobSchema>;
+
+/**
+ * The scheduler id for one campaign's tick.
+ *
+ * Derived from the campaign id, because upsertJobScheduler is an upsert on this
+ * key: editing a campaign re-registers under the same id and replaces the
+ * schedule rather than adding a second one. A random or timestamped id would
+ * leave the old schedule running and the campaign would send at twice its
+ * intended pace - against a daily cap that each scheduler would read
+ * independently.
+ */
+export function verseCampaignSchedulerId(campaignId: string): string {
+  return `verse-campaign:${campaignId}`;
+}
+
+/**
  * The send job runs ONCE. Everything else keeps the default five attempts.
  *
  * Meta's /messages endpoint has no idempotency key and no "did this land"
@@ -395,6 +487,9 @@ export const JOB_SCHEMAS = {
   [JOB_NAMES.BROADCAST_START]: broadcastStartJobSchema,
   [JOB_NAMES.LEAD_SOURCE_POLL]: leadSourcePollJobSchema,
   [JOB_NAMES.DASHBOARD_ROLLUP]: dashboardRollupJobSchema,
+  [JOB_NAMES.VERSE_INGEST]: verseIngestJobSchema,
+  [JOB_NAMES.VERSE_REPLY]: verseReplyJobSchema,
+  [JOB_NAMES.VERSE_CAMPAIGN_TICK]: verseCampaignTickJobSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 export type JobPayloadFor<N extends JobName> = z.infer<(typeof JOB_SCHEMAS)[N]>;

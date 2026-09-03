@@ -39,6 +39,31 @@ export interface RecordUsageInput {
   quantity?: number;
   /** Defaults to now. A retry should pass the original moment, not its own. */
   occurredAt?: Date;
+  /**
+   * What the provider said this call consumed, when it says anything.
+   *
+   * Omitted rather than zeroed by every caller that has no tokens - a Graph
+   * call has none, and writing 0 would claim it consumed nothing. Passed
+   * straight through from the adapter's own `VerseUsage` so nothing here can
+   * disagree with what the provider returned.
+   *
+   * See the column comments in schema.prisma for why these are recorded at all
+   * before anything prices them, and for the cache split that will eventually
+   * make `inputTokens` less than the billable input.
+   */
+  usage?: {
+    inputTokens: number;
+    /**
+     * Omitted where the concept does not apply, which is embeddings.
+     *
+     * An embedding's output is a vector, not tokens, so OpenAI reports no
+     * completion half and there is nothing to record. Writing 0 would claim the
+     * call produced none of something it cannot produce - the same lie as a
+     * zero cost on an unpriced row, one column along. output_tokens stays NULL
+     * for verse.embedding, permanently and correctly.
+     */
+    outputTokens?: number;
+  };
 }
 
 export interface RecordedUsage {
@@ -74,6 +99,22 @@ export async function recordUsage(
         quantity,
         dedupeKey: input.dedupeKey,
         ...(input.occurredAt ? { occurredAt: input.occurredAt } : {}),
+        /*
+         * Spread only when present, so a caller with no tokens leaves both
+         * columns NULL rather than writing a zero it did not measure. The same
+         * shape `occurredAt` uses above and for the same reason: absent is a
+         * different fact from a default.
+         */
+        ...(input.usage ? { inputTokens: input.usage.inputTokens } : {}),
+        /*
+         * Independently of the input half, because embeddings have one and not
+         * the other. Spreading them together would force a caller with only an
+         * input count to supply a zero output, which is exactly the claim this
+         * column refuses to let anybody make by accident.
+         */
+        ...(input.usage?.outputTokens === undefined
+          ? {}
+          : { outputTokens: input.usage.outputTokens }),
         ...priced,
       },
     ],

@@ -36,7 +36,8 @@ export default async function NewFlowPage() {
   const templates = await withCompany(session.companyId, (db, companyId) =>
     db.whatsAppTemplate.findMany({
       where: { companyId, status: "APPROVED" },
-      orderBy: { name: "asc" },
+      /* Then id: a name is shared by every language of one template. */
+      orderBy: [{ name: "asc" }, { id: "asc" }],
       select: { id: true, name: true, language: true },
     }),
   );

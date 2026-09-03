@@ -1,4 +1,9 @@
-import { JOB_NAMES, sendJobId, type WhatsAppWebhookJob } from "@whatsapp-os/core";
+import {
+  JOB_NAMES,
+  sendJobId,
+  verseReplyJobId,
+  type WhatsAppWebhookJob,
+} from "@whatsapp-os/core";
 import {
   advanceFlow,
   ingestWebhookDelivery,
@@ -52,6 +57,31 @@ export async function handleWhatsAppWebhook(payload: WhatsAppWebhookJob): Promis
 
   for (const request of summary.flowAdvances) {
     flows += await advanceOneFlow(companyId, request);
+  }
+
+  /*
+   * Verse, for the messages that are its to answer.
+   *
+   * Enqueued rather than answered here, unlike a flow advance. A flow's next
+   * step is a lookup in a tree and finishes in milliseconds; an answer is an
+   * embedding call, a vector search and a generation, and doing that inline
+   * would hold the webhook handler open for seconds while Meta waits for a
+   * 200 and retries the delivery it thinks failed.
+   *
+   * The job id is the message id, so two deliveries of the same customer
+   * message produce one answer. BullMQ refuses a job whose id it already
+   * holds, which for this job IS the deduplication.
+   */
+  for (const request of summary.verseReplies) {
+    await systemQueue.add(
+      JOB_NAMES.VERSE_REPLY,
+      {
+        companyId,
+        conversationId: request.conversationId,
+        messageId: request.messageId,
+      },
+      { jobId: verseReplyJobId(request.messageId) },
+    );
   }
 
   /*

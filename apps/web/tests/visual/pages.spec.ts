@@ -180,8 +180,17 @@ test.describe("coverage", () => {
           FIXTURE.closedConversationId,
           FIXTURE.flowConversationId,
           FIXTURE.pausedFlowConversationId,
+          /* Two more: a thread Verse answered from the knowledge base, and one
+             it handed over. The handoff is the picture that matters most - it
+             is the only place the refusal is visible as something a customer
+             actually receives. */
+          FIXTURE.verseConversationId,
+          FIXTURE.verseHandoffConversationId,
         ],
       ],
+      /* One running campaign, with every recipient state present so the
+         breakdown is four numbers rather than one and three zeroes. */
+      ["[campaignId]", [FIXTURE.campaignId]],
       ["[templateId]", [FIXTURE.rejectedTemplateId]],
       /* Two values: the same page.tsx renders a running broadcast and a
          finished one, and they are completely different pictures - only the

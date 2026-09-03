@@ -92,6 +92,17 @@ const RAW_SQL_ALLOWED = new Map<string, string>([
       "have no query-builder form; the CHECK constraints in 20260905090000 " +
       "assert the partitions rather than trusting them.",
   ],
+  [
+    "verse.ts",
+    "the narrowest justification of the ten, and the only one that is not a " +
+      "judgement about cost. Prisma has no vector type, so kb_chunks.embedding " +
+      "is Unsupported - and an Unsupported field is omitted from every " +
+      "generated type, so it cannot be selected, inserted, compared or ordered " +
+      "by through the query builder AT ALL. Retrieval is " +
+      "`ORDER BY embedding <=> $vector LIMIT k`, an operator against a bound " +
+      "value with an ordering and a limit, which the builder cannot express " +
+      "even in principle. There is no other way to read this column.",
+  ],
 ]);
 
 /*

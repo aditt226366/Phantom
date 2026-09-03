@@ -2,7 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  JOB_NAMES,
   createPausedCampaign,
+  metaInsightsSchedulerId,
   setCampaignStatus,
   type MetaCampaignObjectiveName,
 } from "@whatsapp-os/core";
@@ -17,6 +19,7 @@ import {
   whatsappNumbersForMatching,
   withCompany,
 } from "@whatsapp-os/db";
+import { systemQueue } from "@/lib/queue";
 import { assertCsrf } from "@/lib/auth/csrf";
 import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
@@ -36,6 +39,42 @@ import { checkLinkedNumber } from "@/lib/meta-ads/linked-number";
 export interface MetaAdsState {
   error?: string;
   notice?: string;
+}
+
+/**
+ * How often an account's spend is re-read.
+ *
+ * Six hours, and the number is a rate-limit budget rather than a freshness
+ * one. Meta restates a day for most of a week, so nothing is gained by asking
+ * every minute - and their limits are per APP, shared across every tenant on
+ * this deployment, so a tighter interval is a cost the next customer pays.
+ *
+ * The dashboard says how old the figure is rather than pretending it is live,
+ * which is the same choice the rollup already made.
+ */
+const SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Register the per-account sync.
+ *
+ * Derived from the account row id, because upsertJobScheduler is an upsert on
+ * that key: re-running the connect screen replaces the schedule instead of
+ * adding a second one. A random id would leave the old schedule running and
+ * the account would sync twice as often - which is a shared rate limit against
+ * Meta, so it is every other tenant's problem before it is this one's.
+ *
+ * The fifth caller of that argument, after lead sources, the dashboard rollup
+ * and Verse campaigns.
+ */
+async function registerInsightsSync(companyId: string, adAccountId: string) {
+  await systemQueue.upsertJobScheduler(
+    metaInsightsSchedulerId(adAccountId),
+    { every: SYNC_EVERY_MS },
+    {
+      name: JOB_NAMES.META_INSIGHTS_SYNC,
+      data: { companyId, adAccountId, lookbackDays: 28 },
+    },
+  );
 }
 
 export async function selectAdAccountAction(
@@ -105,7 +144,7 @@ export async function selectAdAccountAction(
     ownNumbers,
   );
 
-  await withCompany(session.companyId, (db, companyId) =>
+  const stored = await withCompany(session.companyId, (db, companyId) =>
     selectAdAccount(db, companyId, {
       integrationId: credentials.integrationId,
       metaAdAccountId: chosen.id,
@@ -124,6 +163,17 @@ export async function selectAdAccountAction(
             : null,
     }),
   );
+
+  /*
+   * The schedule is registered AFTER the row exists, and it carries the
+   * company id the worker will open its scope with.
+   *
+   * That is rule 3's third origin: this process took the company id from a
+   * session, and the worker takes it from the payload having never seen a
+   * request. The whole guarantee is about who enqueued, and the answer here is
+   * a server action behind requireSession().
+   */
+  await registerInsightsSync(session.companyId, stored.id);
 
   /* Mutates and does not redirect, so it revalidates the route it changed -
      otherwise the list keeps its old contents until something else happens to
@@ -152,6 +202,22 @@ export async function removeAdAccountAction(
   const removed = await withCompany(session.companyId, (db, companyId) =>
     removeAdAccount(db, companyId, id),
   );
+
+  if (removed > 0) {
+    /*
+     * Unregistered, or the schedule wakes for ever against a row that is gone.
+     * The job itself tolerates that - it returns "account_removed" rather than
+     * throwing, because this call and the next tick can race - but a schedule
+     * nothing will ever satisfy is a log line every six hours, permanently.
+     */
+    await systemQueue
+      .removeJobScheduler(metaInsightsSchedulerId(id))
+      .catch(() => {
+        /* Best effort. A queue that is unreachable must not turn a completed
+           removal into an error the tenant has to act on: the row is gone, and
+           the tick that finds it missing does nothing. */
+      });
+  }
 
   /*
    * Zero rows is not an error the tenant should see as one. Under RLS a row

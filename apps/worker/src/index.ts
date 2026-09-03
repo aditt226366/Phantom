@@ -20,6 +20,7 @@ import { handleWhatsAppMarkRead } from "./jobs/whatsapp-mark-read.ts";
 import { handleWhatsAppNumbersRefresh } from "./jobs/whatsapp-numbers.ts";
 import { handleWhatsAppMessageSend } from "./jobs/whatsapp-send.ts";
 import { handleBroadcastStart } from "./jobs/broadcast-start.ts";
+import { handleMetaInsightsSync } from "./jobs/meta-insights-sync.ts";
 import { handleLeadSourcePoll } from "./jobs/lead-source-poll.ts";
 import { handleDashboardRollup } from "./jobs/dashboard-rollup.ts";
 import { handleVerseIngest } from "./jobs/verse-ingest.ts";
@@ -108,6 +109,17 @@ async function processJob(job: Job): Promise<unknown> {
     case JOB_NAMES.BROADCAST_START:
       return handleBroadcastStart(
         parseJobPayload(JOB_NAMES.BROADCAST_START, job.data),
+      );
+
+    case JOB_NAMES.META_INSIGHTS_SYNC:
+      /*
+       * Per AD ACCOUNT, and delivered by a scheduler registered when the
+       * account is selected - same reason as the poll below. It also means an
+       * account whose token has lapsed stops syncing on its own without
+       * taking the tenant's other accounts down with it.
+       */
+      return handleMetaInsightsSync(
+        parseJobPayload(JOB_NAMES.META_INSIGHTS_SYNC, job.data),
       );
 
     case JOB_NAMES.LEAD_SOURCE_POLL:

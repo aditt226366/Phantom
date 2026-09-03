@@ -248,6 +248,7 @@ describe("the feature gate", () => {
         "dashboard/page.tsx",
         "inbox/[conversationId]/page.tsx",
         "inbox/page.tsx",
+        "meta-ads/connect/page.tsx",
         "meta-ads/page.tsx",
         "configuration/templates/[templateId]/page.tsx",
         "configuration/templates/new/page.tsx",

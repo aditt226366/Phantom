@@ -128,6 +128,7 @@ const INTEGRATION = {
   whatsapp: "c000visualfixtureintegra2",
   otherCompany: "c000visualfixtureintegra3",
   thirdCompany: "c000visualfixtureintegra4",
+  metaAds: "c000visualfixtureintegra5",
 };
 
 /** Literal UTC instants. Rendered in IST, so each is nine and a half hours on. */
@@ -187,6 +188,10 @@ const SECRETS = {
     WHATSAPP_VERIFY_TOKEN: "fixture-verify-second-0917",
     WHATSAPP_APP_SECRET: "fixture-app-secret-second-31d6cf",
   },
+  [INTEGRATION.metaAds]: {
+    META_ADS_ACCESS_TOKEN: "EAAfixturemetaadstoken00000000000000091",
+    META_AD_ACCOUNT_ID: "act_98765000001",
+  },
   [INTEGRATION.thirdCompany]: {
     GOOGLE_SHEETS_ID: "1fixtureThirdSheetIdBBBBBBBBBBBBBBBBBB7734",
     GOOGLE_SERVICE_ACCOUNT_EMAIL: "reports@ashgrove-fixture.iam.gserviceaccount.com",
@@ -241,6 +246,28 @@ const WEBHOOK_KEY = {
   [INTEGRATION.whatsapp]: "9f2c41a7b06d4e58a3d17c9e5b820f36",
   [INTEGRATION.otherCompany]: "4b7e0d93c1a84f26b5e8a07d3f19c254",
   [INTEGRATION.thirdCompany]: "1d6b83f5407c42e9b0a75c14e83f9d27",
+  [INTEGRATION.metaAds]: "7e3a90c26b514d87a1f4e08b52d6c193",
+};
+
+/**
+ * When the fixture's Meta token lapsed.
+ *
+ * A LITERAL instant in the past, and it stays in the past for ever - which is
+ * what makes it safe to seed. What the admin card renders from it is a STATE
+ * ("expired"), never the date and never a countdown, so nothing moves between
+ * the seed and the capture. A relative date would have to be re-derived on
+ * every run, and a future one would silently stop being expired.
+ *
+ * It is deliberately not incoherent with the connect screen still listing
+ * accounts. Our column records what Meta said WHEN THE TOKEN WAS STORED; a
+ * token past that instant can still work, because Meta can extend one and a
+ * tenant can refresh out of band without telling us. So "the stored expiry has
+ * lapsed" and "the Graph call succeeds" is a real production pairing, not a
+ * fixture artefact - and it is the pairing that makes the reconnect prompt
+ * worth showing rather than making it a hard failure.
+ */
+const SECRET_EXPIRES_AT = {
+  META_ADS_ACCESS_TOKEN: "2026-07-19T04:30:00Z",
 };
 
 /* ------------------------------------------------------------------ */
@@ -1151,7 +1178,8 @@ try {
             ($2, $5, 'WHATSAPP_CLOUD', 'Primary number',   'CONNECTED',     $6, NULL, $12, $8, $8),
             ($3, $9, 'WHATSAPP_CLOUD', 'Support number',   'NOT_CONNECTED', $7,
              'Meta Graph API returned 190: Error validating access token.', $13, $8, $8),
-            ($4, $10, 'GOOGLE_SHEETS', 'Consignment log',  'CONNECTED',     $6, NULL, $14, $8, $8)`,
+            ($4, $10, 'GOOGLE_SHEETS', 'Consignment log',  'CONNECTED',     $6, NULL, $14, $8, $8),
+            ($15, $5, 'META_ADS',      'Ad account',       'CONNECTED',     $6, NULL, $16, $8, $8)`,
     [
       INTEGRATION.sheets,
       INTEGRATION.whatsapp,
@@ -1167,6 +1195,8 @@ try {
       WEBHOOK_KEY[INTEGRATION.whatsapp],
       WEBHOOK_KEY[INTEGRATION.otherCompany],
       WEBHOOK_KEY[INTEGRATION.thirdCompany],
+      INTEGRATION.metaAds,
+      WEBHOOK_KEY[INTEGRATION.metaAds],
     ],
   );
 
@@ -1180,6 +1210,7 @@ try {
     [INTEGRATION.whatsapp]: COMPANY.active,
     [INTEGRATION.otherCompany]: COMPANY.deactivated,
     [INTEGRATION.thirdCompany]: COMPANY.enterprise,
+    [INTEGRATION.metaAds]: COMPANY.active,
   };
 
   let secretId = 0;
@@ -1201,8 +1232,9 @@ try {
 
       await client.query(
         `INSERT INTO integration_secrets (id, company_id, integration_id, key,
-                                          ciphertext, key_id, last4, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+                                          ciphertext, key_id, last4, expires_at,
+                                          created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $9, $8, $8)`,
         [
           `c000visualfixturesecret${String(++secretId).padStart(2, "0")}`,
           companyId,
@@ -1212,6 +1244,10 @@ try {
           keyring.activeId,
           last4Of(value),
           T.companyCreated,
+          /* Only the one credential this system tracks an expiry for. Every
+             other row is null, which is the honest record for a value the
+             provider never dated. */
+          SECRET_EXPIRES_AT[key] ?? null,
         ],
       );
     }
@@ -2047,9 +2083,52 @@ try {
     ],
   );
 
+  /*
+   * Two Meta ad accounts, and the SECOND one is the reason there are two.
+   *
+   * The first is wired correctly: its Page routes replies to the number this
+   * workspace owns, so the card renders the reassuring state. The second is
+   * linked to a number we do not own, which is the state the whole
+   * linked-number check exists for - the ads run, the money is spent, and
+   * nothing arrives in this inbox.
+   *
+   * A fixture with only the happy path would photograph a screen that can
+   * never show its most consequential sentence, which is exactly the class of
+   * fault the screenshot suite was added to catch.
+   *
+   * Currencies differ on purpose too: INR and USD, so any baseline that ever
+   * totals spend across accounts is visibly wrong rather than plausibly wrong.
+   *
+   * insights_synced_at is null on both. Nothing has run the sync yet in this
+   * fixture, and the card renders "never" - which is a state a real tenant sees
+   * on their first day and which a seeded timestamp would hide.
+   */
+  await client.query(
+    `INSERT INTO meta_ad_accounts
+       (id, company_id, integration_id, meta_ad_account_id, name, currency,
+        timezone_name, account_status, page_id, page_name, whatsapp_number_id,
+        linked_phone_e164, insights_synced_through, insights_synced_at,
+        created_at, updated_at)
+     VALUES ($1, $3, $4, 'act_98765000001', 'Northwind Traders — India', 'INR',
+             'Asia/Kolkata', 1, '98765000101', 'Northwind Traders', $5,
+             '+91 98765 43210', NULL, NULL, $6, $6),
+            ($2, $3, $4, 'act_98765000002', 'Northwind Traders — Global', 'USD',
+             'America/Los_Angeles', 1, '98765000102', 'Northwind Outlet', NULL,
+             '+91 90000 00000', NULL, NULL, $6, $6)`,
+    [
+      "c000visualfixtureadacct01",
+      "c000visualfixtureadacct02",
+      COMPANY.active,
+      INTEGRATION.metaAds,
+      NUMBERS[0].id,
+      T.companyCreated,
+    ],
+  );
+
   console.log(
     `Seeded ${TEST_DATABASE_NAME}: 4 companies, ${users.length} users, ` +
-      `4 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
+      `5 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
+      "2 Meta ad accounts, " +
       `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +

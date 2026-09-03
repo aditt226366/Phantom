@@ -253,3 +253,32 @@ export {
   verseContextFor,
 } from "./verse.ts";
 export type { ChunkToStore, VerseContext } from "./verse.ts";
+
+export {
+  contactsBySource,
+  findAdAccount,
+  findCampaign,
+  leadsByAd,
+  listAdAccountRows,
+  listCampaigns,
+  markInsightsSynced,
+  metaAdsCredentials,
+  pauseCampaign,
+  publishCampaign,
+  recordCampaign,
+  recordDailySpend,
+  recordReferral,
+  removeAdAccount,
+  selectAdAccount,
+  spendByCurrency,
+  whatsappNumbersForMatching,
+} from "./meta-ads.ts";
+export type {
+  AdAccountRow,
+  CampaignRow,
+  DailySpendInput,
+  RecordCampaignInput,
+  ReferralInput,
+  SealedIntegration,
+  SelectAdAccountInput,
+} from "./meta-ads.ts";

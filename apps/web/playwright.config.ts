@@ -210,6 +210,20 @@ export default defineConfig({
       LEAD_SHEET_FIXTURE: "northwind-visual-fixture",
 
       /*
+       * The same hook, for the Meta Ads connect screen - the second page that
+       * must call a provider before it can render.
+       *
+       * Read only by lib/meta-ads/graph.ts, which explains what it can and
+       * cannot reach. Its two fixture accounts are in two currencies on
+       * purpose: the rule that spend is never summed across currencies is
+       * invisible in a baseline with one account in it.
+       *
+       * A second variable rather than one shared flag, so switching one on
+       * for a local look does not silently switch the other on too.
+       */
+      META_ADS_FIXTURE: "meta-ads-visual-fixture",
+
+      /*
        * The Verse keys, pinned EMPTY - because /dev/rag renders which of them
        * are configured, and therefore reads the developer's own .env.
        *

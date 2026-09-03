@@ -38,6 +38,7 @@ function summary(over: Partial<IngestSummary> = {}): IngestSummary {
     inserted: 1,
     statuses: 0,
     advanced: 0,
+    charges: 0,
     skipped: [],
     media: [],
     flowAdvances: [],

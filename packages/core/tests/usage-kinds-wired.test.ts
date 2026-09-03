@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -43,59 +43,45 @@ import { USAGE_KINDS, USAGE_PRICES } from "../src/usage.ts";
  */
 
 /**
- * Kinds that are declared and priced and that nothing writes, each with the
- * reason and what would end it.
+ * Kinds written through a COMPUTED expression, which this check cannot see.
  *
- * A Map rather than a Set, so an entry cannot be added without saying why - the
- * shape GLOBAL_TABLES, ORDER_INDEPENDENT and APPEND_ONLY_TABLES all use. Every
- * line here is a known hole in attribution, not a decision that the hole is
- * fine, and shrinking this list is the point of having it.
+ * `recordConversationCharge` writes `kind` from `conversationUsageKind(category)`
+ * - it has to, because the category arrives from Meta at runtime and the four
+ * kinds differ only by it. A source scan looking for `kind: "…"` will never find
+ * those, and loosening it to match a variable would make it match every
+ * recordUsage call and assert nothing.
  *
- * Writing this list was itself the finding. `verse.embedding` was the one kind
- * anybody had noticed; the check found four more the moment it ran, including
- * the product's single largest cost.
+ * So this is an escape hatch, and it is deliberately not a waiver: each entry
+ * names the file that writes the kind and the test that PROVES it does, and
+ * both claims are checked below. An entry cannot be fiction, and it cannot
+ * outlive the code it points at.
+ *
+ * This is not the place for a kind nothing writes. That is a failure, and the
+ * assertion above is what produces it.
  */
-const KNOWN_UNWIRED = new Map<string, string>([
-  [
-    "integration.test",
-    /*
-     * Superseded rather than missing. Save & Verify and Test Connection were
-     * unified into one path - admin/actions.ts says so in as many words -
-     * and it records integration.verify. Nothing can write this kind, because
-     * the operation it named no longer exists separately.
-     *
-     * Ends by DELETING the kind and its price entry, not by wiring one. Left
-     * here rather than removed in the same commit as the check, because
-     * deleting a usage kind is a decision about the invoice and belongs in a
-     * diff about that.
-     */
-    "superseded by integration.verify when Test Connection was unified with Save & Verify; should be deleted, not wired",
-  ],
-  [
-    "whatsapp.conversation.marketing",
-    "Meta's per-conversation charge. See the note below - the data arrives and is dropped.",
-  ],
-  ["whatsapp.conversation.utility", "as marketing"],
-  ["whatsapp.conversation.authentication", "as marketing"],
-  [
-    "whatsapp.conversation.service",
-    /*
-     * The largest real cost in the product, and nothing records any of it.
-     *
-     * Meta bills per 24-hour conversation window, per category, and the status
-     * webhook carries the pricing block that says which. payload.ts reads
-     * `status.conversation?.id` and drops the category beside it;
-     * `conversationUsageKind` exists to map one and is called from a test and
-     * nowhere else.
-     *
-     * So this is not "not built yet" in the ordinary sense - the data reaches
-     * the webhook and is discarded. Ends by parsing the pricing block, deduping
-     * on Meta's conversation id, and recording the kind that function already
-     * returns. Its own diff: it changes what the webhook stores.
-     */
-    "Meta's per-conversation charge; the category arrives in the status webhook and payload.ts drops it, and conversationUsageKind is called only from a test",
-  ],
-]);
+const COMPUTED_KIND_SITES = new Map<
+  string,
+  { writtenBy: string; provenBy: string }
+>(
+  (
+    [
+      "whatsapp.conversation.marketing",
+      "whatsapp.conversation.utility",
+      "whatsapp.conversation.authentication",
+      "whatsapp.conversation.service",
+    ] as const
+  ).map((kind) => [
+    kind,
+    {
+      /* One function, called by the live webhook and by the backfill, so the
+         two cannot come to disagree about what a status callback means for the
+         bill. */
+      writtenBy: "packages/db/src/conversation-charges.ts",
+      /* Asserts all four kinds land, from the four categories Meta sends. */
+      provenBy: "packages/db/tests/conversation-charges.test.ts",
+    },
+  ]),
+);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -203,38 +189,69 @@ describe("every usage kind is wired to something that writes it", () => {
      */
     const written = new Set(sites.map((site) => site.kind));
     const unwired = USAGE_KINDS.filter(
-      (kind) => !written.has(kind) && !KNOWN_UNWIRED.has(kind),
+      (kind) => !written.has(kind) && !COMPUTED_KIND_SITES.has(kind),
     );
 
     expect(
       [...unwired].sort(),
-      "these kinds are declared and priced, and nothing writes one - which is a provider call nobody is attributing. Wire a recordUsage call, or delete the kind and its price entry, or add it to KNOWN_UNWIRED with a reason",
+      "these kinds are declared and priced, and nothing writes one - which is a provider call nobody is attributing. Wire a recordUsage call, or delete the kind and its price entry",
     ).toEqual([]);
   });
 
-  it("keeps KNOWN_UNWIRED honest, so a wired kind cannot sit in it", () => {
+  it("points every computed-kind entry at a file that writes one", () => {
     /*
-     * The list fails in BOTH directions, like GLOBAL_TABLES.
-     *
-     * A waiver that outlives the problem is worse than no waiver: it reads as a
-     * standing decision that the hole is acceptable, and the next person adding
-     * a kind copies the nearest example. Wiring one of these has to remove its
-     * entry, and this is what makes that mandatory rather than tidy.
+     * The escape hatch cannot be fiction. An entry claims a file writes the
+     * kind through an expression; this checks that the file exists and calls
+     * recordUsage at all, so a stale entry surviving a refactor is a failure
+     * rather than a comment nobody reads.
      */
-    const written = new Set(sites.map((site) => site.kind));
-    const stale = [...KNOWN_UNWIRED.keys()].filter((kind) => written.has(kind));
+    const broken: string[] = [];
 
-    expect(
-      stale.sort(),
-      "these kinds ARE written now, so remove them from KNOWN_UNWIRED",
-    ).toEqual([]);
+    for (const [kind, site] of COMPUTED_KIND_SITES) {
+      const full = join(repoRoot, site.writtenBy);
+
+      if (!existsSync(full)) {
+        broken.push(`${kind}: ${site.writtenBy} does not exist`);
+        continue;
+      }
+
+      if (!/recordUsage\(/.test(readFileSync(full, "utf8"))) {
+        broken.push(`${kind}: ${site.writtenBy} no longer calls recordUsage`);
+      }
+    }
+
+    expect(broken.sort()).toEqual([]);
   });
 
-  it("does not waive a kind that no longer exists", () => {
-    /* And an entry for a deleted kind is a note about nothing, which is how a
-       list like this stops being read. */
+  it("points every computed-kind entry at a test that proves it", () => {
+    /*
+     * The other half, and the one that matters: a source file calling
+     * recordUsage says nothing about WHICH kind it writes. The named test is
+     * the evidence, so it has to exist and to mention the kind.
+     */
+    const broken: string[] = [];
+
+    for (const [kind, site] of COMPUTED_KIND_SITES) {
+      const full = join(repoRoot, site.provenBy);
+
+      if (!existsSync(full)) {
+        broken.push(`${kind}: ${site.provenBy} does not exist`);
+        continue;
+      }
+
+      if (!readFileSync(full, "utf8").includes(kind)) {
+        broken.push(`${kind}: ${site.provenBy} does not mention it`);
+      }
+    }
+
+    expect(broken.sort()).toEqual([]);
+  });
+
+  it("does not register a computed kind that no longer exists", () => {
+    /* An entry for a deleted kind is a note about nothing, which is how a list
+       like this stops being read. */
     const declared = new Set<string>(USAGE_KINDS);
-    const phantom = [...KNOWN_UNWIRED.keys()].filter(
+    const phantom = [...COMPUTED_KIND_SITES.keys()].filter(
       (kind) => !declared.has(kind),
     );
 

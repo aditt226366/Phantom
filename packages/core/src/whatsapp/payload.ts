@@ -60,6 +60,10 @@ const statusSchema = z.looseObject({
     .looseObject({
       billable: z.boolean().optional(),
       category: z.string().optional(),
+      /* CBP, PMP, or whatever Meta names next. Stored verbatim rather than
+         mapped: it decides how a category is RATED, and a value we do not
+         recognise is exactly the one worth having on the row. */
+      pricing_model: z.string().optional(),
     })
     .optional(),
   errors: z.array(looseObject).optional(),
@@ -166,6 +170,14 @@ export interface StatusUpdate {
   billable: boolean;
   /** marketing | utility | authentication | service, when Meta says. */
   category: string | null;
+  /**
+   * Meta's rate card for this window - CBP, PMP, and whatever comes next.
+   *
+   * Kept because it decides how the category is priced, and because Phase 11
+   * reprices in arrears from what was recorded rather than from what we assume
+   * the rate card was at the time.
+   */
+  pricingModel: string | null;
   /** Present on a failed status. Already just Meta's own shape. */
   errors: readonly unknown[];
 }
@@ -470,6 +482,7 @@ export function parseWebhookPayload(body: unknown): ParsedWebhook {
           conversationId: status.conversation?.id ?? null,
           billable: status.pricing?.billable ?? false,
           category: status.pricing?.category ?? null,
+          pricingModel: status.pricing?.pricing_model ?? null,
           errors: status.errors ?? [],
         });
       }

@@ -132,6 +132,7 @@ model Company {
   kbDocuments            KbDocument[]
   kbChunks               KbChunk[]
   kbChunkSources         KbChunkSource[]
+  conversationCharges    WhatsAppConversationCharge[]
   verseCampaigns         VerseCampaign[]
   verseCampaignRecipients VerseCampaignRecipient[]
   dashboardRollup        DashboardRollup?
@@ -1129,6 +1130,80 @@ model WhatsAppMedia {
 ///   3. It gives the route handler something to do that is ONE statement.
 ///      Deriving a key by parsing the payload would put the parse inside the
 ///      five seconds Meta allows before it retries.
+/// One 24-hour conversation window Meta told us about, and what they charge for.
+///
+/// -----------------------------------------------------------------------
+/// Its own table, because Meta's conversation is not ours
+/// -----------------------------------------------------------------------
+///
+/// `conversations` is a thread between a contact and one of our numbers, and it
+/// lasts for ever. Meta's conversation is a 24-hour BILLING WINDOW: one thread
+/// running for a month is thirty of them, each with its own id, category and
+/// charge. Storing this on `conversations` would keep the last window and lose
+/// the twenty-nine before it, which is the whole bill.
+///
+/// -----------------------------------------------------------------------
+/// Why the row exists at all, beside the usage_events row it produces
+/// -----------------------------------------------------------------------
+///
+/// usage_events records THAT a window was charged, keyed on the id, and the
+/// category is folded into the kind. This keeps what Meta actually said - the
+/// pricing model that decides how the category is rated, and whether they
+/// called it billable in the first place. A non-billable window gets a row and
+/// no charge, which is a fact worth having: "we had no marketing conversations"
+/// and "we had eleven and Meta billed none of them" are different businesses.
+///
+/// Phase 11 reprices in arrears from what was recorded rather than from what
+/// somebody later assumes the rate card was.
+model WhatsAppConversationCharge {
+  id        String @id @default(cuid())
+  companyId String @map("company_id")
+
+  /// Meta's own id for the window. The unit they bill and dedupe on.
+  ///
+  /// The same id arrives on many status callbacks - sent, delivered, read, for
+  /// every message in the window - so this is the key that makes one charge out
+  /// of dozens of notifications.
+  metaConversationId String @map("meta_conversation_id")
+
+  /// marketing | utility | authentication | service, verbatim from Meta.
+  ///
+  /// Nullable because Meta omits the pricing block on some statuses, and a row
+  /// that records the window without the category is still worth more than no
+  /// row: it says the window existed. Only a category that maps to a
+  /// USAGE_KINDS member produces a charge - see conversationUsageKind.
+  category String?
+
+  /// CBP, PMP, or whatever Meta names next. Verbatim, never mapped.
+  pricingModel String? @map("pricing_model")
+
+  /// What Meta said about whether they are charging for it.
+  ///
+  /// A free-tier service window is real and is not a charge. Recorded either
+  /// way; only `true` writes a usage row.
+  billable Boolean @default(false)
+
+  /// The message whose status callback first told us about this window. Kept
+  /// for tracing a charge back to something a person can look at.
+  firstWamid String? @map("first_wamid")
+
+  /// When Meta's callback said it happened, not when we wrote the row - a
+  /// backfill from stored payloads must land on the original instant or a
+  /// month's spend moves to the day the backfill ran.
+  occurredAt DateTime @db.Timestamptz(3) @map("occurred_at")
+
+  createdAt DateTime @db.Timestamptz(3) @default(now()) @map("created_at")
+  updatedAt DateTime @db.Timestamptz(3) @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// One row per window per company. What makes dozens of status callbacks into
+  /// one charge, and what makes the backfill safe to run twice.
+  @@unique([companyId, metaConversationId])
+  @@index([companyId, occurredAt(sort: Desc)])
+  @@map("whatsapp_conversation_charges")
+}
+
 model WhatsAppWebhookEvent {
   id            String @id @default(cuid())
   companyId     String @map("company_id")

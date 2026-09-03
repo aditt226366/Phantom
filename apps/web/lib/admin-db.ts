@@ -1407,3 +1407,51 @@ export async function readKycDocumentBytes(
     { highWaterMark: 0 },
   );
 }
+
+/* ------------------------------------------------------------------------- *
+ * Stored webhook payloads, for the conversation-charge backfill
+ * ------------------------------------------------------------------------- */
+
+export interface StoredWebhookPayload {
+  id: string;
+  companyId: string;
+  payload: string;
+  payloadTruncated: boolean;
+}
+
+/**
+ * One page of stored webhook deliveries, across every company.
+ *
+ * A named function rather than an exported client, per this file's own rule:
+ * the backfill wants to read across tenants, which no request-scoped client can
+ * do, and the answer to that is a bounded shape here rather than an
+ * `adminPrisma` import in a script.
+ *
+ * Bounded in the two ways that matter. The columns are exactly what re-parsing
+ * a payload needs - never the whole row, which carries a delivery key and
+ * timestamps the caller has no use for - and the read is paged, because
+ * whatsapp_webhook_events is the fastest-growing table in the system and a
+ * production one will not fit in memory.
+ *
+ * Ordered by id, which is unique. `created_at` would tie across a burst of
+ * deliveries, and a keyset page boundary inside a tie skips rows - which here
+ * means silently missing charges, in a backfill whose whole purpose is that
+ * the data is about to become unrecoverable. See the conventions on limited
+ * reads.
+ */
+export async function listStoredWebhookPayloads(options: {
+  after?: string | undefined;
+  take: number;
+}): Promise<StoredWebhookPayload[]> {
+  return adminPrisma.whatsAppWebhookEvent.findMany({
+    ...(options.after ? { cursor: { id: options.after }, skip: 1 } : {}),
+    take: options.take,
+    orderBy: { id: "asc" },
+    select: {
+      id: true,
+      companyId: true,
+      payload: true,
+      payloadTruncated: true,
+    },
+  });
+}

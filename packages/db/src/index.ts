@@ -13,6 +13,11 @@ export { resolveCompany } from "./resolve-company.ts";
 export type { ResolveKind } from "./resolve-company.ts";
 export { createCompany, slugify } from "./company.ts";
 export { recordUsage } from "./usage.ts";
+export { recordConversationCharge } from "./conversation-charges.ts";
+export type {
+  ConversationChargeInput,
+  ConversationChargeOutcome,
+} from "./conversation-charges.ts";
 export { mediaStore, MediaTruncatedError } from "./media-store.ts";
 export {
   recordWebhookDelivery,

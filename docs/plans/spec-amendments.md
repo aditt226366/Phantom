@@ -334,6 +334,42 @@ migration.
 
 ---
 
+## A7. The webhook prune waits for the conversation-charge backfill
+
+**Adds to: Phase 11 (conversation pricing and billing), and constrains R9 in
+`phase-4.md`.**
+
+Meta bills per 24-hour conversation window, per category, and it is the largest
+real cost in the product. **Nothing recorded one between Phase 4 and Phase 9.**
+`payload.ts` parsed `pricing.category` and `pricing.billable` off every status
+callback the whole time; the webhook read them and dropped them. Four usage
+kinds sat declared and priced with no writer, which is what
+`packages/core/tests/usage-kinds-wired.test.ts` now exists to prevent.
+
+Phase 9 wired it, and the history survived only by accident: R9's 30-day prune
+of `whatsapp_webhook_events` was deferred and never built, so every delivery
+since Phase 4 is still stored verbatim and the whole billing history is
+reconstructable by re-parsing it. `npm run backfill:charges` does exactly that,
+idempotently, through the same function the live webhook calls.
+
+**So the ordering is load-bearing, and nothing in the prune's own code would
+ever say so:**
+
+1. run `npm run backfill:charges -- --dry-run`, then for real;
+2. confirm `whatsapp_conversation_charges` holds what you expect;
+3. only then build the prune.
+
+A prune written without knowing this would look correct, pass every test, and
+destroy the only record of the product's largest cost. There is no second copy —
+Meta's Insights API does not reach back far enough and does not expose
+per-conversation ids.
+
+When the prune is built it should refuse to delete an event whose statuses are
+not already reflected in `whatsapp_conversation_charges`, so the ordering is
+enforced by the code rather than remembered from this document.
+
+---
+
 ## Sequencing, after these amendments
 
 Two hard orderings, each with its reason:

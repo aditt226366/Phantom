@@ -37,7 +37,6 @@
 
 export const USAGE_KINDS = [
   "integration.verify",
-  "integration.test",
   /*
    * One outbound message we handed to Meta. Deduped on our own message id, not
    * on the wamid: the wamid does not exist until Meta answers, so a send that
@@ -142,7 +141,6 @@ export interface UsagePrice {
  */
 const PRICES: readonly UsagePrice[] = [
   { kind: "integration.verify", currency: "INR", version: 1, micros: 0 },
-  { kind: "integration.test", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.message.sent", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.conversation.marketing", currency: "INR", version: 1, micros: 0 },
   { kind: "whatsapp.conversation.utility", currency: "INR", version: 1, micros: 0 },

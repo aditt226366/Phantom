@@ -86,6 +86,7 @@ export const COMPANY_SCOPED_MODELS = new Set<string>([
   "KbDocument",
   "KbChunk",
   "KbChunkSource",
+  "WhatsAppConversationCharge",
   "VerseCampaign",
   "VerseCampaignRecipient",
 ]);

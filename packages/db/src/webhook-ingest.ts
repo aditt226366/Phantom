@@ -10,6 +10,7 @@ import {
   applyStatusUpdate,
   type StatusOutcome,
 } from "./conversations.ts";
+import { recordConversationCharge } from "./conversation-charges.ts";
 import { applyTemplateStatus } from "./templates.ts";
 import { markWebhookProcessed } from "./webhook-events.ts";
 import { withCompany, type CompanyClient } from "./with-company.ts";
@@ -107,6 +108,14 @@ export interface IngestSummary {
   statuses: number;
   /** Status callbacks that moved a message up the ladder. */
   advanced: number;
+  /**
+   * Conversation windows charged by this delivery.
+   *
+   * Counted separately from `advanced` because the two are independent: a
+   * status for a wamid we have no row for advances nothing and can still carry
+   * a billable window, which is the case a bill reconciliation is about.
+   */
+  charges: number;
   /** Machine codes, never prose. Aggregated for the operator counts. */
   skipped: IngestSkipReason[];
   /** For the caller to enqueue, once it is no longer holding a scope. */
@@ -147,6 +156,7 @@ function emptySummary(status: IngestSummary["status"]): IngestSummary {
     inserted: 0,
     statuses: 0,
     advanced: 0,
+    charges: 0,
     skipped: [],
     media: [],
     flowAdvances: [],
@@ -309,6 +319,7 @@ export async function ingestWebhookDelivery(
   }
 
   let advanced = 0;
+  let charges = 0;
 
   for (const status of parsed.statuses) {
     const outcome = await withCompany(companyId, (db, scoped) =>
@@ -322,6 +333,37 @@ export async function ingestWebhookDelivery(
 
     if (outcome === "advanced") advanced++;
     else skipped.push(`status_${outcome}`);
+
+    /*
+     * Meta's conversation charge, which this loop read and discarded for five
+     * phases.
+     *
+     * Separate from the status ladder above and deliberately not conditional on
+     * it: `applyStatusUpdate` returns "unmatched" for a wamid we have no message
+     * row for - a send from another tool on the same number, or a row pruned -
+     * and the WINDOW was still charged. Tying the charge to the ladder would
+     * drop exactly the conversations nobody here can see, which is the half a
+     * bill reconciliation is for.
+     *
+     * Its own scope rather than sharing the one above, because a charge that
+     * throws must not roll back a status the customer's phone has already
+     * shown - and recordConversationCharge is idempotent, so the redelivery
+     * that follows a throw cannot double it.
+     */
+    if (status.conversationId) {
+      const charge = await withCompany(companyId, (db, scoped) =>
+        recordConversationCharge(db, scoped, {
+          metaConversationId: status.conversationId!,
+          category: status.category,
+          pricingModel: status.pricingModel,
+          billable: status.billable,
+          wamid: status.wamid,
+          occurredAt: status.occurredAt,
+        }),
+      );
+
+      if (charge.usageRecorded) charges++;
+    }
   }
 
   /*
@@ -372,6 +414,7 @@ export async function ingestWebhookDelivery(
     inserted,
     statuses: parsed.statuses.length,
     advanced,
+    charges,
     skipped,
     media,
     flowAdvances,

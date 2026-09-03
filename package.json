@@ -38,6 +38,7 @@
     "db:explain:dashboard": "npm run explain:dashboard --workspace=@whatsapp-os/db",
     "verse:metric": "npm run verse:metric --workspace=web --",
     "verse:probe": "npm run verse:probe --workspace=web --",
+    "backfill:charges": "npm run backfill:charges --workspace=web --",
     "seed:dev": "npm run seed:dev --workspace=web",
     "admin:hash": "npm run admin:hash --workspace=web",
     "admin:seed": "npm run admin:seed --workspace=web",

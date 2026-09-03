@@ -1,9 +1,10 @@
 # Phase 9 — the Verse AI layer
 
 Working plan, written as the phase ran. Status: **the runtime is tagged
-`phase-9-runtime`. The campaign half is code-complete and DELIBERATELY
-UNTAGGED** — see the acceptance metric below, and "At the campaign
-code-complete" for what did run.
+`phase-9-runtime`. The campaign half is code-complete, MERGED TO MASTER and
+DELIBERATELY UNTAGGED** — see the acceptance metric below, "At the campaign
+code-complete" for what did run, and "Merged to master without a tag" for why
+master carries a phase that no tag points at.
 
 Amendment A2, with A5 as a compliance constraint on it. A tenant uploads what
 their business knows; a customer asks a question; the passages that actually
@@ -400,6 +401,24 @@ the one measurement that says the floor is in the right place.
 `npm run verse:metric -- <companyId> <knowledgeBaseId>`, read the twenty
 answers rather than trusting the exit code, set `floor.ts` `status` to
 `"measured"` with the question set and the date, and tag `phase-9`.
+
+### Merged to master without a tag
+
+Phase 10 is built on top of this work, so the branch was merged into master
+rather than left standing beside it. **`master` therefore contains Phase 9 and
+no `phase-9` tag points at it.** That is the intended state, and the list
+above is the only thing that changes it.
+
+The merge is `--no-ff`, and its message states the hold in full: the metric,
+the four missing keys, and why a stub could not stand in for them. Every phase
+before this one arrived with its tag and was a fast-forward, so a reader
+walking master's history would otherwise have only the *absence* of a tag to go
+on — which is indistinguishable from somebody forgetting to make one.
+
+The tag lands on the commit that sets `floor.ts` `status` to `"measured"`,
+never on the merge. Tagging the merge would date the phase's acceptance to the
+day it was integrated, which is the one claim this section exists to stop
+anybody making.
 
 ### The screenshots, and what only they caught
 

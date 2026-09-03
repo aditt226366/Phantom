@@ -8,7 +8,13 @@ import {
   MAX_CRAWL_PAGES,
 } from "@whatsapp-os/core/verse-server";
 import type { VerseIngestJob } from "@whatsapp-os/core/queues";
-import { readDocumentBytes, replaceChunks, withCompany } from "@whatsapp-os/db";
+import {
+  readDocumentBytes,
+  recordUsage,
+  replaceChunks,
+  withCompany,
+} from "@whatsapp-os/db";
+import { usageDedupeKey } from "@whatsapp-os/core";
 import { env } from "../env.ts";
 import { log } from "../logger.ts";
 
@@ -203,6 +209,16 @@ export async function handleVerseIngest(job: VerseIngestJob): Promise<void> {
   const router = openaiEmbeddingRouter(fetch, apiKey);
   const vectors: number[][] = [];
 
+  /*
+   * Summed across the batches, because the usage row is per DOCUMENT.
+   *
+   * A 2,000-chunk PDF is several provider calls and one act of ingestion that
+   * the tenant asked for once. Recording per batch would put an arbitrary
+   * number of rows in the table - EMBED_BATCH is an implementation detail, so
+   * changing it would change the tenant's row count for the same work.
+   */
+  let embeddingInputTokens = 0;
+
   for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
     const batch = chunks.slice(i, i + EMBED_BATCH);
     const embedded = await router.embed(batch.map((chunk) => chunk.content));
@@ -213,6 +229,7 @@ export async function handleVerseIngest(job: VerseIngestJob): Promise<void> {
     }
 
     for (const vector of embedded.vectors) vectors.push([...vector]);
+    embeddingInputTokens += embedded.usage.inputTokens;
   }
 
   /* --------------------------------------------------------------------- *
@@ -250,8 +267,33 @@ export async function handleVerseIngest(job: VerseIngestJob): Promise<void> {
       },
     });
 
+    /*
+     * The charge for embedding this document, in the transaction that stored
+     * what it produced - so a rolled-back ingestion leaves no charge behind,
+     * which is the rule recordUsage's own header states.
+     *
+     * Keyed on the DOCUMENT and nothing else. The job runs with the default
+     * five attempts, and a key carrying the job id or the attempt would bill a
+     * retried ingestion up to five times for one document. Per chunk would be
+     * worse again: two thousand rows for one upload, in the table that becomes
+     * an invoice.
+     *
+     * Input tokens only. An embedding's output is a vector, so there is no
+     * completion half to report and output_tokens stays NULL rather than 0 -
+     * a zero would claim it produced none of something it cannot produce.
+     */
+    await recordUsage(db, scopedCompanyId, {
+      kind: "verse.embedding",
+      dedupeKey: usageDedupeKey("verse.embedding", documentId),
+      usage: { inputTokens: embeddingInputTokens },
+    });
+
     return count;
   });
 
-  log.info("verse.ingest: indexed", { documentId, chunks: stored });
+  log.info("verse.ingest: indexed", {
+    documentId,
+    chunks: stored,
+    embeddingInputTokens,
+  });
 }

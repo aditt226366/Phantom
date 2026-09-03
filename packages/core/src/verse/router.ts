@@ -101,7 +101,24 @@ export interface EmbeddingRouter {
   embed(
     texts: readonly string[],
   ): Promise<
-    | { kind: "embedded"; vectors: readonly (readonly number[])[] }
+    | {
+        kind: "embedded";
+        vectors: readonly (readonly number[])[];
+        /**
+         * What the provider said this batch consumed.
+         *
+         * Input only, and that is not an omission: an embedding's output is a
+         * vector, not tokens, so there is no output count to report and
+         * writing a zero would claim it produced none of something that does
+         * not apply. usage_events leaves output_tokens NULL for this kind.
+         *
+         * Returned at all because ingestion writes a usage_events row from it,
+         * and per-token repricing cannot reconstruct what the response said
+         * once the job has ended. The generation routers return the same shape
+         * for the same reason.
+         */
+        usage: { inputTokens: number };
+      }
     | { kind: "failed"; reason: string }
   >;
 }
@@ -461,7 +478,11 @@ export function openaiEmbeddingRouter(
     version: VERSE_EMBEDDING.version,
 
     async embed(texts) {
-      if (texts.length === 0) return { kind: "embedded", vectors: [] };
+      /* No call, so nothing consumed. Zero here is measured rather than
+         assumed - there was no request to have tokens. */
+      if (texts.length === 0) {
+        return { kind: "embedded", vectors: [], usage: { inputTokens: 0 } };
+      }
 
       const result = await post({
         fetchImpl,
@@ -479,6 +500,18 @@ export function openaiEmbeddingRouter(
 
       const body = result.json as {
         data?: Array<{ index?: number; embedding?: number[] }>;
+        /*
+         * OpenAI names it prompt_tokens here, not input_tokens as Anthropic
+         * does for generation. Mapped at the adapter, which is the whole point
+         * of having one: every provider's spelling stops at this file and
+         * usage_events sees one shape.
+         *
+         * `total_tokens` is also returned and is equal to prompt_tokens for
+         * embeddings - there is no completion half - so reading it would be a
+         * second name for the same number and a trap the day that stops being
+         * true.
+         */
+        usage?: { prompt_tokens?: number; total_tokens?: number };
       };
 
       const rows = body.data ?? [];
@@ -519,7 +552,11 @@ export function openaiEmbeddingRouter(
         vectors[at] = vector;
       }
 
-      return { kind: "embedded", vectors };
+      return {
+        kind: "embedded",
+        vectors,
+        usage: { inputTokens: body.usage?.prompt_tokens ?? 0 },
+      };
     },
   };
 }

@@ -302,6 +302,31 @@ describe("token counts", () => {
     expect(Number(totals?.without ?? 0)).toBe(1);
   });
 
+  it("records an input count with no output, for an embedding", async () => {
+    /*
+     * An embedding's output is a vector, not tokens, so OpenAI reports no
+     * completion half. output_tokens stays NULL rather than 0: a zero would
+     * claim the call produced none of something it cannot produce, and would
+     * sum into a per-token output total as though it had been measured.
+     *
+     * This is the one kind where the two columns legitimately differ, which is
+     * why `usage.outputTokens` is optional rather than the pair being written
+     * together.
+     */
+    await withCompany(company.id, (db, companyId) =>
+      recordUsage(db, companyId, {
+        kind: "verse.embedding",
+        dedupeKey: "embedding-doc",
+        usage: { inputTokens: 4_812 },
+      }),
+    );
+
+    expect(await readTokens("embedding-doc")).toEqual({
+      inputTokens: 4_812,
+      outputTokens: null,
+    });
+  });
+
   it("refuses a negative count at the database", async () => {
     /*
      * The only thing worth asserting about a value the provider supplies. No

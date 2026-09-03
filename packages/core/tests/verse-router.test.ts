@@ -243,8 +243,59 @@ describe("the embedding adapter", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({}));
     const result = await openaiEmbeddingRouter(fetchImpl, "k").embed([]);
 
-    expect(result).toEqual({ kind: "embedded", vectors: [] });
+    /* Zero tokens here is measured rather than assumed: there was no request
+       to have consumed any. Everywhere else an absent count is null. */
+    expect(result).toEqual({
+      kind: "embedded",
+      vectors: [],
+      usage: { inputTokens: 0 },
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("maps OpenAI's prompt_tokens onto inputTokens", async () => {
+    /*
+     * OpenAI names it `prompt_tokens` for embeddings; Anthropic names its
+     * generation counterpart `input_tokens`. Every provider's spelling stops at
+     * this file, which is the point of having an adapter - usage_events sees
+     * one shape and the ingestion job never learns which provider it used.
+     *
+     * `total_tokens` comes back too and equals prompt_tokens here, because an
+     * embedding has no completion half. Deliberately not read: it is a second
+     * name for the same number today and a trap the day it stops being one.
+     */
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        data: [{ index: 0, embedding: vector(0.1) }],
+        usage: { prompt_tokens: 812, total_tokens: 812 },
+      }),
+    );
+
+    const result = await openaiEmbeddingRouter(fetchImpl, "k").embed(["one"]);
+
+    expect(result.kind).toBe("embedded");
+    if (result.kind !== "embedded") throw new Error("unreachable");
+    expect(result.usage).toEqual({ inputTokens: 812 });
+  });
+
+  it("reports zero rather than throwing when the provider omits usage", async () => {
+    /*
+     * A missing count must not fail an ingestion whose vectors are correct and
+     * already paid for - the same rule recordUsage follows for a missing price.
+     *
+     * Zero and not null here because the router's contract is a number; the
+     * NULL that matters is one column further on, where a kind with no output
+     * tokens leaves output_tokens unset rather than 0.
+     */
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ data: [{ index: 0, embedding: vector(0.1) }] }),
+    );
+
+    const result = await openaiEmbeddingRouter(fetchImpl, "k").embed(["one"]);
+
+    expect(result.kind).toBe("embedded");
+    if (result.kind !== "embedded") throw new Error("unreachable");
+    expect(result.usage).toEqual({ inputTokens: 0 });
   });
 
   it("reorders by the provider's index rather than trusting arrival order", async () => {

@@ -1,6 +1,26 @@
 import { graphGetQuery, type GraphResult } from "./meta.ts";
 import type { FetchImpl } from "./types.ts";
 
+/*
+ * The pure half lives in integrations.ts, not here.
+ *
+ * It is a decision about a stored credential with no I/O in it, and the
+ * badge, the banner and the reconnect button all need it in a CLIENT
+ * bundle. This module reaches the Graph API through meta.ts, and
+ * providers/index.ts reaches @node-rs/argon2 by way of the sheets adapter's
+ * JWT signing - so an import of anything under providers/ drags native code
+ * into the browser graph and the build fails with a trace naming every file
+ * except the problem. The conventions record that happening three times.
+ *
+ * Re-exported so a server-side caller can take both from one place.
+ */
+export {
+  TOKEN_EXPIRY_WARNING_DAYS,
+  expiryDemotesStatus,
+  tokenExpiryState,
+} from "../integrations.ts";
+export type { TokenExpiryState } from "../integrations.ts";
+
 /**
  * When a stored credential stops working, and what the console does about it.
  *
@@ -24,69 +44,6 @@ import type { FetchImpl } from "./types.ts";
  * to happen - and would answer worst at the exact moment it matters most,
  * because a call authorised by an expired token fails too.
  */
-
-/**
- * How long before expiry the console starts asking for a reconnect.
- *
- * Seven days, because a Meta token is renewed by a person doing several steps
- * in Business Manager, and that person has a job. A day's warning is a warning
- * nobody can act on before the weekend.
- */
-export const TOKEN_EXPIRY_WARNING_DAYS = 7;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export type TokenExpiryState =
-  /** No expiry recorded. Most credentials here genuinely have none. */
-  | "no_expiry"
-  | "healthy"
-  | "expiring"
-  | "expired";
-
-/**
- * The state of a stored expiry, as a pure function of two instants.
- *
- * Pure and exported so the badge, the banner and the tests all read the same
- * decision. The alternative - a boolean computed inline in a component - is
- * how "expiring" ends up meaning three days in one place and seven in another.
- *
- * `no_expiry` is deliberately its own member rather than being folded into
- * `healthy`. They are different facts: one is a credential that will never
- * lapse, the other is one that has not lapsed YET, and only the second wants
- * an expiry date rendered beside it. Collapsing them would print "expires
- * never" or nothing at all, and neither is what the operator asked.
- */
-export function tokenExpiryState(
-  expiresAt: Date | null | undefined,
-  now: Date,
-): TokenExpiryState {
-  if (!expiresAt) return "no_expiry";
-
-  const remaining = expiresAt.getTime() - now.getTime();
-  if (remaining <= 0) return "expired";
-  if (remaining <= TOKEN_EXPIRY_WARNING_DAYS * DAY_MS) return "expiring";
-  return "healthy";
-}
-
-/** Whether this state should demote the badge to NOT_CONNECTED. */
-export function expiryDemotesStatus(state: TokenExpiryState): boolean {
-  /*
-   * Only "expired", and the line is drawn here rather than at "expiring" on
-   * purpose.
-   *
-   * An expiring token still works. Demoting it would tell an operator their
-   * integration is broken while it is serving traffic perfectly well, and the
-   * documented response to a NOT_CONNECTED badge is to re-enter credentials -
-   * so a week of warning would become a week of people retyping working
-   * secrets. The banner is the right instrument for "act soon"; the badge is
-   * for "it does not work now".
-   *
-   * An expired token is the same class of fact as a 401: the credential is
-   * refused. That is the `auth` failure kind, and demotesStatus() in types.ts
-   * says auth demotes.
-   */
-  return state === "expired";
-}
 
 /**
  * Ask Meta when a token expires.

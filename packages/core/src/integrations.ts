@@ -148,6 +148,44 @@ export const ALL_INTEGRATION_KEYS: readonly string[] = Object.values(
   INTEGRATION_FIELDS,
 ).flatMap((fields) => fields.map((field) => field.key));
 
+/**
+ * Credentials whose expiry this system records and acts on.
+ *
+ * A set rather than a `tracksExpiry` flag on IntegrationField, and the
+ * distinction from `required` is the reason. Requiredness is a question every
+ * provider must answer about every field, which is why it is declared per
+ * field and not optional. Expiry tracking is true of exactly one credential in
+ * the whole system and is likely to stay rare, so a flag would be ten
+ * declarations of `false` surrounding one `true` - noise that makes the one
+ * that matters harder to see rather than easier.
+ *
+ * The name says what WE do, not what the provider does, and that is deliberate
+ * because the two differ. WHATSAPP_ACCESS_TOKEN can be a user token that
+ * expires in sixty days, and it is absent here: nothing records its expiry and
+ * nothing warns before it lapses. That is a real gap, named rather than
+ * implied by a `false`. It is not this phase's to close - A3 is about Meta Ads
+ * - but the failure it leaves is the same silent one, and whoever closes it
+ * adds a key here and gets the badge, the banner and the reconnect for free.
+ *
+ * `integrations.test.ts` asserts every entry is a key some provider actually
+ * declares, so a rename in INTEGRATION_FIELDS cannot leave this pointing at
+ * nothing - which would switch expiry tracking off with no diff that looks
+ * like it did.
+ */
+export const EXPIRY_TRACKED_KEYS: ReadonlySet<string> = new Set([
+  "META_ADS_ACCESS_TOKEN",
+]);
+
+/** The credential whose expiry governs this provider, if any. */
+export function expiryTrackedKey(
+  provider: IntegrationProviderName,
+): string | null {
+  return (
+    INTEGRATION_FIELDS[provider].find((field) => EXPIRY_TRACKED_KEYS.has(field.key))
+      ?.key ?? null
+  );
+}
+
 /** Human labels for the console. Kept beside the keys so they cannot drift. */
 export const INTEGRATION_LABELS = {
   GOOGLE_SHEETS: "Google Sheets",
@@ -177,6 +215,69 @@ export function missingRequiredKeys(
 ): readonly string[] {
   const held = new Set(storedKeys);
   return requiredIntegrationKeys(provider).filter((key) => !held.has(key));
+}
+
+/**
+ * How long before expiry the console starts asking for a reconnect.
+ *
+ * Seven days, because a Meta token is renewed by a person doing several steps
+ * in Business Manager, and that person has a job. A day's warning is a warning
+ * nobody can act on before the weekend.
+ */
+export const TOKEN_EXPIRY_WARNING_DAYS = 7;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export type TokenExpiryState =
+  /** No expiry recorded. Most credentials here genuinely have none. */
+  | "no_expiry"
+  | "healthy"
+  | "expiring"
+  | "expired";
+
+/**
+ * The state of a stored expiry, as a pure function of two instants.
+ *
+ * Pure and exported so the badge, the banner and the tests all read the same
+ * decision. The alternative - a boolean computed inline in a component - is
+ * how "expiring" ends up meaning three days in one place and seven in another.
+ *
+ * `no_expiry` is deliberately its own member rather than being folded into
+ * `healthy`. They are different facts: one is a credential that will never
+ * lapse, the other is one that has not lapsed YET, and only the second wants
+ * an expiry date rendered beside it. Collapsing them would print "expires
+ * never" or nothing at all, and neither is what the operator asked.
+ */
+export function tokenExpiryState(
+  expiresAt: Date | null | undefined,
+  now: Date,
+): TokenExpiryState {
+  if (!expiresAt) return "no_expiry";
+
+  const remaining = expiresAt.getTime() - now.getTime();
+  if (remaining <= 0) return "expired";
+  if (remaining <= TOKEN_EXPIRY_WARNING_DAYS * DAY_MS) return "expiring";
+  return "healthy";
+}
+
+/** Whether this state should demote the badge to NOT_CONNECTED. */
+export function expiryDemotesStatus(state: TokenExpiryState): boolean {
+  /*
+   * Only "expired", and the line is drawn here rather than at "expiring" on
+   * purpose.
+   *
+   * An expiring token still works. Demoting it would tell an operator their
+   * integration is broken while it is serving traffic perfectly well, and the
+   * documented response to a NOT_CONNECTED badge is to re-enter credentials -
+   * so a week of warning would become a week of people retyping working
+   * secrets. The banner is the right instrument for "act soon"; the badge is
+   * for "it does not work now".
+   *
+   * An expired token is the same class of fact as a 401: the credential is
+   * refused. That is the `auth` failure kind, and demotesStatus() in types.ts
+   * says auth demotes.
+   */
+  return state === "expired";
 }
 
 export type IntegrationStatusName = "CONNECTED" | "NOT_CONNECTED";

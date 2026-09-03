@@ -5,7 +5,9 @@ import { redirect } from "next/navigation";
 import {
   INTEGRATION_PROVIDERS,
   JOB_NAMES,
+  debugToken,
   echoableValues,
+  expiryTrackedKey,
   integrationFields,
   integrationSaveSchema,
   safeParseInput,
@@ -58,6 +60,33 @@ export interface IntegrationFormState {
   values?: Record<string, string>;
 }
 
+/**
+ * Expiries for whichever submitted credentials carry one.
+ *
+ * Returns a map with an entry ONLY for a key that was actually submitted, so a
+ * save that leaves the token blank leaves its stored expiry alone - the same
+ * rule the values follow, and for the same reason. Writing null for a key
+ * nobody touched would erase a known expiry whenever an operator changed the
+ * ad account id.
+ */
+async function learnExpiries(
+  provider: IntegrationProviderName,
+  submitted: Readonly<Record<string, string>>,
+): Promise<Record<string, Date | null>> {
+  const key = expiryTrackedKey(provider);
+  if (!key) return {};
+
+  const value = submitted[key]?.trim() ?? "";
+  if (value === "") return {};
+
+  const result = await debugToken(value);
+
+  /* Null on failure, and the entry is still present: a NEW token is stored, so
+     any expiry we were holding describes a credential this row no longer has.
+     "We do not know" beats a confidently wrong date. */
+  return { [key]: result.ok ? result.data.expiresAt : null };
+}
+
 export async function saveIntegrationAction(
   _previous: IntegrationFormState,
   formData: FormData,
@@ -101,7 +130,32 @@ export async function saveIntegrationAction(
     };
   }
 
-  const result = await saveIntegrationSecrets(companyId, provider, parsed.data);
+  /*
+   * Ask Meta when the new token expires, BEFORE the save and outside its
+   * transaction.
+   *
+   * A3 makes token lifetime a tenant-visible fact, and this is the one moment
+   * the plaintext exists on our side - the stored value is sealed and the panel
+   * never shows it again, so an expiry not learned here is one nothing can
+   * learn later without asking the operator to re-paste the credential.
+   *
+   * Outside the transaction because saveIntegrationSecrets holds one: a
+   * ten-second provider timeout inside a transaction with a five-second budget
+   * is a stall, and the conventions are explicit that HTTP calls stay out.
+   *
+   * A failure here does NOT fail the save. The credential is good, the
+   * operator pasted it, and refusing to store it because Meta would not
+   * answer a question about it would be a worse outcome than an unknown
+   * expiry - which renders as "no expiry recorded" and demotes nothing.
+   */
+  const expiries = await learnExpiries(provider, parsed.data);
+
+  const result = await saveIntegrationSecrets(
+    companyId,
+    provider,
+    parsed.data,
+    expiries,
+  );
 
   const context = await requestContext();
   await writeAdminAudit({

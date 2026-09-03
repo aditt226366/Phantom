@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALL_INTEGRATION_KEYS,
+  EXPIRY_TRACKED_KEYS,
   INTEGRATION_PROVIDERS,
   effectiveIntegrationStatus,
+  expiryTrackedKey,
   integrationFields,
   missingRequiredKeys,
   requiredIntegrationKeys,
@@ -126,5 +129,35 @@ describe("required keys and what the badge may say", () => {
     expect(
       effectiveIntegrationStatus("WHATSAPP_CLOUD", withoutWaba, "CONNECTED"),
     ).toBe("NOT_CONNECTED");
+  });
+});
+
+describe("the credentials whose expiry is tracked", () => {
+  it("names keys that actually exist", () => {
+    /*
+     * The coupling that keeps EXPIRY_TRACKED_KEYS honest. Each entry is a
+     * bare string, so a rename in INTEGRATION_FIELDS would leave it pointing
+     * at nothing - and expiry tracking would switch off silently, behind a
+     * diff that looks like a tidy-up. A credential rename is already
+     * expensive here (the key is part of the AAD, so it is a
+     * decrypt-and-re-encrypt); this makes it loud as well as expensive.
+     */
+    const declared = new Set(ALL_INTEGRATION_KEYS);
+    const dangling = [...EXPIRY_TRACKED_KEYS].filter((key) => !declared.has(key));
+
+    expect(
+      dangling,
+      "these keys are tracked for expiry but no provider declares them",
+    ).toEqual([]);
+  });
+
+  it("resolves the governing credential per provider", () => {
+    expect(expiryTrackedKey("META_ADS")).toBe("META_ADS_ACCESS_TOKEN");
+
+    /* Named absences. Neither of these has an expiry this system records, and
+       for WhatsApp that is a real gap rather than a property of the token -
+       see the comment on EXPIRY_TRACKED_KEYS. */
+    expect(expiryTrackedKey("GOOGLE_SHEETS")).toBeNull();
+    expect(expiryTrackedKey("WHATSAPP_CLOUD")).toBeNull();
   });
 });

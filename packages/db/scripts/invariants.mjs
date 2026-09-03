@@ -284,6 +284,19 @@ export const OUT_OF_BAND_DDL = new Set([
      the end of its track - which looks like a CSS bug and gets chased in the
      wrong file. */
   "check:dashboard_rollups.dashboard_rollups_automated_within_total",
+  /* A campaign that is spending money carries the instant somebody turned it
+     on, and who. The audit question a tenant asks first about an ad bill is
+     "who started this and when", and a live campaign with a null published_at
+     has no answer to it - for exactly the campaigns where it is asked. Same
+     shape as conversations_driver_has_its_instant. */
+  "check:meta_campaigns.meta_campaigns_active_has_been_published",
+  /* Meta restates a day's figures as attribution windows close, so every day
+     is re-read and overwritten several times. A restatement that arrives
+     negative - which their API has done during an outage - would subtract
+     from a month's spend and make a cost-per-lead figure read better than
+     the truth. A number that is wrong in the reassuring direction is the one
+     nobody checks. */
+  "check:meta_ad_insights.meta_ad_insights_counts_are_not_negative",
 ]);
 
 /**

@@ -1657,6 +1657,289 @@ describe("flows, their versions, and the runs pinned to them", () => {
   });
 });
 
+describe("a tenant's ad accounts, campaigns, spend and the clicks that arrived", () => {
+  /*
+   * Seeded through the ORM, deliberately, and asserted through raw SQL.
+   *
+   * Seeding cannot go through the owner connection: FORCE ROW LEVEL SECURITY
+   * subjects it to policies scoped TO app_runtime, so an owner INSERT matches
+   * no policy and is refused outright. And it must not go through the ORM
+   * inside an `it` body, because every model here is in COMPANY_SCOPED_MODELS
+   * and the extension injects the company filter - which is what made three of
+   * the five vault isolation tests pass with RLS switched off.
+   *
+   * So: helpers outside the bodies, raw SQL inside them. That split is what
+   * no-orm-in-isolation.test.ts enforces.
+   */
+  async function seedAdAccount(
+    company: SeededCompany,
+    label: string,
+    currency: string,
+    spendMicros: bigint,
+  ): Promise<{ accountId: string; numberId: string }> {
+    return withCompany(company.id, async (db, companyId) => {
+      const integration = await db.integration.create({
+        data: { companyId, provider: "META_ADS", label: `${label} ads` },
+        select: { id: true },
+      });
+
+      /* The Page's linked number, this company's own - which is what makes the
+         cross-company write below an attempt rather than a typo. */
+      const number = await db.whatsAppNumber.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          phoneNumberId: `${label}-pnid`,
+          displayNumber: `+9100000${label.length}`,
+          verifiedName: label,
+        },
+        select: { id: true },
+      });
+
+      const account = await db.metaAdAccount.create({
+        data: {
+          companyId,
+          integrationId: integration.id,
+          metaAdAccountId: `act_${label}`,
+          name: `${label} ad account`,
+          currency,
+          pageId: `page-${label}`,
+          pageName: `${label} Page`,
+          whatsappNumberId: number.id,
+          linkedPhoneE164: `+9100000${label.length}`,
+        },
+        select: { id: true },
+      });
+
+      await db.metaCampaign.create({
+        data: {
+          companyId,
+          adAccountId: account.id,
+          metaCampaignId: `mc-${label}`,
+          name: `${label} monsoon sale`,
+          objective: "OUTCOME_LEADS",
+          dailyBudgetMicros: 500_000_000n,
+          currency,
+        },
+      });
+
+      await db.metaAdInsight.create({
+        data: {
+          companyId,
+          adAccountId: account.id,
+          metaCampaignId: `mc-${label}`,
+          campaignName: `${label} monsoon sale`,
+          date: new Date("2026-09-01T00:00:00.000Z"),
+          impressions: 4200n,
+          clicks: 130n,
+          spendMicros,
+          currency,
+        },
+      });
+
+      return { accountId: account.id, numberId: number.id };
+    });
+  }
+
+  /** A click-to-WhatsApp referral, which needs a whole thread beneath it. */
+  async function seedReferral(
+    company: SeededCompany,
+    label: string,
+    numberId: string,
+  ): Promise<void> {
+    await withCompany(company.id, async (db, companyId) => {
+      const contact = await db.contact.create({
+        data: {
+          companyId,
+          waId: `wa-${label}`,
+          phoneE164: `+9199999${label.length}`,
+          source: "ADS_CLICK_TO_WHATSAPP",
+        },
+        select: { id: true },
+      });
+
+      const conversation = await db.conversation.create({
+        data: {
+          companyId,
+          contactId: contact.id,
+          whatsappNumberId: numberId,
+          source: "ADS_CLICK_TO_WHATSAPP",
+        },
+        select: { id: true },
+      });
+
+      const message = await db.message.create({
+        data: {
+          companyId,
+          conversationId: conversation.id,
+          direction: "INBOUND",
+          status: "DELIVERED",
+          type: "text",
+          occurredAt: new Date("2026-09-01T09:00:00.000Z"),
+        },
+        select: { id: true },
+      });
+
+      await db.metaAdReferral.create({
+        data: {
+          companyId,
+          conversationId: conversation.id,
+          contactId: contact.id,
+          messageId: message.id,
+          ctwaClid: `clid-${label}`,
+          sourceId: `ad-${label}`,
+          sourceType: "ad",
+          headline: `${label} headline`,
+          body: `${label} body copy`,
+          occurredAt: new Date("2026-09-01T09:00:00.000Z"),
+        },
+      });
+    });
+  }
+
+  beforeEach(async () => {
+    const a = await seedAdAccount(alpha, "alpha", "INR", 812_340_000n);
+    const b = await seedAdAccount(beta, "beta", "USD", 41_990_000n);
+    await seedReferral(alpha, "alpha", a.numberId);
+    await seedReferral(beta, "beta", b.numberId);
+  });
+
+  it("does not show one company's ad accounts to another", async () => {
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [alpha.id]);
+
+    const { rows } = await raw.query("SELECT meta_ad_account_id FROM meta_ad_accounts");
+
+    expect(rows).toEqual([{ meta_ad_account_id: "act_alpha" }]);
+  });
+
+  it("does not show one company's campaigns to another", async () => {
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [beta.id]);
+
+    const { rows } = await raw.query("SELECT name FROM meta_campaigns");
+
+    expect(rows).toEqual([{ name: "beta monsoon sale" }]);
+  });
+
+  it("does not show one company's ad spend to another", async () => {
+    /*
+     * The one with the sharpest consequence. Spend is money, denominated per
+     * account, and a leak here would not look like a leak - it would look like
+     * a dashboard saying this month cost more than the tenant thought.
+     */
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [alpha.id]);
+
+    const { rows } = await raw.query(
+      "SELECT spend_micros::text AS spend, currency FROM meta_ad_insights",
+    );
+
+    expect(rows).toEqual([{ spend: "812340000", currency: "INR" }]);
+  });
+
+  it("does not show one company's ad clicks to another", async () => {
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [beta.id]);
+
+    const { rows } = await raw.query(
+      "SELECT ctwa_clid, headline FROM meta_ad_referrals",
+    );
+
+    expect(rows).toEqual([{ ctwa_clid: "clid-beta", headline: "beta headline" }]);
+  });
+
+  it("refuses to write a campaign into another company", async () => {
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [alpha.id]);
+
+    const { rows } = await raw.query(
+      "SELECT id FROM meta_ad_accounts WHERE meta_ad_account_id = 'act_alpha'",
+    );
+    const mine = (rows[0] as { id: string }).id;
+
+    await expect(
+      raw.query(
+        `INSERT INTO meta_campaigns
+           (id, company_id, ad_account_id, meta_campaign_id, name, objective,
+            status, currency, updated_at)
+         VALUES ('smuggled', $1, $2, 'mc-smuggled', 'not mine', 'OUTCOME_LEADS',
+                 'PAUSED', 'USD', now())`,
+        [beta.id, mine],
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("refuses to write spend into another company", async () => {
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [beta.id]);
+
+    const { rows } = await raw.query(
+      "SELECT id FROM meta_ad_accounts WHERE meta_ad_account_id = 'act_beta'",
+    );
+    const mine = (rows[0] as { id: string }).id;
+
+    await expect(
+      raw.query(
+        `INSERT INTO meta_ad_insights
+           (id, company_id, ad_account_id, meta_campaign_id, date, spend_micros,
+            currency, updated_at)
+         VALUES ('smuggled', $1, $2, 'mc-beta', DATE '2026-09-02', 1, 'INR', now())`,
+        [alpha.id, mine],
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("cannot attribute another company's conversation to an ad", async () => {
+    /*
+     * The write worth making, if it were possible. A referral names a
+     * conversation, so an insert accepted across the boundary would attach
+     * this company's ad to somebody else's customer - and the join it feeds is
+     * "which ad produced this lead".
+     */
+    await raw.query("SELECT set_config('app.company_id', $1, false)", [alpha.id]);
+
+    /* Alpha's OWN thread, stamped with beta's company id. The row is entirely
+       constructible - every foreign key resolves - so the only thing that can
+       refuse it is the policy. An INSERT ... SELECT over beta's rows would
+       have matched nothing under this context and inserted zero rows, which
+       is a test that passes without the boundary existing. */
+    const { rows } = await raw.query(
+      `SELECT c.id AS conversation_id, c.contact_id, m.id AS message_id
+         FROM conversations c JOIN messages m ON m.conversation_id = c.id
+        LIMIT 1`,
+    );
+    const mine = rows[0] as {
+      conversation_id: string;
+      contact_id: string;
+      message_id: string;
+    };
+
+    await expect(
+      raw.query(
+        `INSERT INTO meta_ad_referrals
+           (id, company_id, conversation_id, contact_id, message_id, source_id,
+            occurred_at)
+         VALUES ('smuggled', $1, $2, $3, $4, 'ad-alpha', now())`,
+        [beta.id, mine.conversation_id, mine.contact_id, mine.message_id],
+      ),
+    ).rejects.toThrow(/row-level security/i);
+  });
+
+  it("hides ad accounts from the table's own owner", async () => {
+    const { rows } = await owner.query("SELECT * FROM meta_ad_accounts");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+
+  it("hides ad spend from the table's own owner", async () => {
+    const { rows } = await owner.query("SELECT * FROM meta_ad_insights");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+
+  it("hides ad clicks from the table's own owner", async () => {
+    const { rows } = await owner.query("SELECT * FROM meta_ad_referrals");
+
+    expect(rows, "FORCE ROW LEVEL SECURITY is not in effect").toEqual([]);
+  });
+});
+
+
 describe("the table owner", () => {
   /** Every table whose owner must still be subject to its own policies. */
   const TENANT_TABLES = ["users", "companies"] as const;

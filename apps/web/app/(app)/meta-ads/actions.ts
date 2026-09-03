@@ -2,6 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  createPausedCampaign,
+  setCampaignStatus,
+  type MetaCampaignObjectiveName,
+} from "@whatsapp-os/core";
+import {
+  findAdAccount,
+  findCampaign,
+  pauseCampaign,
+  publishCampaign,
+  recordCampaign,
   removeAdAccount,
   selectAdAccount,
   whatsappNumbersForMatching,
@@ -12,6 +22,7 @@ import { assertFeatureAccess } from "@/lib/auth/feature-gate";
 import { requireSession } from "@/lib/auth/session";
 import { loadMetaAdsCredentials } from "@/lib/meta-ads/credentials";
 import { readAdAccounts, readPageWhatsAppLink } from "@/lib/meta-ads/graph";
+import { parseDailyBudget } from "@/lib/meta-ads/budget";
 import { checkLinkedNumber } from "@/lib/meta-ads/linked-number";
 
 /**
@@ -153,4 +164,206 @@ export async function removeAdAccountAction(
   return removed > 0
     ? { notice: "Ad account removed. Spend already recorded for it is removed too." }
     : { error: "That ad account is no longer connected." };
+}
+
+/* ==========================================================================
+   Campaigns
+   ========================================================================== */
+
+const OBJECTIVES = new Set<MetaCampaignObjectiveName>([
+  "OUTCOME_ENGAGEMENT",
+  "OUTCOME_LEADS",
+  "OUTCOME_TRAFFIC",
+  "OUTCOME_SALES",
+]);
+
+/**
+ * Create a campaign. It lands PAUSED, and nothing here can ask for otherwise.
+ *
+ * ---------------------------------------------------------------------------
+ * The order of the two writes, and why it is this way round
+ * ---------------------------------------------------------------------------
+ *
+ * Meta first, then our row. A row written first would be a promise the network
+ * might not keep: the list would show a campaign that does not exist, and the
+ * publish button beside it would fail against an id Meta has never heard of.
+ *
+ * The other order has a failure too - Meta creates it, our write fails, and a
+ * PAUSED campaign exists at Meta that this system does not know about. That is
+ * strictly the better one to be left with. It spends nothing, it is visible in
+ * Meta's own tools, and re-running the form produces a second paused campaign
+ * rather than a second spending one.
+ */
+export async function createCampaignAction(
+  _state: MetaAdsState,
+  formData: FormData,
+): Promise<MetaAdsState> {
+  await assertCsrf(formData);
+  const session = await requireSession();
+  await assertFeatureAccess();
+
+  const adAccountId = String(formData.get("adAccountId") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  const objective = String(formData.get("objective") ?? "").trim();
+  const budgetRaw = String(formData.get("dailyBudget") ?? "");
+
+  if (!name) return { error: "Give the campaign a name." };
+  if (!OBJECTIVES.has(objective as MetaCampaignObjectiveName)) {
+    return { error: "Choose what the campaign is for." };
+  }
+
+  const account = await withCompany(session.companyId, (db, companyId) =>
+    findAdAccount(db, companyId, adAccountId),
+  );
+
+  /* Rule 6. An account belonging to another company is not found, never
+     refused - a 403 would confirm the row exists. */
+  if (!account) return { error: "That ad account is no longer connected." };
+
+  /*
+   * The currency is the ACCOUNT'S, read from our row, never from the form. A
+   * budget denominated by a posted field is a number the tenant can mislabel
+   * on their own dashboard, by a factor of eighty, with nothing to say so.
+   */
+  const budget = parseDailyBudget(budgetRaw, account.currency);
+  if (!budget.ok) return { error: budget.error };
+
+  const credentials = await loadMetaAdsCredentials(session.companyId);
+  if (!credentials) {
+    return { error: "No Meta credentials are stored for this workspace." };
+  }
+
+  const created = await createPausedCampaign(
+    {
+      adAccountId: account.metaAdAccountId,
+      name,
+      objective: objective as MetaCampaignObjectiveName,
+      dailyBudgetMicros: budget.micros,
+    },
+    credentials.accessToken,
+  );
+
+  if (!created.ok) return { error: `Meta refused the campaign: ${created.error}` };
+
+  await withCompany(session.companyId, (db, companyId) =>
+    recordCampaign(db, companyId, {
+      adAccountId: account.id,
+      metaCampaignId: created.data.id,
+      name,
+      objective: objective as MetaCampaignObjectiveName,
+      dailyBudgetMicros: budget.micros,
+      currency: account.currency,
+    }),
+  );
+
+  revalidatePath("/meta-ads");
+
+  return {
+    notice: `${name} was created and is PAUSED. It will not spend anything until you publish it.`,
+  };
+}
+
+/**
+ * Publish: the deliberate act that lets a campaign spend.
+ *
+ * Separated from creation, and it asks for the campaign's name to be typed. A
+ * confirm step protects against a misclick; only the typed name protects
+ * against publishing the wrong campaign off a list of six. That is the same
+ * reasoning the KYC erasure control uses, for the same reason - the thing on
+ * the other side of the button cannot be recalled.
+ *
+ * Meta first, again. Flipping our row first would leave a campaign this system
+ * reports as ACTIVE while Meta has it paused, and the tenant waiting for
+ * delivery that is never coming.
+ */
+export async function publishCampaignAction(
+  _state: MetaAdsState,
+  formData: FormData,
+): Promise<MetaAdsState> {
+  await assertCsrf(formData);
+  const session = await requireSession();
+  await assertFeatureAccess();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const typed = String(formData.get("confirmName") ?? "").trim();
+
+  const campaign = await withCompany(session.companyId, (db, companyId) =>
+    findCampaign(db, companyId, id),
+  );
+
+  if (!campaign) return { error: "That campaign is no longer here." };
+
+  if (typed !== campaign.name) {
+    return {
+      error: `Type the campaign's name exactly - ${campaign.name} - to confirm you are starting its spend.`,
+    };
+  }
+
+  const credentials = await loadMetaAdsCredentials(session.companyId);
+  if (!credentials) {
+    return { error: "No Meta credentials are stored for this workspace." };
+  }
+
+  const result = await setCampaignStatus(
+    campaign.metaCampaignId,
+    "ACTIVE",
+    credentials.accessToken,
+  );
+
+  if (!result.ok) return { error: `Meta refused the change: ${result.error}` };
+
+  await withCompany(session.companyId, (db, companyId) =>
+    publishCampaign(db, companyId, id, session.userId, new Date()),
+  );
+
+  revalidatePath("/meta-ads");
+
+  return { notice: `${campaign.name} is live and spending.` };
+}
+
+/** Pause a live campaign. No typed confirmation: stopping spend is safe. */
+export async function pauseCampaignAction(
+  _state: MetaAdsState,
+  formData: FormData,
+): Promise<MetaAdsState> {
+  await assertCsrf(formData);
+  const session = await requireSession();
+  await assertFeatureAccess();
+
+  const id = String(formData.get("id") ?? "").trim();
+
+  const campaign = await withCompany(session.companyId, (db, companyId) =>
+    findCampaign(db, companyId, id),
+  );
+
+  if (!campaign) return { error: "That campaign is no longer here." };
+
+  const credentials = await loadMetaAdsCredentials(session.companyId);
+  if (!credentials) {
+    return { error: "No Meta credentials are stored for this workspace." };
+  }
+
+  const result = await setCampaignStatus(
+    campaign.metaCampaignId,
+    "PAUSED",
+    credentials.accessToken,
+  );
+
+  if (!result.ok) return { error: `Meta refused the change: ${result.error}` };
+
+  await withCompany(session.companyId, (db, companyId) =>
+    pauseCampaign(db, companyId, id),
+  );
+
+  revalidatePath("/meta-ads");
+
+  /*
+   * published_at is deliberately NOT cleared. "Has this ever run" is a
+   * different question from "is it running now", and a report answering the
+   * first from the current status would say no for every campaign anybody has
+   * ever paused.
+   */
+  return {
+    notice: `${campaign.name} is paused. It will not spend again until you publish it.`,
+  };
 }

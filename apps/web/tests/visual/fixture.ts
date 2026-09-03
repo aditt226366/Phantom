@@ -350,6 +350,14 @@ export const ROUTES: readonly VisualRoute[] = [
      cannot see. It reaches Meta, so it is only photographable at all because
      META_ADS_FIXTURE answers for it. */
   { name: "meta-ads-connect", path: "/meta-ads/connect", audience: "tenant" },
+  /* The builder, whose whole design is that nothing on it starts spending.
+     Worth a baseline because that promise is made in copy, and copy is the
+     thing a source-level check cannot see. */
+  {
+    name: "meta-ads-campaign-new",
+    path: "/meta-ads/campaigns/new",
+    audience: "tenant",
+  },
   { name: "billing", path: "/billing", audience: "tenant" },
   { name: "configuration", path: "/configuration", audience: "tenant" },
   { name: "configuration-numbers", path: "/configuration/numbers", audience: "tenant" },

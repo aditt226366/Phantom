@@ -2125,10 +2125,33 @@ try {
     ],
   );
 
+  await client.query(
+    `INSERT INTO meta_campaigns
+       (id, company_id, ad_account_id, meta_campaign_id, name, objective, status,
+        daily_budget_micros, currency, published_at, published_by_user_id,
+        created_at, updated_at)
+     VALUES ($1, $3, $4, '23842000001', 'Monsoon sale — Mumbai', 'OUTCOME_LEADS',
+             'PAUSED', 250000000, 'INR', NULL, NULL, $5, $5),
+            ($2, $3, $4, '23842000002', 'Diwali gifting', 'OUTCOME_ENGAGEMENT',
+             'ACTIVE', 500000000, 'INR', $6, 'c000visualfixtureuser001', $5, $5)`,
+    [
+      "c000visualfixturecampgn01",
+      "c000visualfixturecampgn02",
+      COMPANY.active,
+      "c000visualfixtureadacct01",
+      T.companyCreated,
+      /* A literal instant. Nothing renders it as a timestamp today - the card
+         shows a status - but the column is one a later card would print, and
+         the conventions are explicit that a random or moving value is only
+         safe until something displays it. */
+      T.verified[0],
+    ],
+  );
+
   console.log(
     `Seeded ${TEST_DATABASE_NAME}: 4 companies, ${users.length} users, ` +
       `5 integrations, ${secretId} secrets, ${verifications.length} verifications, ` +
-      "2 Meta ad accounts, " +
+      "2 Meta ad accounts, 2 campaigns, " +
       `${USAGE.length} usage events, ${NUMBERS.length} WhatsApp numbers, ` +
       `${CONTACTS.length} contacts, 2 conversations, ${MESSAGES.length} messages, ` +
       `1 media row, ${TEMPLATES.length} templates, ${templateEditId} template edits, ` +

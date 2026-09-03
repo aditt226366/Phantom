@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listAdAccountRows, withCompany } from "@whatsapp-os/db";
+import { listAdAccountRows, listCampaigns, withCompany } from "@whatsapp-os/db";
 import { FeatureBlocked } from "@/components/brand/feature-blocked";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import { requireSession } from "@/lib/auth/session";
 import { EMPTY_COPY } from "@/lib/empty-copy";
 import { formatTimestamp } from "@/lib/format";
 import { SectionHeader, SectionShell } from "../_components/section";
+import { formatMicros } from "@/lib/meta-ads/budget";
+import { PauseForm, PublishForm } from "./_components/campaign-forms";
 import { RemoveAccountForm } from "./_components/connect-forms";
 
 export const metadata: Metadata = { title: "Meta Ads" };
@@ -29,8 +31,13 @@ export default async function Page() {
     return <FeatureBlocked reason={access.reason} section="Meta Ads" />;
   }
 
-  const accounts = await withCompany(session.companyId, (db, companyId) =>
-    listAdAccountRows(db, companyId),
+  const [accounts, campaigns] = await withCompany(
+    session.companyId,
+    async (db, companyId) =>
+      Promise.all([
+        listAdAccountRows(db, companyId),
+        listCampaigns(db, companyId),
+      ]),
   );
 
   if (accounts.length === 0) {
@@ -114,6 +121,60 @@ export default async function Page() {
             <RemoveAccountForm csrf={<CsrfField />} id={account.id} />
           </Card>
         ))}
+      </div>
+
+      <div className="mt-lg flex flex-col gap-base">
+        <div className="flex items-center justify-between gap-base">
+          <h2 className="font-display text-title-md text-ink">Campaigns</h2>
+          <Button asChild variant="outline">
+            <Link href="/meta-ads/campaigns/new">New campaign</Link>
+          </Button>
+        </div>
+
+        {campaigns.length === 0 ? (
+          <Card>
+            <p className="text-body-sm text-muted">
+              No campaigns yet. A campaign created here is paused, and stays
+              paused until you publish it.
+            </p>
+          </Card>
+        ) : (
+          campaigns.map((campaign) => (
+            <Card key={campaign.id} className="flex flex-col gap-sm">
+              <div className="flex items-start justify-between gap-base">
+                <div>
+                  <h3 className="font-display text-title-md text-ink">
+                    {campaign.name}
+                  </h3>
+                  <p className="mt-xxs text-caption text-muted">
+                    {campaign.dailyBudgetMicros === null
+                      ? "No daily budget"
+                      : `${formatMicros(campaign.dailyBudgetMicros, campaign.currency)} a day`}
+                  </p>
+                </div>
+                {/*
+                  * The badge reads the stored status, never an optimistic
+                  * flip. An operator acts on it, and a campaign that claims
+                  * ACTIVE because the browser assumed so is worse than one
+                  * that takes a moment to say PAUSED.
+                  */}
+                <Badge variant={campaign.status === "ACTIVE" ? "success" : "outline"}>
+                  {campaign.status}
+                </Badge>
+              </div>
+
+              {campaign.status === "ACTIVE" ? (
+                <PauseForm csrf={<CsrfField />} id={campaign.id} />
+              ) : (
+                <PublishForm
+                  csrf={<CsrfField />}
+                  id={campaign.id}
+                  name={campaign.name}
+                />
+              )}
+            </Card>
+          ))
+        )}
       </div>
     </SectionShell>
   );

@@ -22,6 +22,8 @@ import {
   pendingTemplates,
   readDashboardRollup,
   recentThreads,
+  contactsBySource,
+  spendByCurrency,
   waitingForAHuman,
   withCompany,
   type ClosingWindow,
@@ -141,6 +143,10 @@ export interface DashboardData {
   recent: RecentThread[];
   numbers: NumberHealth[];
   templates: PendingTemplate[];
+  /** Ad spend since the first of the month, per currency. Never a total. */
+  adSpend: CurrencySpend[];
+  /** How many contacts arrived each way. `unrecorded` is its own bucket. */
+  leadSources: { source: string; count: number }[];
 }
 
 /**
@@ -195,6 +201,14 @@ export async function loadDashboard(
       numbers: await numberHealth(db),
       templates: await pendingTemplates(db),
       templateCount: await countPendingTemplates(db),
+      /*
+       * Read per request rather than rolled up, like the four action cards
+       * above them. Both are single indexed reads, and both would otherwise
+       * inherit the rollup's age - which for ad spend would mean showing an
+       * hour-old copy of a figure that is already six hours old at Meta.
+       */
+      adSpend: await spendByCurrency(db, companyId, windows.monthStart, windows.now),
+      leadSources: await contactsBySource(db, companyId),
     };
   });
 
@@ -296,5 +310,15 @@ export async function loadDashboard(
     recent: read.recent,
     numbers: read.numbers,
     templates: read.templates,
+    /* Sorted here rather than asked of the database. A groupBy has no order,
+       and this one IS rendered in sequence - which the conventions record as
+       the moment a lookup becomes a latent ordering bug. Largest first, then
+       the source name, so two equal counts do not swap between loads. */
+    adSpend: [...read.adSpend.entries()]
+      .map(([currency, micros]) => ({ currency, micros }))
+      .sort((a, b) => (b.micros > a.micros ? 1 : b.micros < a.micros ? -1 : a.currency.localeCompare(b.currency))),
+    leadSources: [...read.leadSources.entries()]
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count || a.source.localeCompare(b.source)),
   };
 }

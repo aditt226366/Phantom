@@ -465,3 +465,118 @@ export function RecentCard({ rows }: { rows: readonly RecentThread[] }) {
     </PanelCard>
   );
 }
+
+/* ------------------------------------------------------------------------- *
+   Ad spend
+   ------------------------------------------------------------------------- */
+
+/**
+ * What Meta has charged this month, per currency.
+ *
+ * A SECOND money card rather than rows inside the first, and the separation is
+ * the point. "Cost this month" is what this platform will charge; this is what
+ * Meta already has. They are different debts, owed to different people, and a
+ * tenant reconciling an invoice needs to know which is which - one list holding
+ * both would be a figure that matches neither statement.
+ *
+ * Per currency and never a total, for the reason the card above gives: there is
+ * no exchange rate in this system and one must not appear at render time.
+ *
+ * The age is stated rather than implied. Meta restates a day for most of a
+ * week, so today's figure is provisional by construction - and a card that said
+ * nothing would be read as final.
+ */
+export function AdSpendCard({
+  perCurrency,
+  monthLabel,
+}: {
+  perCurrency: readonly CurrencySpend[];
+  monthLabel: string;
+}) {
+  return (
+    <PanelCard title="Ad spend this month">
+      {perCurrency.length === 0 ? (
+        <p className="text-body-sm text-body">
+          No ad spend recorded yet. Connect a Meta ad account to see what your
+          campaigns are costing.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-xs">
+          {perCurrency.map((entry) => (
+            <li
+              key={entry.currency}
+              className="flex items-baseline justify-between gap-sm"
+            >
+              <span className="text-caption-uppercase text-muted">
+                {entry.currency}
+              </span>
+              <span className="font-display text-display-sm text-ink">
+                {formatMicros(entry.micros, entry.currency)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="mt-sm text-caption text-muted">
+        {monthLabel}
+        {perCurrency.length > 0
+          ? ". Meta revises recent days, so the last few are provisional."
+          : ""}
+      </p>
+    </PanelCard>
+  );
+}
+
+/* ------------------------------------------------------------------------- *
+   Where leads came from
+   ------------------------------------------------------------------------- */
+
+/** Machine values to something a person reads. */
+const SOURCE_LABELS: Record<string, string> = {
+  INBOUND: "Wrote in themselves",
+  ADS_CLICK_TO_WHATSAPP: "Clicked a Meta ad",
+  CAMPAIGN: "A campaign we sent",
+  MANUAL: "Added by your team",
+  /*
+   * Its own row, and never folded into "wrote in themselves".
+   *
+   * Every contact from before Phase 10 has no source, because nothing was
+   * recording one. Counting those as organic arrivals would tell a tenant
+   * something false about their own business - on a page where every other
+   * figure is true, which is the worst place to put one.
+   */
+  unrecorded: "Before this was recorded",
+};
+
+export function LeadSourcesCard({
+  rows,
+}: {
+  rows: readonly { source: string; count: number }[];
+}) {
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+
+  return (
+    <PanelCard title="Where your contacts came from">
+      {total === 0 ? (
+        <p className="text-body-sm text-body">No contacts yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-xs">
+          {rows.map((row) => (
+            <li
+              key={row.source}
+              className="flex items-baseline justify-between gap-sm"
+            >
+              <span className="text-body-sm text-body">
+                {SOURCE_LABELS[row.source] ?? row.source}
+              </span>
+              <span className="font-display text-title-md text-ink">
+                {row.count.toLocaleString("en-IN")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </PanelCard>
+  );
+}

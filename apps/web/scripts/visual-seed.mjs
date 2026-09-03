@@ -358,6 +358,8 @@ const CONTACTS = [
     phoneE164: "+919812345690",
     profileName: "Anita Desai — Sunrise Provision Stores, Andheri East",
     displayName: null,
+    /* Clicked an ad. The row the whole attribution chain exists for. */
+    source: "ADS_CLICK_TO_WHATSAPP",
   },
   {
     id: "c000visualfixturecontact2",
@@ -365,6 +367,7 @@ const CONTACTS = [
     phoneE164: "+919812345691",
     profileName: "Vikram Shah",
     displayName: "Vikram (Ashgrove PO)",
+    source: "INBOUND",
   },
 ];
 
@@ -1348,9 +1351,22 @@ try {
 
   for (const contact of CONTACTS) {
     await client.query(
+      /*
+       * A source per contact, alternating, so the dashboard's "where your
+       * contacts came from" card has more than one row in it.
+       *
+       * A fixture where every contact shared one source would photograph a
+       * card that can never show what it is for - the same fault the
+       * linked-number fixture had, caught the same way, by looking at the
+       * picture.
+       *
+       * The bulk recipients seeded further down keep NULL, deliberately: they
+       * are this fixture's stand-in for every contact that predates the column,
+       * and "Before this was recorded" is a row the card must be able to draw.
+       */
       `INSERT INTO contacts (id, company_id, wa_id, phone_e164, profile_name,
-                             display_name, opted_out_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $7)`,
+                             display_name, opted_out_at, source, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NULL, $8::conversation_source, $7, $7)`,
       [
         contact.id,
         COMPANY.active,
@@ -1359,6 +1375,7 @@ try {
         contact.profileName,
         contact.displayName,
         T.companyCreated,
+        contact.source,
       ],
     );
   }
@@ -2122,6 +2139,37 @@ try {
       INTEGRATION.metaAds,
       NUMBERS[0].id,
       T.companyCreated,
+    ],
+  );
+
+  /*
+   * Two days of spend, in two currencies, stamped TODAY.
+   *
+   * Relative to the clock rather than a literal, and the conventions say why:
+   * which column may be seeded from now() is decided by what RENDERS it. The
+   * card sums the CURRENT MONTH, so a literal February date would fall out of
+   * the window and the card would go to zero - a baseline that breaks with the
+   * calendar rather than with a change.
+   *
+   * The date itself is never printed. What is printed is the summed amount,
+   * which is fixed here, and the sentence about Meta revising recent days.
+   *
+   * Two currencies because the rule that spend is never summed across them is
+   * invisible in a baseline holding one.
+   */
+  await client.query(
+    `INSERT INTO meta_ad_insights
+       (id, company_id, ad_account_id, meta_campaign_id, campaign_name, date,
+        impressions, clicks, spend_micros, currency, synced_at, created_at,
+        updated_at)
+     VALUES ($1, $3, 'c000visualfixtureadacct01', '23842000002', 'Diwali gifting',
+             current_date, 18400, 612, 4185000000, 'INR', now(), now(), now()),
+            ($2, $3, 'c000visualfixtureadacct02', '23842000003', 'Global retargeting',
+             current_date, 9100, 240, 62500000, 'USD', now(), now(), now())`,
+    [
+      "c000visualfixtureinsght01",
+      "c000visualfixtureinsght02",
+      COMPANY.active,
     ],
   );
 

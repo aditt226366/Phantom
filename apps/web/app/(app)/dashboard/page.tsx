@@ -17,6 +17,8 @@ import {
   NumberHealthCard,
   PendingTemplatesCard,
   RecentCard,
+  AdSpendCard,
+  LeadSourcesCard,
   SpendCard,
   WaitingCard,
 } from "./_components/action-cards";
@@ -364,6 +366,10 @@ export default async function DashboardPage() {
             unpricedCount={data.spend?.unpricedCount ?? 0}
             monthLabel={`Since 1 ${windows.monthStart.toLocaleString("en-IN", { month: "long", timeZone: "Asia/Kolkata" })} (${windows.timezoneLabel})`}
           />
+          <AdSpendCard
+            perCurrency={data.adSpend}
+            monthLabel={`Since 1 ${windows.monthStart.toLocaleString("en-IN", { month: "long", timeZone: "Asia/Kolkata" })} (${windows.timezoneLabel})`}
+          />
           <PendingTemplatesCard
             templates={data.templates}
             total={data.counts.pendingTemplates}
@@ -410,6 +416,7 @@ export default async function DashboardPage() {
               />
             )}
           </PanelCard>
+          <LeadSourcesCard rows={data.leadSources} />
           <NotYetCard card={PENDING["leadPyramid"]!} />
         </div>
       </section>
